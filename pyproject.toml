@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "Semantic graph system for VFX and AI workflows"
 requires-python = ">=3.13"
 dependencies = [
+    "anthropic>=0.86.0",
+    "httpx>=0.28.1",
     "networkx>=3.6.1",
     "pydantic>=2.12.5",
     "python-dotenv>=1.2.2",

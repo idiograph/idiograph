@@ -1,6 +1,9 @@
 import json
+import asyncio
 import typer
+from dotenv import load_dotenv
 from nodeforge.core import SAMPLE_PIPELINE, summarize, load_graph, load_config, setup_logging
+from nodeforge.core.executor import execute_graph
 from nodeforge.core.query import (
     get_downstream, get_upstream, topological_sort,
     find_cycles, validate_integrity, summarize_intent,
@@ -15,6 +18,7 @@ app.add_typer(query_app, name="query")
 @app.callback()
 def _startup():
     """Initialize logging and config before any command runs."""
+    load_dotenv()
     config = load_config()
     setup_logging(config.get("log_level", "INFO"))
 
@@ -61,6 +65,23 @@ def check():
     typer.echo(json.dumps(result, indent=2))
 
 
+@app.command()
+def run(paper_id: str = typer.Argument(..., help="arXiv paper ID, e.g. 2401.00001")):
+    """Execute the arXiv pipeline for a given paper ID."""
+    from nodeforge.handlers import register_all
+    from nodeforge.pipelines.arxiv import ARXIV_PIPELINE
+
+    register_all()
+
+    pipeline = ARXIV_PIPELINE.model_copy(deep=True)
+    fetch_node = pipeline.get_node("fetch")
+    if fetch_node:
+        fetch_node.params["paper_id"] = paper_id
+
+    results = asyncio.run(execute_graph(pipeline))
+    typer.echo(json.dumps(results, indent=2, default=str))
+
+
 @query_app.command("downstream")
 def query_downstream(node_id: str):
     """List all nodes reachable downstream from NODE_ID."""
@@ -94,4 +115,4 @@ def query_intent():
 
 
 if __name__ == "__main__":
-    app()                                                                              
+    app()
