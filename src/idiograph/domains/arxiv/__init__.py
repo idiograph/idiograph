@@ -1,12 +1,12 @@
+# src/idiograph/domains/arxiv/__init__.py
 from idiograph.core.executor import register_handler
-from idiograph.handlers.arxiv import (
+from idiograph.domains.arxiv.handlers import (
     fetch_abstract,
     llm_call,
     evaluator,
     llm_summarize,
     discard,
 )
-
 
 def register_all() -> None:
     """Register all known handlers with the executor."""
