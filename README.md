@@ -1,4 +1,4 @@
-# NodeForge
+# Idiograph
 
 **A semantic graph system for VFX and AI workflows — and a proof of concept for a thesis about how production AI tooling should actually work.**
 
@@ -12,13 +12,13 @@ The fix is not better prompts or bigger models. It is explicit structure.
 
 VFX pipelines solved this problem decades ago: represent the work as a directed graph of typed, parameterized nodes with defined data and control flows. The graph is the source of truth. Every operator — human, tool, or agent — reads from and writes to that structure. The system is inspectable, serializable, and deterministic by design.
 
-NodeForge applies that same architecture to AI agent workflows, and asks: what does AI tooling look like when it is built the way a production pipeline engineer would build it?
+Idiograph applies that same architecture to AI agent workflows, and asks: what does AI tooling look like when it is built the way a production pipeline engineer would build it?
 
 ---
 
 ## What This Is
 
-NodeForge is a Python-based semantic graph system. It represents VFX pipeline stages and AI agent operations as nodes in a unified, typed, JSON-serializable graph. The graph is the single source of truth. CLI, agents, and (optionally) UI are all operators on that graph — none of them own state.
+Idiograph is a Python-based semantic graph system. It represents VFX pipeline stages and AI agent operations as nodes in a unified, typed, JSON-serializable graph. The graph is the single source of truth. CLI, agents, and (optionally) UI are all operators on that graph — none of them own state.
 
 The system supports:
 
@@ -32,8 +32,6 @@ Both kinds of node are represented identically. There is no special-casing.
 
 ## Current Status
 
-Actively in development. Phases 0–5 complete. Phase 6 (async execution engine) in progress.
-
 | Phase | Description | Status |
 |---|---|---|
 | 0 | Environment & tooling | ✅ Complete |
@@ -42,26 +40,29 @@ Actively in development. Phases 0–5 complete. Phase 6 (async execution engine)
 | 3 | Pydantic data models & validation | ✅ Complete |
 | 4.5 | Graph query & analysis | ✅ Complete |
 | 5 | Testing, logging, config | ✅ Complete |
-| 6 | Async execution engine | 🔄 In progress |
-| 7 | Architecture refinement | Planned |
-| 8 | Agent integration (MCP) | Planned |
-| 9 | Capstone & design document | Planned |
+| 6 | Async execution engine | ✅ Complete |
+| 7 | Architecture refinement | ✅ Complete |
+| 8 | Agent integration (MCP) | 🔄 In progress |
+| 9 | Documentation & visibility | Planned |
 | 10 | Projection-aware rendering domain | Planned |
 
 ---
 
 ## Architecture
-
 ```
-src/nodeforge/
+src/idiograph/
 ├── core/
-│   ├── models.py        # Node, Edge, Graph — Pydantic models with agent-readable field descriptions
-│   ├── graph.py         # Core graph operations
-│   ├── query.py         # Traversal, cycle detection, integrity validation, intent summary
-│   ├── config.py        # TOML config loader
+│   ├── models.py          # Node, Edge, Graph — Pydantic models with agent-readable field descriptions
+│   ├── graph.py           # Core graph operations
+│   ├── query.py           # Traversal, cycle detection, integrity validation, intent summary
+│   ├── config.py          # TOML config loader
 │   └── logging_config.py
-├── handlers/            # Executor handler implementations (Phase 6+)
-└── main.py              # CLI entry point (Typer)
+├── domains/
+│   └── arxiv/             # Domain implementation — one of many possible domains
+│       ├── __init__.py
+│       ├── pipeline.py
+│       └── handlers.py
+└── main.py                # CLI entry point (Typer)
 ```
 
 ### Core design decisions
@@ -74,28 +75,35 @@ src/nodeforge/
 
 **Handlers are registered, not imported.** The execution engine looks up handlers by node type string. It never imports handler modules directly. New node types require no changes to the executor.
 
-**`summarize_intent()` is purely algorithmic.** The query layer can describe what a subgraph does and where it might fail without an LLM call. Deterministic output for deterministic input. An LLM-assisted layer is planned for Phase 9 — layered on top, not substituted in.
+**Domain implementations are isolated from core.** `core/` is domain-agnostic. The arXiv pipeline lives under `domains/arxiv/`. A VFX rendering domain in Phase 10 gets its own subdirectory. Nothing in `core/` changes when a new domain is added.
+
+**`summarize_intent()` is purely algorithmic.** The query layer can describe what a subgraph does and where it might fail without an LLM call. Deterministic output for deterministic input.
 
 ---
 
 ## What You Can Do With It Right Now
 
+
 ```bash
 # Install
-git clone https://github.com/ryansmith3d-pixel/NodeForge.git
-cd NodeForge
+git clone https://github.com/idiograph/idiograph.git
+cd idiograph
 uv sync
 uv pip install -e .
 
-# Run
-uv run nodeforge stats                        # Pipeline statistics as JSON
-uv run nodeforge workflows                    # Full graph manifest
-uv run nodeforge validate path/to/graph.json  # Validate any graph file
-uv run nodeforge check                        # Integrity + cycle detection
-uv run nodeforge query downstream node_03     # Downstream traversal
-uv run nodeforge query upstream node_05       # Upstream traversal
-uv run nodeforge query topo                   # Topological execution order
-uv run nodeforge query intent                 # Semantic intent summary
+# Explore the graph
+uv run idiograph stats                         # Pipeline statistics as JSON
+uv run idiograph workflows                     # Full graph manifest
+uv run idiograph validate path/to/graph.json   # Validate any graph file
+uv run idiograph check                         # Integrity + cycle detection
+uv run idiograph query downstream node_03      # Downstream traversal
+uv run idiograph query upstream node_05        # Upstream traversal
+uv run idiograph query topo                    # Topological execution order
+uv run idiograph query intent                  # Semantic intent summary
+
+# Execute the arXiv pipeline
+uv run idiograph run 1706.03762 --mock         # Full pipeline, no API key required
+uv run idiograph run 1706.03762                # Live execution (requires ANTHROPIC_API_KEY)
 
 # Test
 uv run pytest tests/ -v
@@ -111,10 +119,9 @@ A graph that can be serialized to JSON and reconstructed without loss is a graph
 
 These are architectural properties, not features. They are what production pipeline engineers have required for decades, and what current AI tooling largely does not provide.
 
-NodeForge is a proof of concept for what it looks like when you build AI-operable systems the way a pipeline engineer would build them.
+Idiograph is a proof of concept for what it looks like when you build AI-operable systems the way a pipeline engineer would build them.
 
 ---
-
 
 ## Stack
 
@@ -134,4 +141,4 @@ Phase summaries and architectural decision logs are in [`docs/`](docs/).
 - [Blueprint](docs/blueprint.md) — full curriculum and system design
 - [Blueprint Amendments](docs/blueprint_amendments.md) — architectural decisions and constraint log
 - [Session Workflow](docs/session_workflow.md) — how development sessions are structured
-- Phase summaries: [Phase 0](docs/phase_0_summary.md) · [Phase 1](docs/phase_1_summary.md) · [Phase 2](docs/phase_2_summary.md) · [Phase 3](docs/phase_3_summary.md) · [Phase 4.5](docs/phase_4_5_summary.md) · [Phase 5](docs/phase_5_summary.md)
+- Phase summaries: [Phase 0](docs/phase_0_summary.md) · [Phase 1](docs/phase_1_summary.md) · [Phase 2](docs/phase_2_summary.md) · [Phase 3](docs/phase_3_summary.md) · [Phase 4.5](docs/phase_4_5_summary.md) · [Phase 5](docs/phase_5_summary.md) · [Phase 6](docs/phase_6_summary.md) · [Phase 7](docs/phase_7_summary.md)
