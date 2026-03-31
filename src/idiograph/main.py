@@ -66,18 +66,32 @@ def check():
 
 
 @app.command()
-def run(paper_id: str = typer.Argument(..., help="arXiv paper ID, e.g. 2401.00001")):
+def run(
+    paper_id: str = typer.Argument(..., help="arXiv paper ID, e.g. 2401.00001"),
+    mock: bool = typer.Option(False, "--mock", help="Run with stub handlers. No API key or network access required."),
+):
     """Execute the arXiv pipeline for a given paper ID."""
-    from idiograph.handlers import register_all
-    from idiograph.pipelines.arxiv import ARXIV_PIPELINE
+    from idiograph.domains.arxiv.pipeline import ARXIV_PIPELINE
 
-    register_all()
+    if mock:
+        from idiograph.domains.arxiv.mock_handlers import (
+            mock_fetch_abstract, mock_llm_call, mock_evaluator,
+            mock_llm_summarize, mock_discard,
+        )
+        from idiograph.core.executor import register_handler
+        register_handler("FetchAbstract", mock_fetch_abstract)
+        register_handler("LLMCall",       mock_llm_call)
+        register_handler("Evaluator",     mock_evaluator)
+        register_handler("LLMSummarize",  mock_llm_summarize)
+        register_handler("Discard",       mock_discard)
+    else:
+        from idiograph.domains.arxiv import register_all
+        register_all()
 
     pipeline = ARXIV_PIPELINE.model_copy(deep=True)
     fetch_node = pipeline.get_node("fetch")
     if fetch_node:
         fetch_node.params["paper_id"] = paper_id
-
     results = asyncio.run(execute_graph(pipeline))
     typer.echo(json.dumps(results, indent=2, default=str))
 

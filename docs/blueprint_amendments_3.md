@@ -35,7 +35,7 @@ access. `.env.example` is committed. README section is present.
 
 ### AMD-011 — Domain-First Directory Structure
 Affects: Pre-Phase 8 (blocking — import paths must be clean before MCP layer is added)
-Status: PENDING
+Status: COMPLETE — 2026-03
 Decided: 2026-03
 Reason: The current `handlers/` and `pipelines/` directories are organized by artifact
 type but are entirely arXiv-specific. They have no architectural relationship to `core/`
