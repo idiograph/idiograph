@@ -17,7 +17,7 @@ def generate_mermaid(pipeline) -> str:
     lines = ["```mermaid", "flowchart LR"]
 
     for node in pipeline.nodes:
-        lines.append(f'    {node.id}["{node.id}\\n{node.type}"]')
+        lines.append(f'    {node.id}["{node.id}<br/>{node.type}"]')
 
     for edge in pipeline.edges:
         lines.append(f"    {edge.source} -->|{edge.type}| {edge.target}")

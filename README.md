@@ -81,14 +81,10 @@ src/idiograph/
 <!-- GENERATED:arxiv-pipeline -->
 ```mermaid
 flowchart LR
-    fetch["fetch
-FetchAbstract"]
-    claims["claims
-LLMCall"]
-    evaluate["evaluate
-Evaluator"]
-    summarize["summarize
-LLMSummarize"]
+    fetch["fetch<br/>FetchAbstract"]
+    claims["claims<br/>LLMCall"]
+    evaluate["evaluate<br/>Evaluator"]
+    summarize["summarize<br/>LLMSummarize"]
     fetch -->|DATA| claims
     claims -->|DATA| evaluate
     evaluate -->|CONTROL| summarize
