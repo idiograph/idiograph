@@ -1,4 +1,5 @@
 # Idiograph
+[![tests](https://github.com/idiograph/idiograph/actions/workflows/tests.yml/badge.svg)](https://github.com/idiograph/idiograph/actions/workflows/tests.yml)
 
 **A semantic graph system for VFX and AI workflows — and a proof of concept for a thesis about how production AI tooling should actually work.**
 
@@ -101,9 +102,6 @@ uv run idiograph query upstream node_05        # Upstream traversal
 uv run idiograph query topo                    # Topological execution order
 uv run idiograph query intent                  # Semantic intent summary
 
-# Execute the arXiv pipeline
-uv run idiograph run 1706.03762 --mock         # Full pipeline, no API key required
-uv run idiograph run 1706.03762                # Live execution (requires ANTHROPIC_API_KEY)
 
 # Test
 uv run pytest tests/ -v
