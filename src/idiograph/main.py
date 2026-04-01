@@ -9,6 +9,7 @@ from idiograph.core.query import (
     find_cycles, validate_integrity, summarize_intent,
 )
 from pydantic import ValidationError
+from idiograph.mcp_server import main as mcp_main
 
 app = typer.Typer()
 query_app = typer.Typer()
@@ -127,6 +128,14 @@ def query_intent():
     result = summarize_intent(SAMPLE_PIPELINE)
     typer.echo(json.dumps(result, indent=2))
 
+
+@app.command()
+def serve():
+    """Start the Idiograph MCP server (stdio transport)."""
+    from idiograph.core.pipeline import SAMPLE_PIPELINE
+    from idiograph.core.graph import load_graph
+    graph = load_graph(SAMPLE_PIPELINE.model_dump())
+    mcp_main(graph)
 
 if __name__ == "__main__":
     app()
