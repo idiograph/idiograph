@@ -23,6 +23,8 @@ Idiograph is a Python-based semantic graph system. It represents VFX pipeline st
 
 The current implementation includes an arXiv research pipeline — nodes that fetch a paper, extract claims via LLM, evaluate against keyword criteria, and conditionally summarize. The architecture is domain-agnostic by design: VFX pipeline nodes (LoadAsset, ApplyShader, ShaderValidate) and additional AI agent node types are planned for Phase 10. Both would be represented identically to the existing nodes. There is no special-casing in the executor.
 
+An MCP server wraps the core graph operations as six standards-compliant tools (`get_node`, `get_edges_from`, `update_node`, `summarize_intent`, `validate_graph`, `execute_graph`). Any MCP-compatible agent client can connect, inspect the graph, mutate node parameters, and trigger execution without bespoke adapter code.
+
 ---
 
 ## Current Status
@@ -37,8 +39,8 @@ The current implementation includes an arXiv research pipeline — nodes that fe
 | 5 | Testing, logging, config | ✅ Complete |
 | 6 | Async execution engine | ✅ Complete |
 | 7 | Architecture refinement | ✅ Complete |
-| 8 | Agent integration (MCP) | 🔄 In progress |
-| 9 | Documentation & visibility | Planned |
+| 8 | Agent integration (MCP) | ✅ Complete |
+| 9 | Documentation & visibility | 🔄 In progress |
 | 10 | Projection-aware rendering domain | Planned |
 
 ---
@@ -50,13 +52,15 @@ src/idiograph/
 │   ├── models.py          # Node, Edge, Graph — Pydantic models with agent-readable field descriptions
 │   ├── graph.py           # Core graph operations
 │   ├── query.py           # Traversal, cycle detection, integrity validation, intent summary
+│   ├── executor.py        # Async execution engine — topological order, failure containment
 │   ├── config.py          # TOML config loader
 │   └── logging_config.py
 ├── domains/
 │   └── arxiv/             # Domain implementation — one of many possible domains
-│       ├── __init__.py
 │       ├── pipeline.py
-│       └── handlers.py
+│       ├── handlers.py    # Live handlers (require API key)
+│       └── mock_handlers.py  # Stub handlers for keyless execution
+├── mcp_server.py          # MCP interface — six tools via stdio transport
 └── main.py                # CLI entry point (Typer)
 ```
 
@@ -95,7 +99,6 @@ flowchart LR
 
 ## What You Can Do With It Right Now
 
-
 ```bash
 # Install
 git clone https://github.com/idiograph/idiograph.git
@@ -103,7 +106,16 @@ cd idiograph
 uv sync
 uv pip install -e .
 
-# Explore the graph
+# Run the arXiv pipeline (requires ANTHROPIC_API_KEY in .env)
+uv run idiograph run 1706.03762
+
+# Run without an API key — mock handlers execute the full pipeline
+uv run idiograph run 1706.03762 --mock
+
+# Start the MCP server (stdio transport — connect any MCP-compatible client)
+uv run idiograph serve
+
+# Explore and inspect the graph
 uv run idiograph stats                         # Pipeline statistics as JSON
 uv run idiograph workflows                     # Full graph manifest
 uv run idiograph validate path/to/graph.json   # Validate any graph file
@@ -112,7 +124,6 @@ uv run idiograph query downstream node_03      # Downstream traversal
 uv run idiograph query upstream node_05        # Upstream traversal
 uv run idiograph query topo                    # Topological execution order
 uv run idiograph query intent                  # Semantic intent summary
-
 
 # Test
 uv run pytest tests/ -v
@@ -148,6 +159,6 @@ Idiograph is a proof of concept for what it looks like when you build AI-operabl
 Phase summaries and architectural decision logs are in [`docs/`](docs/).
 
 - [Blueprint](docs/blueprint.md) — full curriculum and system design
-- [Blueprint Amendments](docs/blueprint_amendments.md) — architectural decisions and constraint log
+- [Blueprint Amendments](docs/blueprint_amendments_1.md) · [2](docs/blueprint_amendments_2.md) · [3](docs/blueprint_amendments_3.md) — architectural decisions and constraint log
 - [Session Workflow](docs/session_workflow.md) — how development sessions are structured
-- Phase summaries: [Phase 0](docs/phase_0_summary.md) · [Phase 1](docs/phase_1_summary.md) · [Phase 2](docs/phase_2_summary.md) · [Phase 3](docs/phase_3_summary.md) · [Phase 4.5](docs/phase_4_5_summary.md) · [Phase 5](docs/phase_5_summary.md) · [Phase 6](docs/phase_6_summary.md) · [Phase 7](docs/phase_7_summary.md)
+- Phase summaries: [Phase 0](docs/phase_0_summary.md) · [Phase 1](docs/phase_1_summary.md) · [Phase 2](docs/phase_2_summary.md) · [Phase 3](docs/phase_3_summary.md) · [Phase 4.5](docs/phase_4.5_summary.md) · [Phase 5](docs/phase_5_summary.md) · [Phase 6](docs/phase_6_summary.md) · [Phase 7](docs/phase_7_summary.md) · [Phase 8](docs/phase_8_summary.md)
