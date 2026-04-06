@@ -1,3 +1,9 @@
+# Copyright 2026 Ryan Smith
+# SPDX-License-Identifier: Apache-2.0
+#
+# Idiograph — deterministic semantic graph execution for production AI pipelines.
+# https://github.com/idiograph/idiograph
+
 import asyncio
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client

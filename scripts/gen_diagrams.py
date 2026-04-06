@@ -1,3 +1,9 @@
+# Copyright 2026 Ryan Smith
+# SPDX-License-Identifier: Apache-2.0
+#
+# Idiograph — deterministic semantic graph execution for production AI pipelines.
+# https://github.com/idiograph/idiograph
+
 """
 Generate Mermaid diagrams from live pipeline definitions and splice them into README.md.
 Run before committing, or via CI to verify README is in sync with code.

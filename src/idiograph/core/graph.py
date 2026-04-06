@@ -1,3 +1,9 @@
+# Copyright 2026 Ryan Smith
+# SPDX-License-Identifier: Apache-2.0
+#
+# Idiograph — deterministic semantic graph execution for production AI pipelines.
+# https://github.com/idiograph/idiograph
+
 from idiograph.core.models import Graph, Node, Edge
 from idiograph.core.logging_config import get_logger
 
