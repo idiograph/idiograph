@@ -1,0 +1,25 @@
+{
+  "surface": {
+    "canvas": "#aaaa7f",
+    "panel": "#24242c"
+  },
+  "node": {
+    "default": "#2e2e3a",
+    "selected": "#7eb8f7"
+  },
+  "node_status": {
+    "pending": "#aaff00",
+    "running": "#f7c948",
+    "running_highlight": "#ffe89a",
+    "complete": "#4ab88a",
+    "failed": "#c0392b"
+  },
+  "edge": {
+    "default": "#3a3a4a",
+    "selected": "#7eb8f7"
+  },
+  "semantic": {
+    "alert": "#f7c948",
+    "error": "#c0392b"
+  }
+}
