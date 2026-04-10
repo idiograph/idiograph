@@ -6,6 +6,7 @@ from PySide6.QtCore import QPointF
 from canvas import NodeGraphScene, NodeGraphView
 from nodes.base_node import BaseNode
 from nodes.swatch_node import SwatchNode
+from nodes.array_node import ArrayNode
 
 HERE = Path(__file__).parent
 
@@ -21,6 +22,8 @@ class MainWindow(QMainWindow):
         self._view = NodeGraphView(self._scene)
         self.setCentralWidget(self._view)
 
+        self._next_spawn: QPointF | None = None  # None → use viewport centre
+
         self._build_toolbar()
         self._seed_nodes()
 
@@ -33,26 +36,53 @@ class MainWindow(QMainWindow):
         add_btn.clicked.connect(self._add_node)
         toolbar.addWidget(add_btn)
 
+    # ── spawn helpers ──────────────────────────────────────────────────────────
+
+    def _spawn_pos(self) -> QPointF:
+        """Return next spawn position and advance the cascade by +20/−20."""
+        if self._next_spawn is None:
+            pos = self._view.mapToScene(self._view.viewport().rect().center())
+        else:
+            pos = self._next_spawn
+        self._next_spawn = pos + QPointF(20, -20)
+        return pos
+
+    def _reset_spawn_cascade(self) -> None:
+        """Called when any node is manually dragged — breaks the current cascade."""
+        self._next_spawn = None
+
+    def _wire_node(self, node) -> None:
+        """Attach the cascade-reset callback to a node."""
+        node.on_drag_end = self._reset_spawn_cascade
+
+    # ── scene population ───────────────────────────────────────────────────────
+
     def _seed_nodes(self) -> None:
-        swatches = [
+        nodes = [
             SwatchNode("#7eb8f7", "node.selected", QPointF(0, 0)),
             SwatchNode("#2e2e3a", "node.default", QPointF(240, 0)),
             SwatchNode("#f7c948", "semantic.alert", QPointF(480, 0)),
+            ArrayNode(
+                "status colours",
+                [
+                    ("#555568", "pending"),
+                    ("#f7c948", "running"),
+                    ("#4ab88a", "complete"),
+                    ("#c0392b", "failed"),
+                ],
+                QPointF(720, 0),
+            ),
         ]
-        for node in swatches:
+        for node in nodes:
             self._scene.addItem(node)
+            self._wire_node(node)
         self._node_counter = 0
 
     def _add_node(self) -> None:
         self._node_counter += 1
-        node = BaseNode(
-            f"Node {self._node_counter}",
-            QPointF(
-                self._node_counter * 40 - 1000,
-                self._node_counter * 20 - 400,
-            ),
-        )
+        node = BaseNode(f"Node {self._node_counter}", self._spawn_pos())
         self._scene.addItem(node)
+        self._wire_node(node)
 
 
 def main() -> None:

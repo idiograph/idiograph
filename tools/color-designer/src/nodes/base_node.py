@@ -52,6 +52,7 @@ class BaseNode(QGraphicsItem):
         self._dragging = False
         self._drag_start = QPointF()
         self._drag_origin = QPointF()
+        self.on_drag_end: callable | None = None  # set by MainWindow for cascade reset
 
         self.setPos(pos)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
@@ -98,10 +99,19 @@ class BaseNode(QGraphicsItem):
         if old is not None:
             old.deleteLater()
 
-        # Sync proxy size to the widget's fixed size
         if widget is not None:
-            self._proxy.resize(widget.width(), widget.height())
+            self._proxy.resize(NODE_WIDTH, height)
 
+        self.update()
+
+    def resizeBody(self, height: int) -> None:
+        """Called by body widgets to dynamically expand the node (e.g. on row add)."""
+        if height == self._body_h:
+            return
+        self.prepareGeometryChange()
+        self._body_h = height
+        if self._proxy is not None:
+            self._proxy.resize(NODE_WIDTH, height)
         self.update()
 
     # ── paint paths ───────────────────────────────────────────────────────────
@@ -239,6 +249,8 @@ class BaseNode(QGraphicsItem):
         if self._dragging:
             self._dragging = False
             self.setZValue(0.0)
+            if self.on_drag_end is not None:
+                self.on_drag_end()
             event.accept()
         else:
             super().mouseReleaseEvent(event)
