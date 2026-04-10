@@ -1,0 +1,228 @@
+from pathlib import Path
+
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout,
+    QPushButton, QLineEdit, QLabel, QScrollArea, QFrame,
+)
+from PySide6.QtCore import Qt, QPointF, QTimer
+
+from nodes.base_node import BaseNode, NODE_WIDTH
+from nodes.assign_node import AssignNode
+from token_store import TokenStore
+
+# ── port modes ────────────────────────────────────────────────────────────────
+_PORT_MODES = ["All", "Conn", "Gang"]
+_DEFAULT_PORT_MODE = 2  # Gang — Write accepts many inputs
+
+# ── layout ────────────────────────────────────────────────────────────────────
+WRITE_BODY_H = 196   # margins + path(24) + label(16) + list(96) + btn(28) + spacings
+
+# ── colours / styles ──────────────────────────────────────────────────────────
+_BG_BODY = "#2e2e3a"
+_BG_ROWS = "#252530"
+
+_FIELD_STYLE = (
+    "background-color: #24242c; color: #ccccdd; border: 1px solid #3a3a4a;"
+    " border-radius: 3px; padding: 2px 6px; font-family: monospace; font-size: 8pt;"
+)
+_SCROLL_STYLE = """
+    QScrollArea        { background-color: #252530; border: none; }
+    QScrollArea > QWidget > QWidget { background-color: #252530; }
+    QScrollBar:vertical {
+        background: #1a1a1f; width: 6px; border: none; margin: 0;
+    }
+    QScrollBar::handle:vertical {
+        background: #3a3a4a; border-radius: 3px; min-height: 16px;
+    }
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+"""
+_SAVE_BTN_STYLE = """
+    QPushButton {
+        background-color: #3a3a4a; color: #ccccdd;
+        border: 1px solid #4a4a5a; border-radius: 3px;
+        padding: 4px; font-size: 9pt;
+    }
+    QPushButton:hover { background-color: #4a4a5a; color: #ffffff; }
+    QPushButton:pressed { background-color: #7eb8f7; color: #1a1a1f; }
+"""
+
+
+# ── body widget ───────────────────────────────────────────────────────────────
+
+class _WriteBody(QWidget):
+    def __init__(self, node: "WriteNode"):
+        super().__init__()
+        self._node = node
+        self.setFixedSize(NODE_WIDTH, WRITE_BODY_H)
+        self.setStyleSheet(f"background-color: {_BG_BODY};")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(4)
+
+        # Output path field
+        self.path_edit = QLineEdit(str(node.token_path))
+        self.path_edit.setFixedHeight(24)
+        self.path_edit.setStyleSheet(_FIELD_STYLE)
+        self.path_edit.editingFinished.connect(self._on_path_change)
+        layout.addWidget(self.path_edit)
+
+        # Assignments label
+        lbl = QLabel("assignments")
+        lbl.setFixedHeight(14)
+        lbl.setStyleSheet(
+            "color: #888899; font-family: monospace; font-size: 8pt;"
+        )
+        layout.addWidget(lbl)
+
+        # Scrollable assignments list
+        self._scroll = QScrollArea()
+        self._scroll.setFixedHeight(96)
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll.setStyleSheet(_SCROLL_STYLE)
+
+        self._list_widget = QWidget()
+        self._list_widget.setStyleSheet(f"background-color: {_BG_ROWS};")
+        self._list_layout = QVBoxLayout(self._list_widget)
+        self._list_layout.setContentsMargins(4, 4, 4, 4)
+        self._list_layout.setSpacing(2)
+        self._list_layout.setAlignment(Qt.AlignTop)
+        self._scroll.setWidget(self._list_widget)
+        layout.addWidget(self._scroll)
+
+        # Save button
+        save_btn = QPushButton("Save")
+        save_btn.setFixedHeight(26)
+        save_btn.setStyleSheet(_SAVE_BTN_STYLE)
+        save_btn.clicked.connect(self._on_save)
+        layout.addWidget(save_btn)
+
+        # Defer initial refresh until the node is in a scene
+        QTimer.singleShot(0, self.refresh_list)
+
+    def refresh_list(self) -> None:
+        # Clear
+        while self._list_layout.count():
+            item = self._list_layout.takeAt(0)
+            w = item.widget() if item else None
+            if w is not None:
+                w.deleteLater()
+
+        assignments = self._node.collect_assignments()
+        if not assignments:
+            placeholder = QLabel("(no assignments)")
+            placeholder.setAlignment(Qt.AlignCenter)
+            placeholder.setStyleSheet(
+                "color: #555568; font-family: monospace; font-size: 8pt;"
+                " padding: 12px;"
+            )
+            self._list_layout.addWidget(placeholder)
+            return
+
+        for role, color in assignments.items():
+            self._list_layout.addWidget(self._make_row(role, color))
+
+    def _make_row(self, role: str, color: str) -> QWidget:
+        row = QWidget()
+        row.setFixedHeight(20)
+        row.setStyleSheet(f"background-color: {_BG_ROWS};")
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(4, 2, 4, 2)
+        layout.setSpacing(6)
+
+        chip = QLabel()
+        chip.setFixedSize(12, 12)
+        chip.setStyleSheet(
+            f"background-color: {color}; border: 1px solid #555568;"
+            " border-radius: 2px;"
+        )
+        layout.addWidget(chip)
+
+        name = QLabel(role)
+        name.setStyleSheet(
+            "color: #aaaacc; font-family: monospace; font-size: 8pt;"
+        )
+        layout.addWidget(name, 1)
+
+        return row
+
+    def _on_path_change(self) -> None:
+        text = self.path_edit.text().strip()
+        if text:
+            self._node.token_path = Path(text)
+
+    def _on_save(self) -> None:
+        self.refresh_list()
+        self._node.save()
+
+
+# ── node ──────────────────────────────────────────────────────────────────────
+
+class WriteNode(BaseNode):
+    """
+    Write node — collects (role, value) assignments and writes them to a
+    token JSON file via TokenStore.
+
+    Body:   editable output path, scrollable list of currently-known
+            assignments, explicit Save button.
+    Ports:  one ganged input on the left (Gang is the default port-display
+            mode); no output.
+
+    Without an edge layer, the assignment set is collected by scanning the
+    scene for AssignNodes. Save is the only thing that writes to disk —
+    nothing happens automatically.
+    """
+
+    def __init__(
+        self,
+        token_path: Path,
+        pos: QPointF = QPointF(0.0, 0.0),
+    ):
+        super().__init__(
+            "Write",
+            pos,
+            view_labels=[],
+            port_mode_labels=_PORT_MODES,
+            output_port=False,
+            input_ports=1,
+        )
+        self.token_path = token_path
+        self._port_mode = _DEFAULT_PORT_MODE  # default Gang
+        self.setBodyWidget(_WriteBody(self), WRITE_BODY_H)
+
+    # ── data collection ──────────────────────────────────────────────────────
+
+    def collect_assignments(self) -> dict[str, str]:
+        """Scan the scene for AssignNodes and return {role: hex} pairs."""
+        # SHORTCUT (Phase E): collects every AssignNode in the scene rather
+        # than traversing real edges from this node's input port. Replace
+        # with proper edge-walking once the edge layer lands — at that
+        # point only AssignNodes actually wired to this Write node should
+        # contribute, not every Assign on the canvas.
+        if self.scene() is None:
+            return {}
+        result: dict[str, str] = {}
+        for item in self.scene().items():
+            if isinstance(item, AssignNode):
+                role, color = item.assignment()
+                if role:
+                    result[role] = color
+        return result
+
+    # ── save ─────────────────────────────────────────────────────────────────
+
+    def save(self) -> None:
+        """Write all current assignments to the configured token file.
+        Existing tokens in the file are preserved (TokenStore loads them
+        first, then we overwrite the keys we care about)."""
+        if not self.token_path.exists():
+            # Ensure the file exists so TokenStore can load it.
+            self.token_path.write_text("{}", encoding="utf-8")
+
+        store = TokenStore(self.token_path)
+        for role, value in self.collect_assignments().items():
+            store.set(role, value)
+        store.save()

@@ -46,6 +46,7 @@ class BaseNode(QGraphicsItem):
         view_labels: list[str] | None = None,
         port_mode_labels: list[str] | None = None,
         output_port: bool = False,
+        input_ports: int = 0,
     ):
         super().__init__()
         self.node_type = node_type
@@ -55,6 +56,7 @@ class BaseNode(QGraphicsItem):
         self._active_view: int = 0
         self._port_mode: int = 0
         self._output_port = output_port
+        self._input_ports = input_ports
 
         self._body_h: int = 80
         self._proxy: QGraphicsProxyWidget | None = None
@@ -89,9 +91,15 @@ class BaseNode(QGraphicsItem):
         return HEADER_HEIGHT + self._body_h + self._strips_total_h
 
     def boundingRect(self) -> QRectF:
-        # Extend right by port radius so the port dot is inside the bounding rect.
-        extra = (PORT_RADIUS + 2) if self._output_port else 0
-        return QRectF(0, 0, NODE_WIDTH + extra, self._total_h)
+        # Extend left/right by port radius so port dots are inside the bounding rect.
+        left_extra = (PORT_RADIUS + 2) if self._input_ports > 0 else 0
+        right_extra = (PORT_RADIUS + 2) if self._output_port else 0
+        return QRectF(
+            -left_extra,
+            0,
+            NODE_WIDTH + left_extra + right_extra,
+            self._total_h,
+        )
 
     def shape(self) -> QPainterPath:
         """Hit-test shape is the node body only (not the port extension)."""
@@ -217,9 +225,11 @@ class BaseNode(QGraphicsItem):
                 self.title,
             )
 
-        # Output port dot
+        # Port dots
         if self._output_port:
             self._paint_output_port(painter)
+        if self._input_ports > 0:
+            self._paint_input_ports(painter)
 
     def _paint_strips(self, painter: QPainter) -> None:
         body_end = HEADER_HEIGHT + self._body_h
@@ -277,6 +287,25 @@ class BaseNode(QGraphicsItem):
         painter.setPen(QPen(COLOR_BODY, 1.5))
         painter.setBrush(QBrush(COLOR_PORT))
         painter.drawEllipse(QPointF(cx, cy), PORT_RADIUS, PORT_RADIUS)
+
+    def _paint_input_ports(self, painter: QPainter) -> None:
+        n = self._input_ports
+        if n == 0:
+            return
+        body_top = HEADER_HEIGHT
+        body_bot = HEADER_HEIGHT + self._body_h
+        if n == 1:
+            ys = [(body_top + body_bot) / 2]
+        else:
+            margin = 14
+            top = body_top + margin
+            bot = body_bot - margin
+            step = (bot - top) / (n - 1)
+            ys = [top + i * step for i in range(n)]
+        painter.setPen(QPen(COLOR_BODY, 1.5))
+        painter.setBrush(QBrush(COLOR_PORT))
+        for cy in ys:
+            painter.drawEllipse(QPointF(0, cy), PORT_RADIUS, PORT_RADIUS)
 
     # ── header-only drag ──────────────────────────────────────────────────────
 

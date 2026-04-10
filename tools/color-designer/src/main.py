@@ -8,6 +8,8 @@ from nodes.base_node import BaseNode
 from nodes.swatch_node import SwatchNode
 from nodes.array_node import ArrayNode
 from nodes.schema_node import SchemaNode
+from nodes.assign_node import AssignNode
+from nodes.write_node import WriteNode
 
 HERE = Path(__file__).parent
 TOKEN_FILE = HERE.parent / "tokens.seed.json"
@@ -93,6 +95,13 @@ class MainWindow(QMainWindow):
             QPointF(720, 0),
         ))
         self._install_node(SchemaNode(TOKEN_FILE, QPointF(960, 0)))
+        self._install_node(AssignNode(
+            TOKEN_FILE, "node.selected", "#7eb8f7", QPointF(0, 320),
+        ))
+        self._install_node(AssignNode(
+            TOKEN_FILE, "semantic.alert", "#f7c948", QPointF(260, 320),
+        ))
+        self._install_node(WriteNode(TOKEN_FILE, QPointF(960, 320)))
 
     def _add_node(self) -> None:
         self._node_counter += 1
