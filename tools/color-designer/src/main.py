@@ -7,8 +7,10 @@ from canvas import NodeGraphScene, NodeGraphView
 from nodes.base_node import BaseNode
 from nodes.swatch_node import SwatchNode
 from nodes.array_node import ArrayNode
+from nodes.schema_node import SchemaNode
 
 HERE = Path(__file__).parent
+TOKEN_FILE = HERE.parent / "tokens.seed.json"
 
 
 class MainWindow(QMainWindow):
@@ -23,9 +25,22 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self._view)
 
         self._next_spawn: QPointF | None = None  # None → use viewport centre
+        self._node_counter = 0
+        self._seeded = False
 
         self._build_toolbar()
-        self._seed_nodes()
+        # NOTE: do NOT seed here. Seeding runs in showEvent so the seeded
+        # nodes are constructed under exactly the same realised-window
+        # context as nodes spawned by the +Node button. Building proxy-
+        # widget bodies in __init__ (before show()) leaves the embedded
+        # QWidget in a half-initialised state and clips the parent's
+        # header paint at first render.
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if not self._seeded:
+            self._seeded = True
+            self._seed_nodes()
 
     def _build_toolbar(self) -> None:
         toolbar = QToolBar()
@@ -57,32 +72,35 @@ class MainWindow(QMainWindow):
 
     # ── scene population ───────────────────────────────────────────────────────
 
+    def _install_node(self, node) -> None:
+        """Single entry point — every node added to the scene goes through here.
+        Used identically by _seed_nodes (post-show) and _add_node (button click)."""
+        self._scene.addItem(node)
+        self._wire_node(node)
+
     def _seed_nodes(self) -> None:
-        nodes = [
-            SwatchNode("#7eb8f7", "node.selected", QPointF(0, 0)),
-            SwatchNode("#2e2e3a", "node.default", QPointF(240, 0)),
-            SwatchNode("#f7c948", "semantic.alert", QPointF(480, 0)),
-            ArrayNode(
-                "status colours",
-                [
-                    ("#555568", "pending"),
-                    ("#f7c948", "running"),
-                    ("#4ab88a", "complete"),
-                    ("#c0392b", "failed"),
-                ],
-                QPointF(720, 0),
-            ),
-        ]
-        for node in nodes:
-            self._scene.addItem(node)
-            self._wire_node(node)
-        self._node_counter = 0
+        self._install_node(SwatchNode("#7eb8f7", "node.selected", QPointF(0, 0)))
+        self._install_node(SwatchNode("#2e2e3a", "node.default", QPointF(240, 0)))
+        self._install_node(SwatchNode("#f7c948", "semantic.alert", QPointF(480, 0)))
+        self._install_node(ArrayNode(
+            "status colours",
+            [
+                ("#555568", "pending"),
+                ("#f7c948", "running"),
+                ("#4ab88a", "complete"),
+                ("#c0392b", "failed"),
+            ],
+            QPointF(720, 0),
+        ))
+        self._install_node(SchemaNode(TOKEN_FILE, QPointF(960, 0)))
 
     def _add_node(self) -> None:
         self._node_counter += 1
-        node = BaseNode(f"Node {self._node_counter}", self._spawn_pos())
-        self._scene.addItem(node)
-        self._wire_node(node)
+        self._install_node(BaseNode(
+            node_type="Node",
+            pos=self._spawn_pos(),
+            title=f"#{self._node_counter}",
+        ))
 
 
 def main() -> None:

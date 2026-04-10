@@ -15,6 +15,7 @@ COLOR_HEADER = QColor("#3a3a4a")
 COLOR_BORDER = QColor("#4a4a5a")
 COLOR_BORDER_SEL = QColor("#7eb8f7")
 COLOR_TITLE = QColor("#ccccdd")
+COLOR_TYPE_LABEL = QColor("#aaaacc")
 COLOR_STRIP = QColor("#252530")
 COLOR_STRIP_TEXT = QColor("#666677")
 COLOR_STRIP_TEXT_ACTIVE = QColor("#ccccdd")
@@ -23,26 +24,36 @@ COLOR_PORT = QColor("#7eb8f7")
 
 class BaseNode(QGraphicsItem):
     """
-    Node chrome: header, body area, view-strip, output port dot.
+    Node chrome: header, body area, optional view + port-mode strips, output port.
 
     Drag is restricted to the header. Body mouse events go directly to the
     embedded QGraphicsProxyWidget child; this class never needs to forward them.
 
-    Subclasses call setBodyWidget(widget, height) to embed a body and override
-    _on_view_switch(idx) to respond when the user clicks a strip button.
+    Two independent strips can be configured:
+      - view_labels        → drives body view switching (e.g. Full/Cmp/Data)
+      - port_mode_labels   → drives port display mode (e.g. All/Conn/Gang)
+    Either, both, or neither may be set. When both are present the view strip
+    sits directly below the body and the port-mode strip sits below it.
+
+    Subclasses override _on_view_switch(idx) and _on_port_mode_switch(idx).
     """
 
     def __init__(
         self,
-        title: str = "Node",
+        node_type: str = "Node",
         pos: QPointF = QPointF(0.0, 0.0),
+        title: str = "",
         view_labels: list[str] | None = None,
+        port_mode_labels: list[str] | None = None,
         output_port: bool = False,
     ):
         super().__init__()
+        self.node_type = node_type
         self.title = title
         self._view_labels: list[str] = view_labels or []
+        self._port_mode_labels: list[str] = port_mode_labels or []
         self._active_view: int = 0
+        self._port_mode: int = 0
         self._output_port = output_port
 
         self._body_h: int = 80
@@ -62,12 +73,20 @@ class BaseNode(QGraphicsItem):
     # ── geometry ──────────────────────────────────────────────────────────────
 
     @property
-    def _strip_h(self) -> int:
+    def _view_strip_h(self) -> int:
         return STRIP_HEIGHT if self._view_labels else 0
 
     @property
+    def _port_strip_h(self) -> int:
+        return STRIP_HEIGHT if self._port_mode_labels else 0
+
+    @property
+    def _strips_total_h(self) -> int:
+        return self._view_strip_h + self._port_strip_h
+
+    @property
     def _total_h(self) -> int:
-        return HEADER_HEIGHT + self._body_h + self._strip_h
+        return HEADER_HEIGHT + self._body_h + self._strips_total_h
 
     def boundingRect(self) -> QRectF:
         # Extend right by port radius so the port dot is inside the bounding rect.
@@ -92,15 +111,17 @@ class BaseNode(QGraphicsItem):
         if self._proxy is None:
             self._proxy = QGraphicsProxyWidget(self)
             self._proxy.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
-            self._proxy.setPos(0, HEADER_HEIGHT)
 
         old = self._proxy.widget()
         self._proxy.setWidget(widget)
         if old is not None:
             old.deleteLater()
 
-        if widget is not None:
-            self._proxy.resize(NODE_WIDTH, height)
+        # Atomic position+size — calling setPos and resize separately leaves
+        # a window between setWidget and resize during which the freshly
+        # re-parented embedded QWidget can mis-register at proxy-local (0,0)
+        # and overdraw the header band on first paint.
+        self._proxy.setGeometry(QRectF(0, HEADER_HEIGHT, NODE_WIDTH, height))
 
         self.update()
 
@@ -111,7 +132,7 @@ class BaseNode(QGraphicsItem):
         self.prepareGeometryChange()
         self._body_h = height
         if self._proxy is not None:
-            self._proxy.resize(NODE_WIDTH, height)
+            self._proxy.setGeometry(QRectF(0, HEADER_HEIGHT, NODE_WIDTH, height))
         self.update()
 
     # ── paint paths ───────────────────────────────────────────────────────────
@@ -136,19 +157,20 @@ class BaseNode(QGraphicsItem):
         path.closeSubpath()
         return path
 
-    def _strip_path(self) -> QPainterPath:
-        """Bottom-rounded, top-square."""
-        r, w = CORNER_RADIUS, NODE_WIDTH
-        y0 = HEADER_HEIGHT + self._body_h
-        h = self._strip_h
+    def _strip_path_at(self, y0: float, rounded_bottom: bool) -> QPainterPath:
+        """Strip shape at the given y. Bottom-most strip gets rounded corners."""
+        r, w, h = CORNER_RADIUS, NODE_WIDTH, STRIP_HEIGHT
         path = QPainterPath()
-        path.moveTo(0, y0)
-        path.lineTo(0, y0 + h - r)
-        path.arcTo(QRectF(0, y0 + h - 2 * r, 2 * r, 2 * r), 180, 90)
-        path.lineTo(w - r, y0 + h)
-        path.arcTo(QRectF(w - 2 * r, y0 + h - 2 * r, 2 * r, 2 * r), 270, 90)
-        path.lineTo(w, y0)
-        path.closeSubpath()
+        if rounded_bottom:
+            path.moveTo(0, y0)
+            path.lineTo(0, y0 + h - r)
+            path.arcTo(QRectF(0, y0 + h - 2 * r, 2 * r, 2 * r), 180, 90)
+            path.lineTo(w - r, y0 + h)
+            path.arcTo(QRectF(w - 2 * r, y0 + h - 2 * r, 2 * r, 2 * r), 270, 90)
+            path.lineTo(w, y0)
+            path.closeSubpath()
+        else:
+            path.addRect(QRectF(0, y0, w, h))
         return path
 
     # ── paint ─────────────────────────────────────────────────────────────────
@@ -163,41 +185,81 @@ class BaseNode(QGraphicsItem):
         # Header fill
         painter.fillPath(self._header_path(), QBrush(COLOR_HEADER))
 
-        # View strip
-        if self._view_labels:
-            painter.fillPath(self._strip_path(), QBrush(COLOR_STRIP))
-            self._paint_strip(painter)
+        # Strips (view first if present, port-mode below it)
+        self._paint_strips(painter)
 
         # Border (drawn last so it sits on top of fills)
         painter.setPen(QPen(COLOR_BORDER_SEL if selected else COLOR_BORDER, 1.5))
         painter.setBrush(Qt.NoBrush)
         painter.drawPath(self._node_path())
 
-        # Title
-        font = QFont("monospace", 9)
-        painter.setFont(font)
-        painter.setPen(QPen(COLOR_TITLE))
+        # Type label — uppercased explicitly (don't rely on QFont capitalization
+        # combined with horizontalAdvance — they disagree and clip the rect).
+        # Wide rect + AlignLeft so width is never the limiter; right-aligned
+        # title in the same rect avoids any positioning math.
+        header_rect = QRectF(10, 0, NODE_WIDTH - 20, HEADER_HEIGHT)
+        type_font = QFont("monospace", 8)
+        type_font.setBold(True)
+        painter.setFont(type_font)
+        painter.setPen(QPen(COLOR_TYPE_LABEL))
         painter.drawText(
-            QRectF(10, 0, NODE_WIDTH - 20, HEADER_HEIGHT),
+            header_rect,
             Qt.AlignVCenter | Qt.AlignLeft,
-            self.title,
+            self.node_type.upper(),
         )
+
+        if self.title:
+            painter.setFont(QFont("monospace", 9))
+            painter.setPen(QPen(COLOR_TITLE))
+            painter.drawText(
+                header_rect,
+                Qt.AlignVCenter | Qt.AlignRight,
+                self.title,
+            )
 
         # Output port dot
         if self._output_port:
             self._paint_output_port(painter)
 
-    def _paint_strip(self, painter: QPainter) -> None:
-        n = len(self._view_labels)
+    def _paint_strips(self, painter: QPainter) -> None:
+        body_end = HEADER_HEIGHT + self._body_h
+        has_view = bool(self._view_labels)
+        has_port = bool(self._port_mode_labels)
+
+        if has_view:
+            y = body_end
+            painter.fillPath(
+                self._strip_path_at(y, rounded_bottom=not has_port),
+                QBrush(COLOR_STRIP),
+            )
+            self._paint_strip_labels(
+                painter, y, self._view_labels, self._active_view
+            )
+        if has_port:
+            y = body_end + self._view_strip_h
+            painter.fillPath(
+                self._strip_path_at(y, rounded_bottom=True),
+                QBrush(COLOR_STRIP),
+            )
+            self._paint_strip_labels(
+                painter, y, self._port_mode_labels, self._port_mode
+            )
+
+    def _paint_strip_labels(
+        self,
+        painter: QPainter,
+        y0: float,
+        labels: list[str],
+        active_idx: int,
+    ) -> None:
+        n = len(labels)
         btn_w = NODE_WIDTH / n
-        y0 = HEADER_HEIGHT + self._body_h
         font = QFont()
         font.setPointSize(8)
         painter.setFont(font)
-        for i, label in enumerate(self._view_labels):
-            active = i == self._active_view
+        for i, label in enumerate(labels):
+            active = i == active_idx
             x = i * btn_w
-            # Active tab indicator — thin bar at top of button
             if active:
                 painter.fillRect(
                     QRectF(x + 2, y0, btn_w - 4, 2), QBrush(COLOR_BORDER_SEL)
@@ -206,7 +268,7 @@ class BaseNode(QGraphicsItem):
                 QPen(COLOR_STRIP_TEXT_ACTIVE if active else COLOR_STRIP_TEXT)
             )
             painter.drawText(
-                QRectF(x, y0, btn_w, self._strip_h), Qt.AlignCenter, label
+                QRectF(x, y0, btn_w, STRIP_HEIGHT), Qt.AlignCenter, label
             )
 
     def _paint_output_port(self, painter: QPainter) -> None:
@@ -220,23 +282,41 @@ class BaseNode(QGraphicsItem):
 
     def mousePressEvent(self, event: QGraphicsSceneMouseEvent) -> None:
         y = event.pos().y()
+        body_end = HEADER_HEIGHT + self._body_h
+
         if y <= HEADER_HEIGHT:
             self._dragging = True
             self._drag_start = event.scenePos()
             self._drag_origin = self.pos()
             self.setZValue(1.0)
             event.accept()
-        elif self._view_labels and y >= HEADER_HEIGHT + self._body_h:
+            return
+
+        if y >= body_end:
+            strip_y = y - body_end
             x = event.pos().x()
-            btn_w = NODE_WIDTH / len(self._view_labels)
-            idx = max(0, min(int(x / btn_w), len(self._view_labels) - 1))
-            if idx != self._active_view:
-                self._active_view = idx
-                self.update()
-                self._on_view_switch(idx)
-            event.accept()
-        else:
-            super().mousePressEvent(event)
+
+            if self._view_labels and strip_y < self._view_strip_h:
+                btn_w = NODE_WIDTH / len(self._view_labels)
+                idx = max(0, min(int(x / btn_w), len(self._view_labels) - 1))
+                if idx != self._active_view:
+                    self._active_view = idx
+                    self.update()
+                    self._on_view_switch(idx)
+                event.accept()
+                return
+
+            if self._port_mode_labels and strip_y >= self._view_strip_h:
+                btn_w = NODE_WIDTH / len(self._port_mode_labels)
+                idx = max(0, min(int(x / btn_w), len(self._port_mode_labels) - 1))
+                if idx != self._port_mode:
+                    self._port_mode = idx
+                    self.update()
+                    self._on_port_mode_switch(idx)
+                event.accept()
+                return
+
+        super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QGraphicsSceneMouseEvent) -> None:
         if self._dragging:
@@ -259,3 +339,6 @@ class BaseNode(QGraphicsItem):
 
     def _on_view_switch(self, idx: int) -> None:
         """Called when the user selects a different view. Override in subclasses."""
+
+    def _on_port_mode_switch(self, idx: int) -> None:
+        """Called when the user selects a different port display mode."""

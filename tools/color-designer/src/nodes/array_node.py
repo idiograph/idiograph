@@ -85,7 +85,14 @@ class ArrayRow(QWidget):
         self.swatch.setStyleSheet(_swatch_css(self.hex_value))
 
     def _pick(self) -> None:
-        color = QColorDialog.getColor(QColor(self.hex_value), self, "Pick colour")
+        # parent=None + DontUseNativeDialog: native dialog renders blank when
+        # parented to a QGraphicsProxyWidget on Windows.
+        color = QColorDialog.getColor(
+            QColor(self.hex_value),
+            None,
+            "Pick colour",
+            QColorDialog.ColorDialogOption.DontUseNativeDialog,
+        )
         if color.isValid():
             self.hex_value = color.name()
             self.hex_edit.setText(self.hex_value)
@@ -312,8 +319,8 @@ class ArrayNode(BaseNode):
         pos: QPointF = QPointF(0.0, 0.0),
     ):
         super().__init__(
-            title="Color Array",
-            pos=pos,
+            "Color Array",
+            pos,
             view_labels=_VIEWS,
             output_port=True,
         )

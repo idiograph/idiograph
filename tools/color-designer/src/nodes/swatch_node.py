@@ -70,8 +70,13 @@ class _FullBody(QWidget):
         self.swatch.setStyleSheet(_swatch_css(self._node.hex_value))
 
     def _pick(self) -> None:
+        # parent=None + DontUseNativeDialog: native dialog renders blank when
+        # parented to a QGraphicsProxyWidget on Windows.
         color = QColorDialog.getColor(
-            QColor(self._node.hex_value), self, f"Pick — {self._node.title}"
+            QColor(self._node.hex_value),
+            None,
+            f"Pick — {self._node.node_type}",
+            QColorDialog.ColorDialogOption.DontUseNativeDialog,
         )
         if color.isValid():
             self._node._set_color(color.name())
@@ -152,8 +157,8 @@ class SwatchNode(BaseNode):
         pos: QPointF = QPointF(0.0, 0.0),
     ):
         super().__init__(
-            title="Color Swatch",
-            pos=pos,
+            "Color Swatch",
+            pos,
             view_labels=_VIEWS,
             output_port=True,
         )
