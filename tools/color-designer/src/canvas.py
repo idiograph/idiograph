@@ -8,6 +8,7 @@ class NodeGraphScene(QGraphicsScene):
         super().__init__(parent)
         self.setSceneRect(-5000, -5000, 10000, 10000)
         self.setBackgroundBrush(QBrush(QColor("#1a1a1f")))
+        self._dragging_wire = None  # active in-progress Wire during a drag
 
     def drawBackground(self, painter: QPainter, rect) -> None:
         super().drawBackground(painter, rect)
@@ -23,6 +24,60 @@ class NodeGraphScene(QGraphicsScene):
                 painter.drawPoint(x, y)
                 y += grid_size
             x += grid_size
+
+    # ── wire drag protocol (called from Port mouse handlers) ──────────────────
+
+    def start_wire_drag(self, source_port, scene_pos) -> None:
+        from nodes.wire import Wire
+        from nodes.port import OUTPUT
+        if source_port.direction != OUTPUT:
+            return
+        wire = Wire(source_port)
+        wire.set_cursor_target(scene_pos)
+        self.addItem(wire)
+        self._dragging_wire = wire
+
+    def update_wire_drag(self, scene_pos) -> None:
+        if self._dragging_wire is None:
+            return
+        target = self._port_at(scene_pos)
+        invalid = False
+        if target is not None and target is not self._dragging_wire.source_port:
+            from nodes.port import is_compatible
+            if not is_compatible(self._dragging_wire.source_port, target):
+                invalid = True
+        self._dragging_wire.set_cursor_target(scene_pos, invalid=invalid)
+
+    def finish_wire_drag(self, scene_pos) -> None:
+        if self._dragging_wire is None:
+            return
+        wire = self._dragging_wire
+        self._dragging_wire = None
+
+        target = self._port_at(scene_pos)
+        from nodes.port import is_compatible
+        if (
+            target is not None
+            and target is not wire.source_port
+            and is_compatible(wire.source_port, target)
+        ):
+            # If the input doesn't accept multiple, drop any existing wires.
+            if not target.accept_multiple:
+                for existing in list(target.wires):
+                    existing.detach()
+                    self.removeItem(existing)
+            wire.target_port = target
+            wire.attach()
+            wire.update_geometry()
+        else:
+            self.removeItem(wire)
+
+    def _port_at(self, scene_pos):
+        from nodes.port import Port
+        for item in self.items(scene_pos):
+            if isinstance(item, Port):
+                return item
+        return None
 
 
 class NodeGraphView(QGraphicsView):
@@ -90,10 +145,23 @@ class NodeGraphView(QGraphicsView):
             if key == Qt.Key_S:
                 self.frame_selected()
                 return
+            if key == Qt.Key_Delete or key == Qt.Key_Backspace:
+                self._delete_selected_wires()
+                return
         if key == Qt.Key_Space and not event.isAutoRepeat():
             self._space_held = True
             self.setCursor(Qt.OpenHandCursor)
         super().keyPressEvent(event)
+
+    def _delete_selected_wires(self) -> None:
+        from nodes.wire import Wire
+        scene = self.scene()
+        if scene is None:
+            return
+        for item in list(scene.selectedItems()):
+            if isinstance(item, Wire):
+                item.detach()
+                scene.removeItem(item)
 
     def keyReleaseEvent(self, event) -> None:
         if event.key() == Qt.Key_Space and not event.isAutoRepeat():

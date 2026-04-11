@@ -1,5 +1,5 @@
 # Color Designer — Node Graph UI Specification
-**Version:** 1
+**Version:** 3
 **Status:** LIVING — subject to revision during development
 **Date:** April 9, 2026
 
@@ -40,7 +40,7 @@ declared projections.
 Single color input. The atomic unit of the system.
 
 **Data:** one hex value, one label
-**Ports:** one output (color)
+**Ports:** one output — type `color`
 **Views (switchable via button strip):**
 - Full — large swatch, label, hex field, picker button
 - Compact — small swatch chip with label
@@ -50,12 +50,15 @@ Single color input. The atomic unit of the system.
 Collection node. Contains multiple colors as internal rows — not wired from external nodes.
 
 **Data:** ordered list of (label, hex) pairs, dynamic length
-**Ports:** one output (color array)
+**Ports:** one output — type `color_array`
 **Behavior:**
 - "+ New Item" button appends a new row inside the node body (swatch + hex field + label)
 - Each row is a self-contained color entry — no external connections required
 - Array label is editable
-**Views:** stacked list (only view — tabs deferred)
+- "Match Schema" button — when a Schema node is present in the scene, resizes the array
+  to match the Schema field count. Adds empty rows or trims from the bottom.
+**Views:** Compact (chip + count), List (stacked rows with edit controls), Grid (swatch
+matrix, read-only)
 
 ### Generate
 **DEFERRED** — not part of MVP scope.
@@ -65,18 +68,41 @@ The token role registry. Defines what semantic roles exist to be assigned.
 Loaded from the active token JSON file.
 
 **Data:** flat list of dot-notation token keys (e.g. `node.selected`, `edge.citation`)
-**Ports:** multiple outputs — one per token role
+**Port modes:**
+- All — one output port per token role, type `token_role`
+- Connected — only wired ports visible
+- Ganged — single output port, type `token_dict` (full token object)
+**Exposes:** field count as data — number of roles currently in the token file. Color
+Array nodes can consume this to auto-size their row count.
 **Behavior:**
-- Rendered as a scrollable list of role names
-- Selecting a role broadcasts a `token.focus` event (see SSE section)
+- Rendered as a scrollable list of role names with color swatches
 - Schema is loaded from file; new roles are added by editing the JSON directly
 
 ### Assign
-Maps a color or array slot to a specific token role.
+Maps a single color to a specific token role.
 
-**Data:** source (color or array slot), target (token role from Schema)
-**Ports:** one color input; one token output (role + value pair)
-**Behavior:** the explicit assignment step — this is where semantic meaning is attached
+**Data:** source color, target token role
+**Ports:**
+- Input: `color` (from Swatch)
+- Input: `token_role` or `token_dict` (from Schema)
+- Output: `assignment` — (role, hex) pair
+**Behavior:** single explicit assignment — one color, one role. Role selection via dropdown
+when receiving `token_dict`; role is fixed when receiving `token_role`.
+
+### Array Assign
+Bulk assignment node. Maps an entire Color Array to the full Schema positionally.
+
+**Data:** color array, schema role list
+**Ports:**
+- Input: `color_array` (from Color Array)
+- Input: `token_dict` (from Schema, Ganged mode)
+- Output: one `assignment` port per role — positional mapping (row 1 → role 1, etc.)
+**Behavior:**
+- No manual role matching — positions are the mapping
+- Array and Schema must have the same cardinality; node shows a warning if they differ
+- Output port count matches Schema field count
+- Use "Match Schema" on the Color Array node first to ensure alignment
+**Port display:** All by default — each assignment is visible and traceable
 
 ### Color Correct
 **DEFERRED** — not part of MVP scope.
@@ -87,12 +113,62 @@ Maps a color or array slot to a specific token role.
 ### Write
 File output node. Writes the assembled token set to a JSON file.
 
-**Data:** output path
-**Ports:** accepts one or more token inputs (role + value pairs)
-**Behavior:** writes on explicit trigger (button), not automatically
+**Data:** output path (configurable, defaults to tokens.seed.json)
+**Ports:** one or more inputs — type `assignment`
+**Port display:** Ganged by default
+**Behavior:**
+- Writes on explicit Save button trigger — never automatically
+- Uses token_store.py — no reimplementation of file writing
+- Preserves existing tokens not covered by wired assignments
+- Saves only what is wired to it — no scene scanning
 
 ### Drive
-**DEFERRED** — not part of MVP scope. Architecture is designed and documented; implementation follows after Idiograph demo is complete.
+**DEFERRED** — not part of MVP scope. Architecture is designed and documented;
+implementation follows after Idiograph demo is complete.
+
+---
+
+## Port Type Vocabulary
+
+Every port has a declared type. Connections are only valid between compatible types.
+
+| Type | Description | Produced by |
+|---|---|---|
+| `color` | Single hex value | Color Swatch output |
+| `color_array` | Ordered list of (label, hex) pairs | Color Array output |
+| `token_role` | Single role name string | Schema port (All mode) |
+| `token_dict` | Full token object | Schema port (Gang mode) |
+| `assignment` | (role, hex) pair | Assign or Array Assign output |
+
+**Compatibility rules:**
+- Exact type match — always valid
+- `token_dict` → `token_role` input — valid; Assign extracts role via dropdown
+- `color_array` → Array Assign color input — valid
+- `token_dict` → Array Assign schema input — valid (Gang mode required)
+- All other mismatches — invalid; rejected visually during drag
+
+---
+
+## Wire System (Phase F)
+
+### Interaction
+- Drag from an output port to create a wire; drop on a compatible input port to connect
+- Dragging onto an incompatible port renders the wire muted/red — visual rejection signal
+- Dropping on empty canvas cancels the connection
+- Click a wire to select it; Delete key removes it
+- Dragging from a connected input port disconnects and re-routes
+
+### Visual
+- Wires render as cubic bezier curves
+- Wire color: `edge.default` from token file at rest; `edge.selected` when selected
+- In-progress wire renders from port to cursor while dragging
+- Port dots reflect connection state — filled when connected, hollow when empty
+
+### Architecture
+- Each port declares its type explicitly
+- Wire validity is checked at connection time against the compatibility rules above
+- WriteNode traverses actual wired edges — no scene scanning
+- The graph is the source of truth; collect_assignments() scene scan is removed
 
 ---
 
@@ -116,46 +192,43 @@ Every node has a button strip at the bottom edge. Pressing a button cycles the n
 to a different view representation. View is a declared projection of the node's data —
 the data does not change, only the visual encoding.
 
-Button strip icons encode view type visually (not just labels).
-
 View state persists per node instance. It is not a global setting.
+
+---
+
+## Port Display Modes
+
+Nodes with multiple ports of the same type support three display modes, toggled via the
+strip:
+
+- **All** — every port visible
+- **Connected** — only wired ports visible; unconnected ports hidden
+- **Ganged** — single port representing all, emits/accepts aggregate type
+
+Port display mode is independent of body view mode.
 
 ---
 
 ## Canvas
 
-Standard node graph canvas:
-
-- Dark surface (inherits `surface.canvas` token — the tool designs its own surface)
+- Dark surface (`surface.canvas` token)
 - Pan: middle mouse / space + drag
-- Zoom: scroll wheel
+- Zoom: scroll wheel, centered on cursor
 - Box select: left drag on empty canvas
 - Node move: left drag on node header
+- **F** — frame all nodes
+- **S** — frame selected nodes (falls back to frame all if nothing selected)
 - Connect: drag from output port to input port
-- Disconnect: drag from connected port to empty canvas
+- Disconnect: drag from connected input port to empty canvas
 
-Port color matches edge color for the connection type — consistent with Idiograph's
-color philosophy. Edges carry semantic load; nodes stay near-neutral.
-
----
-
-## Palette Management
-
-A palette is a named configuration — it points to a token JSON file and stores the
-node graph layout (node positions, connections, view states).
-
-Palette files are separate from token files:
-- `my-palette.cdpalette` — JSON, stores graph state + path to token file
-- `tokens.seed.json` — the token output, consumed by Idiograph and other targets
-
-This separation means the token file can be consumed directly by other systems without
-knowledge of the graph that produced it.
+Port color matches edge color for the connection type. Edges carry semantic load; nodes
+stay near-neutral.
 
 ---
 
 ## Token File Format
 
-Unchanged from current implementation. Nested JSON, underscore-separated group names:
+Unchanged from initial implementation. Nested JSON, underscore-separated group names:
 
 ```json
 {
@@ -171,17 +244,13 @@ regenerates its port list on reload.
 
 ---
 
-## SSE Architecture
+## SSE Architecture — DEFERRED
 
 FastAPI server exposes two endpoints:
 
 - `POST /tokens` — receives full token object; broadcasts to all SSE subscribers
 - `GET /events` — SSE stream; clients hold this connection open
 - `POST /focus` — receives `{ "role": "..." }`; broadcasts `token.focus` to subscribers
-
-Color Designer posts to `/tokens` on Drive node trigger.
-Color Designer posts to `/focus` on Schema role selection.
-Idiograph preview (D3) holds open `/events` connection.
 
 Broadcast model: full token object sent on every update. No diffs. Receivers replace
 state wholesale.
@@ -195,48 +264,32 @@ state wholesale.
 - Save flat dict → nested JSON
 - No UI dependency — pure data layer
 
-This module survives the UI rewrite unchanged.
+This module survives any UI rewrite unchanged.
 
 ---
 
-## Implementation Phases — MVP
+## Implementation Phases
 
-**Phase A — Canvas scaffold**
-PySide6 QGraphicsScene/QGraphicsView canvas with pan, zoom, empty node drag.
-No node logic yet. Prove the canvas works.
-
-**Phase B — Color Swatch node**
-First complete node type. Full / Compact / Data views. Picker and hex field functional.
-View switching via button strip.
-
-**Phase C — Color Array node**
-Collection node with internal add-item rows. Edge rendering with port color.
-Connect Swatch output to Array input for mixed workflows.
-
-**Phase D — Schema node + token file integration**
-Load token JSON. Render role list as scrollable output port list.
-
-**Phase E — Assign node + Write node**
-Complete the pipeline to file output. End-to-end: Swatch → Assign → Write → JSON.
-Tool is useful and demonstrable at this phase.
-
----
-
-## Deferred Phases (Post-Idiograph Demo)
-
-**Phase F — FastAPI + SSE + Drive node**
-Live broadcast pipeline. Full cross-app highlight with Idiograph preview.
-
-**Phase G — Generate, Color Correct, Filter nodes**
-Generative and refinement stages.
+| Phase | Scope | Status |
+|---|---|---|
+| A | Canvas scaffold — pan, zoom, node drag, frame hotkeys | Complete |
+| B | Color Swatch node — Full/Compact/Data views, view switching | Complete |
+| C | Color Array node — internal rows, Grid/List/Compact views, viewport spawn | Complete |
+| D | Schema node — token file integration, port display modes, node type headers | Complete |
+| E | Assign node + Write node — pipeline to file output | Complete |
+| F | Wire system — typed ports, bezier curves, connection validation | Complete |
+| G | Array Assign node + Schema cardinality + Color Array "Match Schema" | Next |
+| H | FastAPI + SSE + Drive node | Deferred |
+| I | Generate, Color Correct, Filter nodes | Deferred |
 
 ---
 
 ## What Is Explicitly Deferred
 
-- Generate, Color Correct, Filter nodes (Phase G)
-- Drive node and all FastAPI/SSE work (Phase F)
+- Generate, Color Correct, Filter nodes (Phase I)
+- Drive node and all FastAPI/SSE work (Phase H)
 - Cross-app highlight with Idiograph preview
+- Merge logic for Assign override of ArrayAssign (same role, individual wins)
 - Palette file format and management UI
 - Color Array tabbed panel view
 - Contrast checking / WCAG ratios
@@ -246,23 +299,26 @@ Generative and refinement stages.
 
 ---
 
-## Files — MVP
+## Files
 
 ```
 tools/color-designer/
   pyproject.toml
-  tokens.seed.json          ← seed token file (unchanged)
+  tokens.seed.json          ← seed token file
+  SPEC.md                   ← this file
+  test_token_store.py       ← token store round-trip test
   src/
-    token_store.py          ← unchanged, pure data layer
-    main.py                 ← SCRAPPED, replaced by canvas entry point
-    canvas.py               ← QGraphicsScene/View (Phase A)
+    token_store.py          ← pure data layer, no UI dependency
+    main.py                 ← entry point, canvas setup, seed nodes
+    canvas.py               ← QGraphicsScene/View, pan/zoom/select
     nodes/
-      base_node.py          ← shared node chrome, port system, view switching
+      base_node.py          ← shared chrome, port system, view switching
       swatch_node.py        ← Phase B
       array_node.py         ← Phase C
       schema_node.py        ← Phase D
       assign_node.py        ← Phase E
       write_node.py         ← Phase E
+      array_assign_node.py  ← Phase G
 ```
 
 ---

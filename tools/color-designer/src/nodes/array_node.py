@@ -210,16 +210,59 @@ class _ListBody(QWidget):
         self._rows_layout.setAlignment(Qt.AlignTop)
         outer.addWidget(self._rows_widget)
 
-        add_btn = QPushButton("+ New Item")
+        # Bottom button row: Match Schema | + Item
+        btn_row = QWidget()
+        btn_row.setFixedHeight(24)
+        btn_row.setStyleSheet(f"background-color: {_BG_BODY};")
+        btn_layout = QHBoxLayout(btn_row)
+        btn_layout.setContentsMargins(0, 0, 0, 0)
+        btn_layout.setSpacing(4)
+
+        match_btn = QPushButton("Match Schema")
+        match_btn.setFixedHeight(24)
+        match_btn.setStyleSheet(_ADD_BTN_STYLE)
+        match_btn.clicked.connect(self._on_match_schema)
+        btn_layout.addWidget(match_btn)
+
+        add_btn = QPushButton("+ Item")
         add_btn.setFixedHeight(24)
         add_btn.setStyleSheet(_ADD_BTN_STYLE)
         add_btn.clicked.connect(self._add_row)
-        outer.addWidget(add_btn)
+        btn_layout.addWidget(add_btn)
+
+        outer.addWidget(btn_row)
 
         for hex_val, lbl in node.rows:
             self._append_row(hex_val, lbl, notify=False)
 
         self._apply_height()
+
+    def _on_match_schema(self) -> None:
+        """Resize node.rows to match the first SchemaNode in the scene."""
+        scene = self._node.scene()
+        if scene is None:
+            return
+        # Local import to avoid a circular module dependency at file load time.
+        from nodes.schema_node import SchemaNode
+        schema = next(
+            (item for item in scene.items() if isinstance(item, SchemaNode)),
+            None,
+        )
+        if schema is None:
+            return
+        target = schema.field_count
+        current = len(self._node.rows)
+        if current == target:
+            return
+        if current < target:
+            for _ in range(target - current):
+                self._node.rows.append(("#ccccdd", ""))
+        else:
+            self._node.rows = self._node.rows[:target]
+        # Rebuild the body so the new row count is reflected in the UI…
+        self._node._switch_view(self._node._active_view)
+        # …and tell wired downstream nodes (e.g. ArrayAssign) to refresh.
+        self._node.notify_rows_changed()
 
     def _append_row(self, hex_value: str, label: str, notify: bool = True) -> None:
         row = ArrayRow(hex_value, label, self._sync_rows)
@@ -230,6 +273,7 @@ class _ListBody(QWidget):
     def _add_row(self) -> None:
         self._node.rows.append(("#ccccdd", ""))
         self._append_row("#ccccdd", "", notify=True)
+        self._node.notify_rows_changed()
 
     def _apply_height(self) -> None:
         n = self._rows_layout.count()
@@ -248,6 +292,8 @@ class _ListBody(QWidget):
             if isinstance(w, ArrayRow):
                 rows.append(w.data())
         self._node.rows = rows
+        # Cell-level edits (hex / label) propagate to ArrayAssign body chips.
+        self._node.notify_rows_changed()
 
 
 # ── grid view ─────────────────────────────────────────────────────────────────
@@ -322,7 +368,6 @@ class ArrayNode(BaseNode):
             "Color Array",
             pos,
             view_labels=_VIEWS,
-            output_port=True,
         )
         self.array_label = array_label
         self.rows: list[tuple[str, str]] = rows if rows is not None else [
@@ -332,6 +377,7 @@ class ArrayNode(BaseNode):
 
         self._active_view = _DEFAULT_VIEW
         self._switch_view(_DEFAULT_VIEW)
+        self.add_output_port("color_array")
 
     # ── view switching ────────────────────────────────────────────────────────
 
@@ -349,6 +395,22 @@ class ArrayNode(BaseNode):
             widget = _GridBody(self)
             height = _GridBody.calc_height(len(self.rows))
         self.setBodyWidget(widget, height)
+
+    # ── notification ─────────────────────────────────────────────────────────
+
+    def notify_rows_changed(self) -> None:
+        """Tell every node wired to this array's output that its row set
+        has changed (added, trimmed, or just edited). Reuses the existing
+        on_connections_changed hook because the consumer's response is the
+        same: re-read this node's state and refresh its derived view."""
+        for port in self.output_ports():
+            for wire in port.wires:
+                target = wire.target_port
+                if target is None:
+                    continue
+                tnode = target.parentItem()
+                if tnode is not None and hasattr(tnode, "on_connections_changed"):
+                    tnode.on_connections_changed()
 
     # ── data ──────────────────────────────────────────────────────────────────
 

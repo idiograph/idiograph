@@ -8,6 +8,7 @@ from PySide6.QtCore import Qt, QPointF, QTimer
 
 from nodes.base_node import BaseNode, NODE_WIDTH
 from nodes.assign_node import AssignNode
+from nodes.array_assign_node import ArrayAssignNode
 from token_store import TokenStore
 
 # ── port modes ────────────────────────────────────────────────────────────────
@@ -186,30 +187,37 @@ class WriteNode(BaseNode):
             pos,
             view_labels=[],
             port_mode_labels=_PORT_MODES,
-            output_port=False,
-            input_ports=1,
         )
         self.token_path = token_path
         self._port_mode = _DEFAULT_PORT_MODE  # default Gang
         self.setBodyWidget(_WriteBody(self), WRITE_BODY_H)
+        # Single ganged input — accepts multiple incoming wires of type
+        # `assignment`. Per-assignment input ports (All mode) wait for the
+        # same future phase as Schema's per-role outputs.
+        self.add_input_port("assignment", accept_multiple=True)
 
     # ── data collection ──────────────────────────────────────────────────────
 
     def collect_assignments(self) -> dict[str, str]:
-        """Scan the scene for AssignNodes and return {role: hex} pairs."""
-        # SHORTCUT (Phase E): collects every AssignNode in the scene rather
-        # than traversing real edges from this node's input port. Replace
-        # with proper edge-walking once the edge layer lands — at that
-        # point only AssignNodes actually wired to this Write node should
-        # contribute, not every Assign on the canvas.
-        if self.scene() is None:
-            return {}
+        """Walk wires from this node's input port and collect assignments
+        from every upstream Assign / ArrayAssign output actually wired to
+        it. The graph is the source of truth — no scene scanning."""
         result: dict[str, str] = {}
-        for item in self.scene().items():
-            if isinstance(item, AssignNode):
-                role, color = item.assignment()
-                if role:
-                    result[role] = color
+        seen_array_assigns: set = set()
+        for in_port in self.input_ports():
+            for wire in in_port.wires:
+                src_node = wire.source_port.parentItem()
+                if isinstance(src_node, AssignNode):
+                    role, color = src_node.assignment()
+                    if role:
+                        result[role] = color
+                elif isinstance(src_node, ArrayAssignNode):
+                    if src_node in seen_array_assigns:
+                        continue
+                    seen_array_assigns.add(src_node)
+                    for role, color in src_node.get_assignments().items():
+                        if role:
+                            result[role] = color
         return result
 
     # ── save ─────────────────────────────────────────────────────────────────

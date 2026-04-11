@@ -2,12 +2,14 @@ from PySide6.QtWidgets import QGraphicsItem, QGraphicsProxyWidget, QGraphicsScen
 from PySide6.QtCore import Qt, QRectF, QPointF
 from PySide6.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPainterPath
 
+from nodes.port import Port, INPUT, OUTPUT, PORT_RADIUS
+
 # ── layout constants ──────────────────────────────────────────────────────────
 NODE_WIDTH = 200
 HEADER_HEIGHT = 32
 STRIP_HEIGHT = 24
 CORNER_RADIUS = 6
-PORT_RADIUS = 6
+# PORT_RADIUS imported from port.py (single source of truth)
 
 # ── palette ───────────────────────────────────────────────────────────────────
 COLOR_BODY = QColor("#2e2e3a")
@@ -45,8 +47,6 @@ class BaseNode(QGraphicsItem):
         title: str = "",
         view_labels: list[str] | None = None,
         port_mode_labels: list[str] | None = None,
-        output_port: bool = False,
-        input_ports: int = 0,
     ):
         super().__init__()
         self.node_type = node_type
@@ -55,8 +55,7 @@ class BaseNode(QGraphicsItem):
         self._port_mode_labels: list[str] = port_mode_labels or []
         self._active_view: int = 0
         self._port_mode: int = 0
-        self._output_port = output_port
-        self._input_ports = input_ports
+        self._ports: list[Port] = []  # populated by add_input_port / add_output_port
 
         self._body_h: int = 80
         self._proxy: QGraphicsProxyWidget | None = None
@@ -91,13 +90,14 @@ class BaseNode(QGraphicsItem):
         return HEADER_HEIGHT + self._body_h + self._strips_total_h
 
     def boundingRect(self) -> QRectF:
-        # Extend left/right by port radius so port dots are inside the bounding rect.
-        left_extra = (PORT_RADIUS + 2) if self._input_ports > 0 else 0
-        right_extra = (PORT_RADIUS + 2) if self._output_port else 0
+        # Always extend by port radius on both sides so port child items
+        # whose bounding rects extend outside NODE_WIDTH are still indexed
+        # correctly by the scene.
+        extra = PORT_RADIUS + 2
         return QRectF(
-            -left_extra,
+            -extra,
             0,
-            NODE_WIDTH + left_extra + right_extra,
+            NODE_WIDTH + 2 * extra,
             self._total_h,
         )
 
@@ -113,6 +113,10 @@ class BaseNode(QGraphicsItem):
 
     def setBodyWidget(self, widget, height: int) -> None:
         """Embed (or replace) the body widget and resize the node."""
+        # Snapshot the current scene area so we can invalidate stale pixels
+        # outside the new bounding rect when the body shrinks.
+        old_scene_rect = self.sceneBoundingRect() if self.scene() is not None else None
+
         self.prepareGeometryChange()
         self._body_h = height
 
@@ -131,17 +135,37 @@ class BaseNode(QGraphicsItem):
         # and overdraw the header band on first paint.
         self._proxy.setGeometry(QRectF(0, HEADER_HEIGHT, NODE_WIDTH, height))
 
+        self._reposition_centered_ports()
         self.update()
+        if old_scene_rect is not None:
+            self.scene().update(old_scene_rect)
 
     def resizeBody(self, height: int) -> None:
         """Called by body widgets to dynamically expand the node (e.g. on row add)."""
         if height == self._body_h:
             return
+        old_scene_rect = self.sceneBoundingRect() if self.scene() is not None else None
         self.prepareGeometryChange()
         self._body_h = height
         if self._proxy is not None:
             self._proxy.setGeometry(QRectF(0, HEADER_HEIGHT, NODE_WIDTH, height))
+        self._reposition_centered_ports()
         self.update()
+        if old_scene_rect is not None:
+            self.scene().update(old_scene_rect)
+
+    def _reposition_centered_ports(self) -> None:
+        """Move every port created with the default y_offset to the new
+        body centre. Ports placed at explicit y_offsets stay where they
+        were (their position was a deliberate layout choice)."""
+        cy = HEADER_HEIGHT + self._body_h / 2
+        for port in self._ports:
+            if not getattr(port, "_follows_center", False):
+                continue
+            x = NODE_WIDTH if port.direction == OUTPUT else 0
+            port.setPos(x, cy)
+            for wire in port.wires:
+                wire.update_geometry()
 
     # ── paint paths ───────────────────────────────────────────────────────────
 
@@ -225,11 +249,7 @@ class BaseNode(QGraphicsItem):
                 self.title,
             )
 
-        # Port dots
-        if self._output_port:
-            self._paint_output_port(painter)
-        if self._input_ports > 0:
-            self._paint_input_ports(painter)
+        # Ports paint themselves as child items — nothing to do here.
 
     def _paint_strips(self, painter: QPainter) -> None:
         body_end = HEADER_HEIGHT + self._body_h
@@ -281,31 +301,60 @@ class BaseNode(QGraphicsItem):
                 QRectF(x, y0, btn_w, STRIP_HEIGHT), Qt.AlignCenter, label
             )
 
-    def _paint_output_port(self, painter: QPainter) -> None:
-        cx = NODE_WIDTH
-        cy = HEADER_HEIGHT + self._body_h / 2
-        painter.setPen(QPen(COLOR_BODY, 1.5))
-        painter.setBrush(QBrush(COLOR_PORT))
-        painter.drawEllipse(QPointF(cx, cy), PORT_RADIUS, PORT_RADIUS)
+    # ── port management ──────────────────────────────────────────────────────
 
-    def _paint_input_ports(self, painter: QPainter) -> None:
-        n = self._input_ports
-        if n == 0:
-            return
-        body_top = HEADER_HEIGHT
-        body_bot = HEADER_HEIGHT + self._body_h
-        if n == 1:
-            ys = [(body_top + body_bot) / 2]
-        else:
-            margin = 14
-            top = body_top + margin
-            bot = body_bot - margin
-            step = (bot - top) / (n - 1)
-            ys = [top + i * step for i in range(n)]
-        painter.setPen(QPen(COLOR_BODY, 1.5))
-        painter.setBrush(QBrush(COLOR_PORT))
-        for cy in ys:
-            painter.drawEllipse(QPointF(0, cy), PORT_RADIUS, PORT_RADIUS)
+    def add_output_port(
+        self,
+        port_type: str,
+        y_offset: float | None = None,
+    ) -> Port:
+        """Add an output port on the right edge. Default y is body centre.
+        Ports without an explicit y_offset are tagged so they follow the
+        body centre across view switches."""
+        follows_center = y_offset is None
+        if y_offset is None:
+            y_offset = HEADER_HEIGHT + self._body_h / 2
+        port = Port(self, port_type, OUTPUT)
+        port._follows_center = follows_center
+        port.setPos(NODE_WIDTH, y_offset)
+        self._ports.append(port)
+        return port
+
+    def add_input_port(
+        self,
+        port_type: str,
+        y_offset: float | None = None,
+        accept_multiple: bool = False,
+    ) -> Port:
+        """Add an input port on the left edge. Default y is body centre.
+        Ports without an explicit y_offset are tagged so they follow the
+        body centre across view switches."""
+        follows_center = y_offset is None
+        if y_offset is None:
+            y_offset = HEADER_HEIGHT + self._body_h / 2
+        port = Port(self, port_type, INPUT, accept_multiple=accept_multiple)
+        port._follows_center = follows_center
+        port.setPos(0, y_offset)
+        self._ports.append(port)
+        return port
+
+    def output_ports(self) -> list[Port]:
+        return [p for p in self._ports if p.direction == OUTPUT]
+
+    def input_ports(self) -> list[Port]:
+        return [p for p in self._ports if p.direction == INPUT]
+
+    def remove_all_ports(self) -> None:
+        """Detach + delete all ports (used when bodies/modes rebuild)."""
+        for port in list(self._ports):
+            for wire in list(port.wires):
+                wire.detach()
+                if wire.scene() is not None:
+                    wire.scene().removeItem(wire)
+            port.setParentItem(None)
+            if port.scene() is not None:
+                port.scene().removeItem(port)
+        self._ports.clear()
 
     # ── header-only drag ──────────────────────────────────────────────────────
 
@@ -371,3 +420,17 @@ class BaseNode(QGraphicsItem):
 
     def _on_port_mode_switch(self, idx: int) -> None:
         """Called when the user selects a different port display mode."""
+
+    def on_connections_changed(self) -> None:
+        """Called when a wire is attached to or detached from any of this
+        node's ports. Subclasses override to refresh derived state (e.g. an
+        ArrayAssign body that displays the connected array's row count)."""
+
+    # ── wire sync on move ────────────────────────────────────────────────────
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
+            for port in self._ports:
+                for wire in port.wires:
+                    wire.update_geometry()
+        return super().itemChange(change, value)

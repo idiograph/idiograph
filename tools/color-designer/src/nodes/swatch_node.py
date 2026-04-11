@@ -160,11 +160,11 @@ class SwatchNode(BaseNode):
             "Color Swatch",
             pos,
             view_labels=_VIEWS,
-            output_port=True,
         )
         self.hex_value = hex_value
         self.label = label
         self._switch_view(0)
+        self.add_output_port("color")
 
     # ── data ──────────────────────────────────────────────────────────────────
 

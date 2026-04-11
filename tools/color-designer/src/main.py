@@ -10,6 +10,7 @@ from nodes.array_node import ArrayNode
 from nodes.schema_node import SchemaNode
 from nodes.assign_node import AssignNode
 from nodes.write_node import WriteNode
+from nodes.array_assign_node import ArrayAssignNode
 
 HERE = Path(__file__).parent
 TOKEN_FILE = HERE.parent / "tokens.seed.json"
@@ -102,6 +103,7 @@ class MainWindow(QMainWindow):
             TOKEN_FILE, "semantic.alert", "#f7c948", QPointF(260, 320),
         ))
         self._install_node(WriteNode(TOKEN_FILE, QPointF(960, 320)))
+        self._install_node(ArrayAssignNode(TOKEN_FILE, QPointF(520, 600)))
 
     def _add_node(self) -> None:
         self._node_counter += 1

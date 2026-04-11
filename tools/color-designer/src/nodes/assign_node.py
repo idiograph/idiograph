@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QPointF
 from PySide6.QtGui import QColor
 
-from nodes.base_node import BaseNode, NODE_WIDTH
+from nodes.base_node import BaseNode, NODE_WIDTH, HEADER_HEIGHT
 from token_store import TokenStore
 
 # ── layout ────────────────────────────────────────────────────────────────────
@@ -138,8 +138,6 @@ class AssignNode(BaseNode):
             "Assign",
             pos,
             view_labels=[],
-            output_port=True,
-            input_ports=2,  # color + role
         )
         self.token_path = token_path
         tokens = TokenStore(token_path).tokens()
@@ -148,6 +146,12 @@ class AssignNode(BaseNode):
         self.color = color
 
         self.setBodyWidget(_AssignBody(self), ASSIGN_BODY_H)
+        # Two inputs distributed vertically, one output centred.
+        upper = HEADER_HEIGHT + 14
+        lower = HEADER_HEIGHT + ASSIGN_BODY_H - 14
+        self.add_input_port("color", upper)
+        self.add_input_port("token_dict", lower)
+        self.add_output_port("assignment")
 
     def assignment(self) -> tuple[str, str]:
         """Return the (role, color) pair this node represents."""

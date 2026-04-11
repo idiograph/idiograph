@@ -9,15 +9,8 @@ from PySide6.QtCore import Qt, QPointF
 from nodes.base_node import BaseNode, NODE_WIDTH
 from token_store import TokenStore
 
-# ── modes ─────────────────────────────────────────────────────────────────────
-_PORT_MODES = ["All", "Conn", "Gang"]
-_MODE_ALL = 0
-_MODE_CONN = 1
-_MODE_GANG = 2
-
-# ── heights ───────────────────────────────────────────────────────────────────
-LIST_BODY_H = 220   # All / Conn — fixed height with scroll
-GANG_BODY_H = 48    # Ganged — single port summary
+# ── layout ────────────────────────────────────────────────────────────────────
+BODY_H = 220   # fixed scrollable role list
 
 # ── colours ───────────────────────────────────────────────────────────────────
 _BG_BODY = "#2e2e3a"
@@ -43,7 +36,7 @@ class _RoleRow(QWidget):
 
     H = 22
 
-    def __init__(self, role: str, hex_value: str, port_active: bool):
+    def __init__(self, role: str, hex_value: str):
         super().__init__()
         self.setFixedHeight(self.H)
         self.setStyleSheet(f"background-color: {_BG_ROWS};")
@@ -68,21 +61,21 @@ class _RoleRow(QWidget):
 
         dot = QLabel()
         dot.setFixedSize(8, 8)
-        dot_color = hex_value if port_active else "#3a3a4a"
-        dot_border = "#7eb8f7" if port_active else "#3a3a4a"
         dot.setStyleSheet(
-            f"background-color: {dot_color}; border-radius: 4px;"
-            f" border: 1px solid {dot_border};"
+            f"background-color: {hex_value}; border-radius: 4px;"
+            " border: 1px solid #7eb8f7;"
         )
         layout.addWidget(dot)
 
 
-# ── role list body (All / Connected) ──────────────────────────────────────────
+# ── role list body ────────────────────────────────────────────────────────────
 
 class _RoleListBody(QWidget):
-    def __init__(self, node: "SchemaNode", connected_only: bool):
+    """Scrollable list of every role in the loaded token file."""
+
+    def __init__(self, node: "SchemaNode"):
         super().__init__()
-        self.setFixedSize(NODE_WIDTH, LIST_BODY_H)
+        self.setFixedSize(NODE_WIDTH, BODY_H)
         self.setStyleSheet(f"background-color: {_BG_BODY};")
 
         outer = QVBoxLayout(self)
@@ -103,44 +96,12 @@ class _RoleListBody(QWidget):
         vbox.setSpacing(1)
         vbox.setAlignment(Qt.AlignTop)
 
-        # In Phase D nothing is wired, so Connected mode shows a placeholder.
-        # All mode shows every role with a live port dot.
-        if connected_only:
-            placeholder = QLabel("no connected ports")
-            placeholder.setAlignment(Qt.AlignCenter)
-            placeholder.setStyleSheet(
-                "color: #555568; font-family: monospace; font-size: 8pt;"
-                " padding: 20px;"
-            )
-            vbox.addWidget(placeholder)
-        else:
-            for role in node.roles:
-                hex_val = node.values.get(role, "#888899")
-                vbox.addWidget(_RoleRow(role, hex_val, port_active=True))
+        for role in node.roles:
+            hex_val = node.values.get(role, "#888899")
+            vbox.addWidget(_RoleRow(role, hex_val))
 
         scroll.setWidget(container)
         outer.addWidget(scroll)
-
-
-# ── ganged body (single output) ───────────────────────────────────────────────
-
-class _GangedBody(QWidget):
-    def __init__(self, node: "SchemaNode"):
-        super().__init__()
-        self.setFixedSize(NODE_WIDTH, GANG_BODY_H)
-        self.setStyleSheet(f"background-color: {_BG_BODY};")
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 8)
-        layout.setAlignment(Qt.AlignCenter)
-
-        n = len(node.roles)
-        lbl = QLabel(f"{n} role{'s' if n != 1 else ''}  →  full token dict")
-        lbl.setAlignment(Qt.AlignCenter)
-        lbl.setStyleSheet(
-            "color: #888899; font-family: monospace; font-size: 8pt;"
-        )
-        layout.addWidget(lbl)
 
 
 # ── node ──────────────────────────────────────────────────────────────────────
@@ -149,40 +110,32 @@ class SchemaNode(BaseNode):
     """
     Schema node — token role registry.
     Loads roles from a token JSON file (flat dot-notation).
-    No input ports. Outputs depend on the active port-display mode:
-      All  — one port per role (rendered inside the scrollable body)
-      Conn — only wired roles visible (empty in Phase D)
-      Gang — single output port emitting the full token dict
+
+    Currently exposes a single ganged output port of type token_dict.
+    Per-role individual output ports (and the All / Conn / Gang strip
+    that switches between them) are deferred until the scrollable role
+    list and the port system can be reconciled.
+
+    No input ports.
     """
 
     def __init__(self, token_path: Path, pos: QPointF = QPointF(0.0, 0.0)):
         super().__init__(
             "Schema",
             pos,
-            view_labels=[],                # no body view switching
-            port_mode_labels=_PORT_MODES,  # strip drives port display mode
-            output_port=False,             # toggled by Ganged mode
+            view_labels=[],          # no body view switching
+            port_mode_labels=[],     # no port-mode strip — single output for now
         )
         self.token_path = token_path
         tokens = TokenStore(token_path).tokens()
         self.roles: list[str] = list(tokens.keys())
         self.values: dict[str, str] = tokens
 
-        self._rebuild_body()
+        self.setBodyWidget(_RoleListBody(self), BODY_H)
+        self.add_output_port("token_dict")
 
-    # ── port-mode handler ─────────────────────────────────────────────────────
-
-    def _on_port_mode_switch(self, idx: int) -> None:
-        self._rebuild_body()
-
-    def _rebuild_body(self) -> None:
-        if self._port_mode == _MODE_GANG:
-            self._output_port = True
-            self.setBodyWidget(_GangedBody(self), GANG_BODY_H)
-        else:
-            self._output_port = False
-            connected_only = self._port_mode == _MODE_CONN
-            self.setBodyWidget(
-                _RoleListBody(self, connected_only=connected_only),
-                LIST_BODY_H,
-            )
+    @property
+    def field_count(self) -> int:
+        """Number of token roles currently loaded — consumed by Color Array
+        and Array Assign for cardinality alignment."""
+        return len(self.roles)
