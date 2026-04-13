@@ -27,7 +27,7 @@ This is a **read-only data inspection spike**. No pipeline code is being written
 ### Out of scope
 - Any code that lives under `src/idiograph/`. The spike is throwaway-shaped scratch work.
 - Pipeline node implementations (Nodes 0/0.5/1–8).
-- Caching, rate limiting beyond a simple `mailto=` param and a 100ms sleep between calls.
+- Caching, rate limiting beyond the `api_key=` param and a 150ms sleep between calls.
 - LLM calls of any kind, including Node 5.5.
 - arXiv API calls — OpenAlex only for this spike.
 - Forward traversal (Node 4). Backward only.
@@ -50,8 +50,8 @@ This is a **read-only data inspection spike**. No pipeline code is being written
 | Python | 3.13, managed by `uv` |
 | Linting | `ruff` clean before every commit |
 | HTTP client | `httpx` (sync is fine for this spike — it's a script, not pipeline code) |
-| Authentication | `OPENALEX_API_KEY` loaded from `.env` via `python-dotenv`; passed as `api_key=` query param on every call. All OpenAlex calls now require a free API key — register at openalex.org. The client halts with a clear error if the key is missing. |
-| Politeness | `mailto=` param on every OpenAlex call alongside `api_key=`; `time.sleep(0.150)` between calls |
+| Authentication | `OPENALEX_API_KEY` loaded from `.env` via `python-dotenv`; passed as `api_key=` query param on every call. All OpenAlex calls now require a free API key — register at openalex.org. The client halts with a clear error if the key is missing. The retired `mailto=` polite-pool param is not sent. |
+| Rate limiting | `time.sleep(0.150)` between calls; no other throttling |
 | File encoding | `encoding="utf-8"` on every file open, no exceptions |
 | Existing tests | The 44-test suite must pass before and after every change in this spike |
 | Working directory | `scripts/spikes/openalex_crispr/` |
@@ -65,7 +65,7 @@ This is a **read-only data inspection spike**. No pipeline code is being written
 ```
 scripts/spikes/openalex_crispr/
   __init__.py
-  openalex_client.py         ← thin httpx wrapper, mailto + sleep
+  openalex_client.py         ← thin httpx wrapper, api_key + sleep
   pass_1_resolve_seeds.py    ← Step 2: resolve both seeds, dump payloads
   pass_2_overlap.py          ← Step 4: pull references, compute intersection
   output/
@@ -128,7 +128,7 @@ These exist because Claude Code will be doing the implementation and may try to 
 | Build a `Node` subclass or wire into the executor | This is data inspection, not pipeline construction |
 | Add a cache layer | The spike runs end-to-end in well under a minute; no cache needed |
 | Use `requests` instead of `httpx` | Project convention is `httpx` |
-| Skip the `mailto=` param "because it's a script" | Politeness is not optional — OpenAlex throttles anonymous traffic |
+| Skip the `api_key=` param or hardcode a key | The key must come from `.env` via `python-dotenv`; no unauthenticated calls and no keys in source |
 | Pretty-print or filter the raw JSON dumps | Raw payload is the deliverable; downstream analysis depends on having it complete |
 | Decide a thin field "looks fine" without reporting | The findings document records what's there, not what's interpreted |
 | Substitute a different seed pair if Doudna or Zhang fails to resolve | Halt and surface the failure; substitution is a human decision |
