@@ -6,10 +6,10 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QPointF, QTimer
 
-from nodes.base_node import BaseNode, NODE_WIDTH
-from nodes.assign_node import AssignNode
-from nodes.array_assign_node import ArrayAssignNode
-from token_store import TokenStore
+from idiograph.apps.color_designer.nodes.base_node import BaseNode, NODE_WIDTH
+from idiograph.apps.color_designer.nodes.assign_node import AssignNode
+from idiograph.apps.color_designer.nodes.array_assign_node import ArrayAssignNode
+from idiograph.apps.color_designer.token_store import TokenStore
 
 # ── port modes ────────────────────────────────────────────────────────────────
 _PORT_MODES = ["All", "Conn", "Gang"]

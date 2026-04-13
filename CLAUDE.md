@@ -247,9 +247,13 @@ Must exit cleanly with "Round-trip passed" before proceeding.
 
 ### Current phase
 
-**Phase A — Canvas scaffold**
-QGraphicsScene/QGraphicsView with pan, zoom, draggable empty nodes.
-See SPEC.md for full phase breakdown.
+**Phase G — COMPLETE**
+**Verify first:** Schema Compact view collapse — may have residual height bug after
+port display mode strip removal. Run the app and switch Schema to Compact before
+starting any new work.
+
+**Phase H and beyond are deferred.** Next work is color design iteration using the
+tool as built.
 
 *Last updated: 2026-04-06*
 *Owner: Idiograph project — Ryan Smith*

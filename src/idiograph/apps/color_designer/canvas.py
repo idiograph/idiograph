@@ -28,8 +28,8 @@ class NodeGraphScene(QGraphicsScene):
     # ── wire drag protocol (called from Port mouse handlers) ──────────────────
 
     def start_wire_drag(self, source_port, scene_pos) -> None:
-        from nodes.wire import Wire
-        from nodes.port import OUTPUT
+        from idiograph.apps.color_designer.nodes.wire import Wire
+        from idiograph.apps.color_designer.nodes.port import OUTPUT
         if source_port.direction != OUTPUT:
             return
         wire = Wire(source_port)
@@ -43,7 +43,7 @@ class NodeGraphScene(QGraphicsScene):
         target = self._port_at(scene_pos)
         invalid = False
         if target is not None and target is not self._dragging_wire.source_port:
-            from nodes.port import is_compatible
+            from idiograph.apps.color_designer.nodes.port import is_compatible
             if not is_compatible(self._dragging_wire.source_port, target):
                 invalid = True
         self._dragging_wire.set_cursor_target(scene_pos, invalid=invalid)
@@ -55,7 +55,7 @@ class NodeGraphScene(QGraphicsScene):
         self._dragging_wire = None
 
         target = self._port_at(scene_pos)
-        from nodes.port import is_compatible
+        from idiograph.apps.color_designer.nodes.port import is_compatible
         if (
             target is not None
             and target is not wire.source_port
@@ -73,7 +73,7 @@ class NodeGraphScene(QGraphicsScene):
             self.removeItem(wire)
 
     def _port_at(self, scene_pos):
-        from nodes.port import Port
+        from idiograph.apps.color_designer.nodes.port import Port
         for item in self.items(scene_pos):
             if isinstance(item, Port):
                 return item
@@ -154,7 +154,7 @@ class NodeGraphView(QGraphicsView):
         super().keyPressEvent(event)
 
     def _delete_selected_wires(self) -> None:
-        from nodes.wire import Wire
+        from idiograph.apps.color_designer.nodes.wire import Wire
         scene = self.scene()
         if scene is None:
             return

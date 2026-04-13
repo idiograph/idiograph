@@ -84,3 +84,13 @@ async def discard(params: dict, inputs: dict) -> dict:
     paper_id = upstream.get("paper_id", "unknown")
     _log.info("Paper '%s' discarded — did not meet evaluation criteria.", paper_id)
     return {"discarded": True, "paper_id": paper_id}
+
+
+def register_arxiv_handlers() -> None:
+    """Explicit per-domain handler registration for the arXiv pipeline."""
+    from idiograph.core.executor import register_handler
+    register_handler("FetchAbstract", fetch_abstract)
+    register_handler("LLMCall",       llm_call)
+    register_handler("Evaluator",     evaluator)
+    register_handler("LLMSummarize",  llm_summarize)
+    register_handler("Discard",       discard)

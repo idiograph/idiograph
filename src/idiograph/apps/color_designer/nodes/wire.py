@@ -4,7 +4,7 @@ from PySide6.QtGui import (
     QPainter, QPen, QPainterPath, QPainterPathStroker, QColor,
 )
 
-from nodes.port import Port
+from idiograph.apps.color_designer.nodes.port import Port
 
 # Wire colours per SPEC: edge.default at rest, edge.selected when selected.
 # These match the corresponding token values for visual consistency.

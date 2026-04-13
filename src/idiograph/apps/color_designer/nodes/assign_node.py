@@ -7,8 +7,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QPointF
 from PySide6.QtGui import QColor
 
-from nodes.base_node import BaseNode, NODE_WIDTH, HEADER_HEIGHT
-from token_store import TokenStore
+from idiograph.apps.color_designer.nodes.base_node import BaseNode, NODE_WIDTH, HEADER_HEIGHT
+from idiograph.apps.color_designer.token_store import TokenStore
 
 # ── layout ────────────────────────────────────────────────────────────────────
 ASSIGN_BODY_H = 76  # margins + dropdown(26) + spacing(4) + color row(28) + bottom

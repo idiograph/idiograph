@@ -6,9 +6,9 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QPointF, QTimer
 
-from nodes.base_node import BaseNode, NODE_WIDTH, HEADER_HEIGHT
-from nodes.array_node import ArrayNode
-from token_store import TokenStore
+from idiograph.apps.color_designer.nodes.base_node import BaseNode, NODE_WIDTH, HEADER_HEIGHT
+from idiograph.apps.color_designer.nodes.array_node import ArrayNode
+from idiograph.apps.color_designer.token_store import TokenStore
 
 # ── layout ────────────────────────────────────────────────────────────────────
 ARRAY_ASSIGN_BODY_H = 220

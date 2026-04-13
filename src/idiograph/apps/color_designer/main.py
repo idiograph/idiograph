@@ -3,17 +3,17 @@ from pathlib import Path
 from PySide6.QtWidgets import QApplication, QMainWindow, QToolBar, QPushButton
 from PySide6.QtCore import QPointF
 
-from canvas import NodeGraphScene, NodeGraphView
-from nodes.base_node import BaseNode
-from nodes.swatch_node import SwatchNode
-from nodes.array_node import ArrayNode
-from nodes.schema_node import SchemaNode
-from nodes.assign_node import AssignNode
-from nodes.write_node import WriteNode
-from nodes.array_assign_node import ArrayAssignNode
+from idiograph.apps.color_designer.canvas import NodeGraphScene, NodeGraphView
+from idiograph.apps.color_designer.nodes.base_node import BaseNode
+from idiograph.apps.color_designer.nodes.swatch_node import SwatchNode
+from idiograph.apps.color_designer.nodes.array_node import ArrayNode
+from idiograph.apps.color_designer.nodes.schema_node import SchemaNode
+from idiograph.apps.color_designer.nodes.assign_node import AssignNode
+from idiograph.apps.color_designer.nodes.write_node import WriteNode
+from idiograph.apps.color_designer.nodes.array_assign_node import ArrayAssignNode
 
 HERE = Path(__file__).parent
-TOKEN_FILE = HERE.parent / "tokens.seed.json"
+TOKEN_FILE = HERE / "tokens.seed.json"
 
 
 class MainWindow(QMainWindow):

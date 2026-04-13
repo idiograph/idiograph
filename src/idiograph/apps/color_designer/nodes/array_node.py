@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QPointF
 from PySide6.QtGui import QColor
 
-from nodes.base_node import BaseNode, NODE_WIDTH
+from idiograph.apps.color_designer.nodes.base_node import BaseNode, NODE_WIDTH
 
 # ── view labels ───────────────────────────────────────────────────────────────
 _VIEWS = ["Cmp", "List", "Grid"]
@@ -243,7 +243,7 @@ class _ListBody(QWidget):
         if scene is None:
             return
         # Local import to avoid a circular module dependency at file load time.
-        from nodes.schema_node import SchemaNode
+        from idiograph.apps.color_designer.nodes.schema_node import SchemaNode
         schema = next(
             (item for item in scene.items() if isinstance(item, SchemaNode)),
             None,

@@ -92,8 +92,8 @@ def run(
         register_handler("LLMSummarize",  mock_llm_summarize)
         register_handler("Discard",       mock_discard)
     else:
-        from idiograph.domains.arxiv import register_all
-        register_all()
+        from idiograph.domains.arxiv.handlers import register_arxiv_handlers
+        register_arxiv_handlers()
 
     pipeline = ARXIV_PIPELINE.model_copy(deep=True)
     fetch_node = pipeline.get_node("fetch")
