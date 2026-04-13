@@ -1,3 +1,5 @@
+import uuid
+
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsProxyWidget, QGraphicsSceneMouseEvent
 from PySide6.QtCore import Qt, QRectF, QPointF
 from PySide6.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPainterPath
@@ -49,6 +51,7 @@ class BaseNode(QGraphicsItem):
         port_mode_labels: list[str] | None = None,
     ):
         super().__init__()
+        self.node_id: str = str(uuid.uuid4())
         self.node_type = node_type
         self.title = title
         self._view_labels: list[str] = view_labels or []

@@ -869,5 +869,30 @@ committed. README section present.
 
 ---
 
+### AMD-018 — Stable Node Identity for Color Designer Qt Nodes
+Affects: apps/color_designer — BaseNode and all subclasses
+Status: Accepted — Not Yet Implemented
+Decided: 2026-04-13
+Reason: BaseNode instances currently have no stable identity. Two SwatchNode instances
+with identical params are indistinguishable. build_graph() cannot construct a valid
+Idiograph Graph without a stable Node.id for each Qt node.
+
+Change: BaseNode.__init__ assigns self.node_id: str = str(uuid.uuid4()) at construction.
+This ID is the bridge between the Qt UI layer and the Idiograph graph model — it becomes
+Node.id when to_idiograph_node() is called on each Qt node.
+
+Constraints:
+- node_id is assigned once at construction and never reassigned
+- node_id is not displayed in the UI
+- node_id is not the same as the display title
+- node_id is session-stable but not persisted — nodes get new IDs on each launch
+- This is acceptable because color designer does not save or reload graph topology,
+  only the token file output
+
+Done when: BaseNode.__init__ assigns node_id, all subclasses inherit it, and the
+field is verified present on a constructed node instance in a test or manual check.
+
+---
+
 *Last updated: 2026-04-06*
 *Owner: Idiograph project*
