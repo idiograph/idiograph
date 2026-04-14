@@ -66,7 +66,7 @@ would average it away.
 
 **OpenAlex filter for forward traversal:**
 ```
-cited_by: <openalex_id>
+cites: <openalex_id>
 publication_year: <range>
 sort: cited_by_count:desc
 per-page: 20 (or 10 for early band)
