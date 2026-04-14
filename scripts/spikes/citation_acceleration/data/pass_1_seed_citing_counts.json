@@ -1,0 +1,142 @@
+[
+  {
+    "openalex_id": "W2045435533",
+    "title": "A Programmable Dual-RNA–Guided DNA Endonuclease in Adaptive Bacterial Immunity",
+    "year": 2012,
+    "cited_by_count": 16990,
+    "counts_by_year": [
+      {
+        "year": 2026,
+        "cited_by_count": 356
+      },
+      {
+        "year": 2025,
+        "cited_by_count": 1556
+      },
+      {
+        "year": 2024,
+        "cited_by_count": 1696
+      },
+      {
+        "year": 2023,
+        "cited_by_count": 1672
+      },
+      {
+        "year": 2022,
+        "cited_by_count": 1870
+      },
+      {
+        "year": 2021,
+        "cited_by_count": 1876
+      },
+      {
+        "year": 2020,
+        "cited_by_count": 1653
+      },
+      {
+        "year": 2019,
+        "cited_by_count": 1370
+      },
+      {
+        "year": 2018,
+        "cited_by_count": 1298
+      },
+      {
+        "year": 2017,
+        "cited_by_count": 1167
+      },
+      {
+        "year": 2016,
+        "cited_by_count": 1037
+      },
+      {
+        "year": 2015,
+        "cited_by_count": 683
+      },
+      {
+        "year": 2014,
+        "cited_by_count": 475
+      },
+      {
+        "year": 2013,
+        "cited_by_count": 229
+      },
+      {
+        "year": 2012,
+        "cited_by_count": 33
+      }
+    ],
+    "counts_by_year_len": 15,
+    "label": "Doudna/Charpentier 2012"
+  },
+  {
+    "openalex_id": "W2064815984",
+    "title": "Multiplex Genome Engineering Using CRISPR/Cas Systems",
+    "year": 2013,
+    "cited_by_count": 15568,
+    "counts_by_year": [
+      {
+        "year": 2026,
+        "cited_by_count": 205
+      },
+      {
+        "year": 2025,
+        "cited_by_count": 959
+      },
+      {
+        "year": 2024,
+        "cited_by_count": 1147
+      },
+      {
+        "year": 2023,
+        "cited_by_count": 1206
+      },
+      {
+        "year": 2022,
+        "cited_by_count": 1399
+      },
+      {
+        "year": 2021,
+        "cited_by_count": 1505
+      },
+      {
+        "year": 2020,
+        "cited_by_count": 1548
+      },
+      {
+        "year": 2019,
+        "cited_by_count": 1428
+      },
+      {
+        "year": 2018,
+        "cited_by_count": 1510
+      },
+      {
+        "year": 2017,
+        "cited_by_count": 1407
+      },
+      {
+        "year": 2016,
+        "cited_by_count": 1282
+      },
+      {
+        "year": 2015,
+        "cited_by_count": 899
+      },
+      {
+        "year": 2014,
+        "cited_by_count": 742
+      },
+      {
+        "year": 2013,
+        "cited_by_count": 304
+      },
+      {
+        "year": 2012,
+        "cited_by_count": 5
+      }
+    ],
+    "counts_by_year_len": 15,
+    "label": "Zhang 2013"
+  }
+]
