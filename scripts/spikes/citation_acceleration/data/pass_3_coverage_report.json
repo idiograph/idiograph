@@ -1,0 +1,4745 @@
+{
+  "statistics": {
+    "overall": {
+      "total_papers": 100,
+      "counts_by_year_ge_3": 100,
+      "pct_counts_by_year_ge_3": 100.0,
+      "counts_by_year_ge_1": 100,
+      "pct_counts_by_year_ge_1": 100.0,
+      "counts_by_year_eq_0": 0,
+      "pct_counts_by_year_eq_0": 0.0,
+      "median_counts_by_year_len": 7.0,
+      "min_counts_by_year_len": 3,
+      "max_counts_by_year_len": 15,
+      "acceleration_viable_count": 100,
+      "pct_acceleration_viable": 100.0
+    },
+    "by_band": {
+      "recent": {
+        "total_papers": 40,
+        "counts_by_year_ge_3": 40,
+        "pct_counts_by_year_ge_3": 100.0,
+        "counts_by_year_ge_1": 40,
+        "pct_counts_by_year_ge_1": 100.0,
+        "counts_by_year_eq_0": 0,
+        "pct_counts_by_year_eq_0": 0.0,
+        "median_counts_by_year_len": 5.0,
+        "min_counts_by_year_len": 3,
+        "max_counts_by_year_len": 8,
+        "acceleration_viable_count": 40,
+        "pct_acceleration_viable": 100.0
+      },
+      "mid": {
+        "total_papers": 40,
+        "counts_by_year_ge_3": 40,
+        "pct_counts_by_year_ge_3": 100.0,
+        "counts_by_year_ge_1": 40,
+        "pct_counts_by_year_ge_1": 100.0,
+        "counts_by_year_eq_0": 0,
+        "pct_counts_by_year_eq_0": 0.0,
+        "median_counts_by_year_len": 9.0,
+        "min_counts_by_year_len": 7,
+        "max_counts_by_year_len": 11,
+        "acceleration_viable_count": 40,
+        "pct_acceleration_viable": 100.0
+      },
+      "early": {
+        "total_papers": 20,
+        "counts_by_year_ge_3": 20,
+        "pct_counts_by_year_ge_3": 100.0,
+        "counts_by_year_ge_1": 20,
+        "pct_counts_by_year_ge_1": 100.0,
+        "counts_by_year_eq_0": 0,
+        "pct_counts_by_year_eq_0": 0.0,
+        "median_counts_by_year_len": 14.0,
+        "min_counts_by_year_len": 12,
+        "max_counts_by_year_len": 15,
+        "acceleration_viable_count": 20,
+        "pct_acceleration_viable": 100.0
+      }
+    },
+    "by_seed": {
+      "W2045435533": {
+        "total_papers": 50,
+        "counts_by_year_ge_3": 50,
+        "pct_counts_by_year_ge_3": 100.0,
+        "counts_by_year_ge_1": 50,
+        "pct_counts_by_year_ge_1": 100.0,
+        "counts_by_year_eq_0": 0,
+        "pct_counts_by_year_eq_0": 0.0,
+        "median_counts_by_year_len": 7.5,
+        "min_counts_by_year_len": 3,
+        "max_counts_by_year_len": 15,
+        "acceleration_viable_count": 50,
+        "pct_acceleration_viable": 100.0
+      },
+      "W2064815984": {
+        "total_papers": 50,
+        "counts_by_year_ge_3": 50,
+        "pct_counts_by_year_ge_3": 100.0,
+        "counts_by_year_ge_1": 50,
+        "pct_counts_by_year_ge_1": 100.0,
+        "counts_by_year_eq_0": 0,
+        "pct_counts_by_year_eq_0": 0.0,
+        "median_counts_by_year_len": 7.0,
+        "min_counts_by_year_len": 3,
+        "max_counts_by_year_len": 15,
+        "acceleration_viable_count": 50,
+        "pct_acceleration_viable": 100.0
+      }
+    }
+  },
+  "verdict": "GREEN",
+  "verdict_rationale": "100.0% of sampled citing papers have >=3 counts_by_year entries (threshold: 50%). All bands exceed the 30% per-band floor. Full alpha/beta ranking is viable.",
+  "fallback_parameters": null,
+  "papers": [
+    {
+      "openalex_id": "W4327550249",
+      "title": "Evolutionary-scale prediction of atomic-level protein structure with a language model",
+      "year": 2023,
+      "citation_count": 4446,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 571
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 1937
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 1369
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 552
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 12
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 2
+        },
+        {
+          "year": 2013,
+          "cited_by_count": 1
+        },
+        {
+          "year": 2012,
+          "cited_by_count": 2
+        }
+      ],
+      "counts_by_year_len": 8,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "recent",
+      "velocity": 123.5,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4308766741",
+      "title": "Targeting HER2-positive breast cancer: advances and future directions",
+      "year": 2022,
+      "citation_count": 1014,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 94
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 418
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 389
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 108
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 4
+        }
+      ],
+      "counts_by_year_len": 5,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "recent",
+      "velocity": 21.125,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4317437864",
+      "title": "CRISPR technology: A decade of genome editing is only the beginning",
+      "year": 2023,
+      "citation_count": 969,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 87
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 352
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 343
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 186
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 1
+        }
+      ],
+      "counts_by_year_len": 5,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "recent",
+      "velocity": 26.916666666666668,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4225129690",
+      "title": "DNA methylation: a historical perspective",
+      "year": 2022,
+      "citation_count": 825,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 82
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 313
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 280
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 132
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 17
+        }
+      ],
+      "counts_by_year_len": 5,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "recent",
+      "velocity": 17.1875,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4316466738",
+      "title": "CRISPR/Cas9 therapeutics: progress and prospects",
+      "year": 2023,
+      "citation_count": 629,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 62
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 304
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 210
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 53
+        }
+      ],
+      "counts_by_year_len": 4,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "recent",
+      "velocity": 17.47222222222222,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4223968391",
+      "title": "Nanodelivery of nucleic acids",
+      "year": 2022,
+      "citation_count": 612,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 56
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 229
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 200
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 105
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 22
+        }
+      ],
+      "counts_by_year_len": 5,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "recent",
+      "velocity": 12.75,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4317436849",
+      "title": "Passive, active and endogenous organ-targeted lipid and polymer nanoparticles for delivery of genetic drugs",
+      "year": 2023,
+      "citation_count": 583,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 76
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 257
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 186
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 64
+        }
+      ],
+      "counts_by_year_len": 4,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "recent",
+      "velocity": 16.194444444444443,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4221117452",
+      "title": "OpenCell: Endogenous tagging for the cartography of human cellular organization",
+      "year": 2022,
+      "citation_count": 581,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 45
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 175
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 172
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 131
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 52
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 5
+        }
+      ],
+      "counts_by_year_len": 6,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "recent",
+      "velocity": 12.104166666666666,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4211123163",
+      "title": "High-content CRISPR screening",
+      "year": 2022,
+      "citation_count": 560,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 48
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 176
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 190
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 108
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 38
+        }
+      ],
+      "counts_by_year_len": 5,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "recent",
+      "velocity": 11.666666666666666,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4286500588",
+      "title": "Evolutionary-scale prediction of atomic level protein structure with a language model",
+      "year": 2022,
+      "citation_count": 528,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 22
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 136
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 142
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 184
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 40
+        },
+        {
+          "year": 2012,
+          "cited_by_count": 1
+        }
+      ],
+      "counts_by_year_len": 6,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "recent",
+      "velocity": 11.0,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4308770459",
+      "title": "Prime editing for precise and highly versatile genome manipulation",
+      "year": 2022,
+      "citation_count": 523,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 44
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 204
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 168
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 105
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 1
+        }
+      ],
+      "counts_by_year_len": 5,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "recent",
+      "velocity": 10.895833333333334,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4323666400",
+      "title": "Off-target effects in CRISPR/Cas9 gene editing",
+      "year": 2023,
+      "citation_count": 502,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 68
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 265
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 140
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 29
+        }
+      ],
+      "counts_by_year_len": 4,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "recent",
+      "velocity": 13.944444444444445,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4283836459",
+      "title": "Therapeutic in vivo delivery of gene editing agents",
+      "year": 2022,
+      "citation_count": 449,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 36
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 166
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 132
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 98
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 17
+        }
+      ],
+      "counts_by_year_len": 5,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "recent",
+      "velocity": 9.354166666666666,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4392303996",
+      "title": "Past, present, and future of CRISPR genome editing technologies",
+      "year": 2024,
+      "citation_count": 447,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 91
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 271
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 85
+        }
+      ],
+      "counts_by_year_len": 3,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "recent",
+      "velocity": 18.625,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4213070361",
+      "title": "Current applications and future perspective of CRISPR/Cas9 gene editing in cancer",
+      "year": 2022,
+      "citation_count": 427,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 25
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 176
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 133
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 81
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 12
+        }
+      ],
+      "counts_by_year_len": 5,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "recent",
+      "velocity": 8.895833333333334,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4380568974",
+      "title": "mRNA-based cancer therapeutics",
+      "year": 2023,
+      "citation_count": 424,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 51
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 194
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 143
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 36
+        }
+      ],
+      "counts_by_year_len": 4,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "recent",
+      "velocity": 11.777777777777779,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4281750571",
+      "title": "Engineering the next generation of cell-based therapeutics",
+      "year": 2022,
+      "citation_count": 392,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 34
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 140
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 129
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 77
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 12
+        }
+      ],
+      "counts_by_year_len": 5,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "recent",
+      "velocity": 8.166666666666666,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4296774058",
+      "title": "Current understanding of osteoarthritis pathogenesis and relevant new approaches",
+      "year": 2022,
+      "citation_count": 375,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 45
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 141
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 120
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 61
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 8
+        }
+      ],
+      "counts_by_year_len": 5,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "recent",
+      "velocity": 7.8125,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4214613209",
+      "title": "A guide for the diagnosis of rare and undiagnosed disease: beyond the exome",
+      "year": 2022,
+      "citation_count": 363,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 16
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 104
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 130
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 94
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 19
+        }
+      ],
+      "counts_by_year_len": 5,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "recent",
+      "velocity": 7.5625,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4404349982",
+      "title": "Sequence modeling and design from molecular to genome scale with Evo",
+      "year": 2024,
+      "citation_count": 345,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 71
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 241
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 33
+        }
+      ],
+      "counts_by_year_len": 3,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "recent",
+      "velocity": 14.375,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2981137429",
+      "title": "Search-and-replace genome editing without double-strand breaks or donor DNA",
+      "year": 2019,
+      "citation_count": 4479,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 170
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 801
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 780
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 733
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 731
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 666
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 553
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 41
+        },
+        {
+          "year": 2014,
+          "cited_by_count": 1
+        }
+      ],
+      "counts_by_year_len": 9,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "mid",
+      "velocity": 53.32142857142857,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2787024379",
+      "title": "CRISPR-Cas12a target binding unleashes indiscriminate single-stranded DNase activity",
+      "year": 2018,
+      "citation_count": 4206,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 239
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 833
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 790
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 682
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 654
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 487
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 301
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 142
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 74
+        }
+      ],
+      "counts_by_year_len": 9,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "mid",
+      "velocity": 43.8125,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W3035764705",
+      "title": "Genome editing with CRISPR–Cas nucleases, base editors, transposases and prime editors",
+      "year": 2020,
+      "citation_count": 2229,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 77
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 324
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 453
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 459
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 435
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 362
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 119
+        }
+      ],
+      "counts_by_year_len": 7,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "mid",
+      "velocity": 30.958333333333332,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W3015140168",
+      "title": "Selective organ targeting (SORT) nanoparticles for tissue-specific mRNA delivery and CRISPR–Cas gene editing",
+      "year": 2020,
+      "citation_count": 2067,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 154
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 541
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 512
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 368
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 246
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 177
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 67
+        }
+      ],
+      "counts_by_year_len": 7,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "mid",
+      "velocity": 28.708333333333332,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2554763217",
+      "title": "CRISPR–Cas9 Structures and Mechanisms",
+      "year": 2017,
+      "citation_count": 2018,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 57
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 274
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 314
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 254
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 330
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 284
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 234
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 151
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 84
+        },
+        {
+          "year": 2017,
+          "cited_by_count": 33
+        }
+      ],
+      "counts_by_year_len": 10,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "mid",
+      "velocity": 18.685185185185187,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W3048788919",
+      "title": "Advances in oligonucleotide drug delivery",
+      "year": 2020,
+      "citation_count": 1907,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 82
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 365
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 420
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 363
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 365
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 289
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 23
+        }
+      ],
+      "counts_by_year_len": 7,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "mid",
+      "velocity": 26.48611111111111,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2998881619",
+      "title": "Applications of genome editing technology in the targeted therapy of human diseases: mechanisms, advances and prospects",
+      "year": 2020,
+      "citation_count": 1676,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 32
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 257
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 317
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 324
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 325
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 333
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 87
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 1
+        }
+      ],
+      "counts_by_year_len": 8,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "mid",
+      "velocity": 23.27777777777778,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2897295193",
+      "title": "Base editing: precision chemistry on the genome and transcriptome of living cells",
+      "year": 2018,
+      "citation_count": 1661,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 54
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 216
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 233
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 225
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 261
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 258
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 289
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 117
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 7
+        }
+      ],
+      "counts_by_year_len": 9,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "mid",
+      "velocity": 17.302083333333332,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2803581084",
+      "title": "The CRISPR tool kit for genome editing and beyond",
+      "year": 2018,
+      "citation_count": 1636,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 30
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 154
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 206
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 229
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 268
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 287
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 254
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 165
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 40
+        }
+      ],
+      "counts_by_year_len": 9,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "mid",
+      "velocity": 17.041666666666668,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2793309516",
+      "title": "Evolved Cas9 variants with broad PAM compatibility and high DNA specificity",
+      "year": 2018,
+      "citation_count": 1589,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 23
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 133
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 168
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 180
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 221
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 214
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 295
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 236
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 119
+        }
+      ],
+      "counts_by_year_len": 9,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "mid",
+      "velocity": 16.552083333333332,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W3177445623",
+      "title": "CRISPR-Cas9 In Vivo Gene Editing for Transthyretin Amyloidosis",
+      "year": 2021,
+      "citation_count": 1574,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 106
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 322
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 373
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 343
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 334
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 89
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 3
+        }
+      ],
+      "counts_by_year_len": 7,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "mid",
+      "velocity": 26.233333333333334,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2918418208",
+      "title": "CRISPR/Cas Genome Editing and Precision Plant Breeding in Agriculture",
+      "year": 2019,
+      "citation_count": 1485,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 43
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 202
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 235
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 264
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 258
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 241
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 199
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 38
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 1
+        },
+        {
+          "year": 2017,
+          "cited_by_count": 1
+        },
+        {
+          "year": 2014,
+          "cited_by_count": 1
+        }
+      ],
+      "counts_by_year_len": 11,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "mid",
+      "velocity": 17.678571428571427,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2947777875",
+      "title": "The next generation of CRISPR–Cas technologies and applications",
+      "year": 2019,
+      "citation_count": 1464,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 43
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 192
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 225
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 249
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 268
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 243
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 209
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 33
+        }
+      ],
+      "counts_by_year_len": 8,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "mid",
+      "velocity": 17.428571428571427,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2888908334",
+      "title": "CRISPR-Cas guides the future of genetic engineering",
+      "year": 2018,
+      "citation_count": 1421,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 34
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 160
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 179
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 187
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 220
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 235
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 219
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 162
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 23
+        }
+      ],
+      "counts_by_year_len": 9,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "mid",
+      "velocity": 14.802083333333334,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2623277795",
+      "title": "Diversity, classification and evolution of CRISPR-Cas systems",
+      "year": 2017,
+      "citation_count": 1412,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 18
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 141
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 167
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 145
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 193
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 190
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 178
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 204
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 136
+        },
+        {
+          "year": 2017,
+          "cited_by_count": 38
+        },
+        {
+          "year": 2013,
+          "cited_by_count": 1
+        }
+      ],
+      "counts_by_year_len": 11,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "mid",
+      "velocity": 13.074074074074074,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W3004461655",
+      "title": "CRISPR-engineered T cells in patients with refractory cancer",
+      "year": 2020,
+      "citation_count": 1408,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 53
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 205
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 217
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 216
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 261
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 275
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 175
+        }
+      ],
+      "counts_by_year_len": 7,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "mid",
+      "velocity": 19.555555555555557,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2782917400",
+      "title": "Gene therapy comes of age",
+      "year": 2018,
+      "citation_count": 1326,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 30
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 164
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 187
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 164
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 169
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 193
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 174
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 154
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 89
+        }
+      ],
+      "counts_by_year_len": 9,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "mid",
+      "velocity": 13.8125,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2601885162",
+      "title": "Genome-scale CRISPR-Cas9 knockout and transcriptional activation screening",
+      "year": 2017,
+      "citation_count": 1312,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 37
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 161
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 230
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 208
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 192
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 167
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 138
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 93
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 64
+        },
+        {
+          "year": 2017,
+          "cited_by_count": 21
+        }
+      ],
+      "counts_by_year_len": 10,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "mid",
+      "velocity": 12.148148148148149,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W3013504322",
+      "title": "Unconstrained genome targeting with near-PAMless engineered CRISPR-Cas9 variants",
+      "year": 2020,
+      "citation_count": 1229,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 47
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 213
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 212
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 234
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 220
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 202
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 101
+        }
+      ],
+      "counts_by_year_len": 7,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "mid",
+      "velocity": 17.069444444444443,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2726053863",
+      "title": "Enhanced proofreading governs CRISPR–Cas9 targeting accuracy",
+      "year": 2017,
+      "citation_count": 1204,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 20
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 130
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 105
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 106
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 165
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 164
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 204
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 148
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 135
+        },
+        {
+          "year": 2017,
+          "cited_by_count": 25
+        }
+      ],
+      "counts_by_year_len": 10,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "mid",
+      "velocity": 11.148148148148149,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2064815984",
+      "title": "Multiplex Genome Engineering Using CRISPR/Cas Systems",
+      "year": 2013,
+      "citation_count": 15568,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 205
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 959
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 1147
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 1206
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 1399
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 1505
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 1548
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 1428
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 1510
+        },
+        {
+          "year": 2017,
+          "cited_by_count": 1407
+        },
+        {
+          "year": 2016,
+          "cited_by_count": 1282
+        },
+        {
+          "year": 2015,
+          "cited_by_count": 899
+        },
+        {
+          "year": 2014,
+          "cited_by_count": 742
+        },
+        {
+          "year": 2013,
+          "cited_by_count": 304
+        },
+        {
+          "year": 2012,
+          "cited_by_count": 5
+        }
+      ],
+      "counts_by_year_len": 15,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "early",
+      "velocity": 99.7948717948718,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W1977709885",
+      "title": "Genome engineering using the CRISPR-Cas9 system",
+      "year": 2013,
+      "citation_count": 11595,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 204
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 1028
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 1197
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 1167
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 1254
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 1350
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 1360
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 1193
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 1017
+        },
+        {
+          "year": 2017,
+          "cited_by_count": 820
+        },
+        {
+          "year": 2016,
+          "cited_by_count": 569
+        },
+        {
+          "year": 2015,
+          "cited_by_count": 290
+        },
+        {
+          "year": 2014,
+          "cited_by_count": 139
+        },
+        {
+          "year": 2013,
+          "cited_by_count": 1
+        }
+      ],
+      "counts_by_year_len": 14,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "early",
+      "velocity": 74.32692307692308,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2003171404",
+      "title": "RNA-Guided Human Genome Engineering via Cas9",
+      "year": 2013,
+      "citation_count": 9310,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 102
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 424
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 551
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 606
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 768
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 823
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 851
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 820
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 875
+        },
+        {
+          "year": 2017,
+          "cited_by_count": 884
+        },
+        {
+          "year": 2016,
+          "cited_by_count": 897
+        },
+        {
+          "year": 2015,
+          "cited_by_count": 705
+        },
+        {
+          "year": 2014,
+          "cited_by_count": 688
+        },
+        {
+          "year": 2013,
+          "cited_by_count": 306
+        },
+        {
+          "year": 2012,
+          "cited_by_count": 2
+        }
+      ],
+      "counts_by_year_len": 15,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "early",
+      "velocity": 59.67948717948718,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2050480410",
+      "title": "The new frontier of genome engineering with CRISPR-Cas9",
+      "year": 2014,
+      "citation_count": 6797,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 170
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 720
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 687
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 592
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 703
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 714
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 663
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 594
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 581
+        },
+        {
+          "year": 2017,
+          "cited_by_count": 556
+        },
+        {
+          "year": 2016,
+          "cited_by_count": 478
+        },
+        {
+          "year": 2015,
+          "cited_by_count": 317
+        },
+        {
+          "year": 2014,
+          "cited_by_count": 4
+        },
+        {
+          "year": 2013,
+          "cited_by_count": 4
+        },
+        {
+          "year": 2012,
+          "cited_by_count": 1
+        }
+      ],
+      "counts_by_year_len": 15,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "early",
+      "velocity": 47.201388888888886,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2096261947",
+      "title": "Development and Applications of CRISPR-Cas9 for Genome Engineering",
+      "year": 2014,
+      "citation_count": 5806,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 96
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 376
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 423
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 454
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 513
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 558
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 625
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 560
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 580
+        },
+        {
+          "year": 2017,
+          "cited_by_count": 518
+        },
+        {
+          "year": 2016,
+          "cited_by_count": 546
+        },
+        {
+          "year": 2015,
+          "cited_by_count": 443
+        },
+        {
+          "year": 2014,
+          "cited_by_count": 104
+        },
+        {
+          "year": 2013,
+          "cited_by_count": 2
+        }
+      ],
+      "counts_by_year_len": 14,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "early",
+      "velocity": 40.31944444444444,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W1973260880",
+      "title": "Genome-Scale CRISPR-Cas9 Knockout Screening in Human Cells",
+      "year": 2013,
+      "citation_count": 5456,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 96
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 397
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 523
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 502
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 498
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 556
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 577
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 516
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 465
+        },
+        {
+          "year": 2017,
+          "cited_by_count": 453
+        },
+        {
+          "year": 2016,
+          "cited_by_count": 389
+        },
+        {
+          "year": 2015,
+          "cited_by_count": 267
+        },
+        {
+          "year": 2014,
+          "cited_by_count": 204
+        },
+        {
+          "year": 2013,
+          "cited_by_count": 5
+        },
+        {
+          "year": 2012,
+          "cited_by_count": 1
+        }
+      ],
+      "counts_by_year_len": 15,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "early",
+      "velocity": 34.97435897435897,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2336828812",
+      "title": "Programmable editing of a target base in genomic DNA without double-stranded DNA cleavage",
+      "year": 2016,
+      "citation_count": 5296,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 145
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 682
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 725
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 778
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 713
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 658
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 567
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 418
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 355
+        },
+        {
+          "year": 2017,
+          "cited_by_count": 184
+        },
+        {
+          "year": 2016,
+          "cited_by_count": 65
+        },
+        {
+          "year": 2012,
+          "cited_by_count": 1
+        }
+      ],
+      "counts_by_year_len": 12,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "early",
+      "velocity": 44.13333333333333,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2160051211",
+      "title": "Repurposing CRISPR as an RNA-Guided Platform for Sequence-Specific Control of Gene Expression",
+      "year": 2013,
+      "citation_count": 5092,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 89
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 391
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 465
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 437
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 526
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 496
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 547
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 450
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 447
+        },
+        {
+          "year": 2017,
+          "cited_by_count": 397
+        },
+        {
+          "year": 2016,
+          "cited_by_count": 321
+        },
+        {
+          "year": 2015,
+          "cited_by_count": 236
+        },
+        {
+          "year": 2014,
+          "cited_by_count": 198
+        },
+        {
+          "year": 2013,
+          "cited_by_count": 86
+        }
+      ],
+      "counts_by_year_len": 14,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "early",
+      "velocity": 32.64102564102564,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2252568502",
+      "title": "Optimized sgRNA design to maximize activity and minimize off-target effects of CRISPR-Cas9",
+      "year": 2016,
+      "citation_count": 4875,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 166
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 703
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 688
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 680
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 609
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 569
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 535
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 368
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 287
+        },
+        {
+          "year": 2017,
+          "cited_by_count": 183
+        },
+        {
+          "year": 2016,
+          "cited_by_count": 82
+        },
+        {
+          "year": 2015,
+          "cited_by_count": 1
+        }
+      ],
+      "counts_by_year_len": 12,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "early",
+      "velocity": 40.625,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2036176224",
+      "title": "DNA targeting specificity of RNA-guided Cas9 nucleases",
+      "year": 2013,
+      "citation_count": 4840,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 72
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 316
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 334
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 361
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 404
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 484
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 442
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 445
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 478
+        },
+        {
+          "year": 2017,
+          "cited_by_count": 452
+        },
+        {
+          "year": 2016,
+          "cited_by_count": 411
+        },
+        {
+          "year": 2015,
+          "cited_by_count": 303
+        },
+        {
+          "year": 2014,
+          "cited_by_count": 278
+        },
+        {
+          "year": 2013,
+          "cited_by_count": 52
+        }
+      ],
+      "counts_by_year_len": 14,
+      "has_min_3_points": true,
+      "seed_id": "W2045435533",
+      "band": "early",
+      "velocity": 31.025641025641026,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4317437864",
+      "title": "CRISPR technology: A decade of genome editing is only the beginning",
+      "year": 2023,
+      "citation_count": 969,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 87
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 352
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 343
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 186
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 1
+        }
+      ],
+      "counts_by_year_len": 5,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "recent",
+      "velocity": 26.916666666666668,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4316466738",
+      "title": "CRISPR/Cas9 therapeutics: progress and prospects",
+      "year": 2023,
+      "citation_count": 629,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 62
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 304
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 210
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 53
+        }
+      ],
+      "counts_by_year_len": 4,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "recent",
+      "velocity": 17.47222222222222,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4323666400",
+      "title": "Off-target effects in CRISPR/Cas9 gene editing",
+      "year": 2023,
+      "citation_count": 502,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 68
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 265
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 140
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 29
+        }
+      ],
+      "counts_by_year_len": 4,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "recent",
+      "velocity": 13.944444444444445,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4400174569",
+      "title": "Harnessing the potential of hydrogels for advanced therapeutic applications: current achievements and future directions",
+      "year": 2024,
+      "citation_count": 455,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 121
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 310
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 24
+        }
+      ],
+      "counts_by_year_len": 3,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "recent",
+      "velocity": 18.958333333333332,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4392303996",
+      "title": "Past, present, and future of CRISPR genome editing technologies",
+      "year": 2024,
+      "citation_count": 447,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 91
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 271
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 85
+        }
+      ],
+      "counts_by_year_len": 3,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "recent",
+      "velocity": 18.625,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4213070361",
+      "title": "Current applications and future perspective of CRISPR/Cas9 gene editing in cancer",
+      "year": 2022,
+      "citation_count": 427,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 25
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 176
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 133
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 81
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 12
+        }
+      ],
+      "counts_by_year_len": 5,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "recent",
+      "velocity": 8.895833333333334,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4310058387",
+      "title": "Drag-and-drop genome insertion of large sequences without double-strand DNA cleavage using CRISPR-directed integrases",
+      "year": 2022,
+      "citation_count": 408,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 26
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 133
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 141
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 96
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 12
+        }
+      ],
+      "counts_by_year_len": 5,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "recent",
+      "velocity": 8.5,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4213164504",
+      "title": "CRISPR in cancer biology and therapy",
+      "year": 2022,
+      "citation_count": 404,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 24
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 108
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 121
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 115
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 36
+        }
+      ],
+      "counts_by_year_len": 5,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "recent",
+      "velocity": 8.416666666666666,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4281750571",
+      "title": "Engineering the next generation of cell-based therapeutics",
+      "year": 2022,
+      "citation_count": 392,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 34
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 140
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 129
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 77
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 12
+        }
+      ],
+      "counts_by_year_len": 5,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "recent",
+      "velocity": 8.166666666666666,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4296774058",
+      "title": "Current understanding of osteoarthritis pathogenesis and relevant new approaches",
+      "year": 2022,
+      "citation_count": 375,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 45
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 141
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 120
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 61
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 8
+        }
+      ],
+      "counts_by_year_len": 5,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "recent",
+      "velocity": 7.8125,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4307301192",
+      "title": "Invasiveness, biology, ecology, and management of the fall armyworm, Spodoptera frugiperda",
+      "year": 2022,
+      "citation_count": 345,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 35
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 112
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 109
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 82
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 7
+        }
+      ],
+      "counts_by_year_len": 5,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "recent",
+      "velocity": 7.1875,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4281658223",
+      "title": "Epigenetic regulation of T cell exhaustion",
+      "year": 2022,
+      "citation_count": 298,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 18
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 97
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 100
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 71
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 12
+        }
+      ],
+      "counts_by_year_len": 5,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "recent",
+      "velocity": 6.208333333333333,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4282041953",
+      "title": "Emerging Therapies for Hepatocellular Carcinoma (HCC)",
+      "year": 2022,
+      "citation_count": 293,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 18
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 76
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 112
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 70
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 17
+        }
+      ],
+      "counts_by_year_len": 5,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "recent",
+      "velocity": 6.104166666666667,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4297102731",
+      "title": "A Review on the Mechanism and Applications of CRISPR/Cas9/Cas12/Cas13/Cas14 Proteins Utilized for Genome Engineering",
+      "year": 2022,
+      "citation_count": 278,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 29
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 127
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 91
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 31
+        }
+      ],
+      "counts_by_year_len": 4,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "recent",
+      "velocity": 5.791666666666667,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4214881544",
+      "title": "Structural basis for mismatch surveillance by CRISPR–Cas9",
+      "year": 2022,
+      "citation_count": 270,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 20
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 68
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 68
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 62
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 50
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 2
+        }
+      ],
+      "counts_by_year_len": 6,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "recent",
+      "velocity": 5.625,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4317749977",
+      "title": "DNA synthesis technologies to close the gene writing gap",
+      "year": 2023,
+      "citation_count": 246,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 18
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 107
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 94
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 27
+        }
+      ],
+      "counts_by_year_len": 4,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "recent",
+      "velocity": 6.833333333333333,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4387541325",
+      "title": "Design and testing of a humanized porcine donor for xenotransplantation",
+      "year": 2023,
+      "citation_count": 246,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 33
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 130
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 75
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 8
+        }
+      ],
+      "counts_by_year_len": 4,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "recent",
+      "velocity": 6.833333333333333,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4403810280",
+      "title": "The present and future of the Cancer Dependency Map",
+      "year": 2024,
+      "citation_count": 242,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 104
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 133
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 4
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 1
+        }
+      ],
+      "counts_by_year_len": 4,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "recent",
+      "velocity": 10.083333333333334,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4280596283",
+      "title": "Enhancing CRISPR/Cas gene editing through modulating cellular mechanical properties for cancer therapy",
+      "year": 2022,
+      "citation_count": 221,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 13
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 76
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 57
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 62
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 13
+        }
+      ],
+      "counts_by_year_len": 5,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "recent",
+      "velocity": 4.604166666666667,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W4391486130",
+      "title": "CRISPR technologies for genome, epigenome and transcriptome editing",
+      "year": 2024,
+      "citation_count": 192,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 36
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 103
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 53
+        }
+      ],
+      "counts_by_year_len": 3,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "recent",
+      "velocity": 8.0,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2801309958",
+      "title": "Understanding the tumor immune microenvironment (TIME) for effective therapy",
+      "year": 2018,
+      "citation_count": 5787,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 240
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 927
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 987
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 907
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 991
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 803
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 609
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 263
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 49
+        },
+        {
+          "year": 2012,
+          "cited_by_count": 1
+        }
+      ],
+      "counts_by_year_len": 10,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "mid",
+      "velocity": 60.28125,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2981137429",
+      "title": "Search-and-replace genome editing without double-strand breaks or donor DNA",
+      "year": 2019,
+      "citation_count": 4479,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 170
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 801
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 780
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 733
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 731
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 666
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 553
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 41
+        },
+        {
+          "year": 2014,
+          "cited_by_count": 1
+        }
+      ],
+      "counts_by_year_len": 9,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "mid",
+      "velocity": 53.32142857142857,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2601436215",
+      "title": "Circ-ZNF609 Is a Circular RNA that Can Be Translated and Functions in Myogenesis",
+      "year": 2017,
+      "citation_count": 2323,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 34
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 168
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 208
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 242
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 326
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 473
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 377
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 246
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 178
+        },
+        {
+          "year": 2017,
+          "cited_by_count": 67
+        }
+      ],
+      "counts_by_year_len": 10,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "mid",
+      "velocity": 21.50925925925926,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W3035764705",
+      "title": "Genome editing with CRISPR–Cas nucleases, base editors, transposases and prime editors",
+      "year": 2020,
+      "citation_count": 2229,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 77
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 324
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 453
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 459
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 435
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 362
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 119
+        }
+      ],
+      "counts_by_year_len": 7,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "mid",
+      "velocity": 30.958333333333332,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2945567049",
+      "title": "CHOPCHOP v3: expanding the CRISPR web toolbox beyond genome editing",
+      "year": 2019,
+      "citation_count": 2131,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 116
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 460
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 426
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 365
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 303
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 254
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 184
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 21
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 1
+        }
+      ],
+      "counts_by_year_len": 9,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "mid",
+      "velocity": 25.36904761904762,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W3015140168",
+      "title": "Selective organ targeting (SORT) nanoparticles for tissue-specific mRNA delivery and CRISPR–Cas gene editing",
+      "year": 2020,
+      "citation_count": 2067,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 154
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 541
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 512
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 368
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 246
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 177
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 67
+        }
+      ],
+      "counts_by_year_len": 7,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "mid",
+      "velocity": 28.708333333333332,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W3040646360",
+      "title": "Human organoids: model systems for human biology and medicine",
+      "year": 2020,
+      "citation_count": 2044,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 99
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 417
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 425
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 407
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 365
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 296
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 33
+        }
+      ],
+      "counts_by_year_len": 7,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "mid",
+      "velocity": 28.38888888888889,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2554763217",
+      "title": "CRISPR–Cas9 Structures and Mechanisms",
+      "year": 2017,
+      "citation_count": 2018,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 57
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 274
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 314
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 254
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 330
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 284
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 234
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 151
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 84
+        },
+        {
+          "year": 2017,
+          "cited_by_count": 33
+        }
+      ],
+      "counts_by_year_len": 10,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "mid",
+      "velocity": 18.685185185185187,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2950976066",
+      "title": "Shared and distinct transcriptomic cell types across neocortical areas",
+      "year": 2018,
+      "citation_count": 1937,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 56
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 209
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 297
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 311
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 287
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 312
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 263
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 176
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 22
+        },
+        {
+          "year": 2017,
+          "cited_by_count": 3
+        }
+      ],
+      "counts_by_year_len": 10,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "mid",
+      "velocity": 20.177083333333332,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W3048788919",
+      "title": "Advances in oligonucleotide drug delivery",
+      "year": 2020,
+      "citation_count": 1907,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 82
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 365
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 420
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 363
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 365
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 289
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 23
+        }
+      ],
+      "counts_by_year_len": 7,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "mid",
+      "velocity": 26.48611111111111,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2614144400",
+      "title": "Targeted Degradation of CTCF Decouples Local Insulation of Chromosome Domains from Genomic Compartmentalization",
+      "year": 2017,
+      "citation_count": 1856,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 53
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 178
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 213
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 206
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 238
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 263
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 242
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 235
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 152
+        },
+        {
+          "year": 2017,
+          "cited_by_count": 74
+        },
+        {
+          "year": 2012,
+          "cited_by_count": 1
+        }
+      ],
+      "counts_by_year_len": 11,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "mid",
+      "velocity": 17.185185185185187,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2765351619",
+      "title": "RNA editing with CRISPR-Cas13",
+      "year": 2017,
+      "citation_count": 1781,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 51
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 215
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 254
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 238
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 248
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 250
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 208
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 167
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 142
+        },
+        {
+          "year": 2017,
+          "cited_by_count": 7
+        }
+      ],
+      "counts_by_year_len": 10,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "mid",
+      "velocity": 16.49074074074074,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2998881619",
+      "title": "Applications of genome editing technology in the targeted therapy of human diseases: mechanisms, advances and prospects",
+      "year": 2020,
+      "citation_count": 1676,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 32
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 257
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 317
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 324
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 325
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 333
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 87
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 1
+        }
+      ],
+      "counts_by_year_len": 8,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "mid",
+      "velocity": 23.27777777777778,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2897295193",
+      "title": "Base editing: precision chemistry on the genome and transcriptome of living cells",
+      "year": 2018,
+      "citation_count": 1661,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 54
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 216
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 233
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 225
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 261
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 258
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 289
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 117
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 7
+        }
+      ],
+      "counts_by_year_len": 9,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "mid",
+      "velocity": 17.302083333333332,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2803581084",
+      "title": "The CRISPR tool kit for genome editing and beyond",
+      "year": 2018,
+      "citation_count": 1636,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 30
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 154
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 206
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 229
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 268
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 287
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 254
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 165
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 40
+        }
+      ],
+      "counts_by_year_len": 9,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "mid",
+      "velocity": 17.041666666666668,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W3171835979",
+      "title": "Noncoding RNA therapeutics — challenges and potential solutions",
+      "year": 2021,
+      "citation_count": 1524,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 57
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 288
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 438
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 375
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 298
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 66
+        },
+        {
+          "year": 2014,
+          "cited_by_count": 1
+        }
+      ],
+      "counts_by_year_len": 7,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "mid",
+      "velocity": 25.4,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2918418208",
+      "title": "CRISPR/Cas Genome Editing and Precision Plant Breeding in Agriculture",
+      "year": 2019,
+      "citation_count": 1485,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 43
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 202
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 235
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 264
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 258
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 241
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 199
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 38
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 1
+        },
+        {
+          "year": 2017,
+          "cited_by_count": 1
+        },
+        {
+          "year": 2014,
+          "cited_by_count": 1
+        }
+      ],
+      "counts_by_year_len": 11,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "mid",
+      "velocity": 17.678571428571427,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2947777875",
+      "title": "The next generation of CRISPR–Cas technologies and applications",
+      "year": 2019,
+      "citation_count": 1464,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 43
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 192
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 225
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 249
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 268
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 243
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 209
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 33
+        }
+      ],
+      "counts_by_year_len": 8,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "mid",
+      "velocity": 17.428571428571427,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2888908334",
+      "title": "CRISPR-Cas guides the future of genetic engineering",
+      "year": 2018,
+      "citation_count": 1421,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 34
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 160
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 179
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 187
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 220
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 235
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 219
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 162
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 23
+        }
+      ],
+      "counts_by_year_len": 9,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "mid",
+      "velocity": 14.802083333333334,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W3004461655",
+      "title": "CRISPR-engineered T cells in patients with refractory cancer",
+      "year": 2020,
+      "citation_count": 1408,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 53
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 205
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 217
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 216
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 261
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 275
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 175
+        }
+      ],
+      "counts_by_year_len": 7,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "mid",
+      "velocity": 19.555555555555557,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W1977709885",
+      "title": "Genome engineering using the CRISPR-Cas9 system",
+      "year": 2013,
+      "citation_count": 11595,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 204
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 1028
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 1197
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 1167
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 1254
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 1350
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 1360
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 1193
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 1017
+        },
+        {
+          "year": 2017,
+          "cited_by_count": 820
+        },
+        {
+          "year": 2016,
+          "cited_by_count": 569
+        },
+        {
+          "year": 2015,
+          "cited_by_count": 290
+        },
+        {
+          "year": 2014,
+          "cited_by_count": 139
+        },
+        {
+          "year": 2013,
+          "cited_by_count": 1
+        }
+      ],
+      "counts_by_year_len": 14,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "early",
+      "velocity": 74.32692307692308,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2003171404",
+      "title": "RNA-Guided Human Genome Engineering via Cas9",
+      "year": 2013,
+      "citation_count": 9310,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 102
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 424
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 551
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 606
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 768
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 823
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 851
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 820
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 875
+        },
+        {
+          "year": 2017,
+          "cited_by_count": 884
+        },
+        {
+          "year": 2016,
+          "cited_by_count": 897
+        },
+        {
+          "year": 2015,
+          "cited_by_count": 705
+        },
+        {
+          "year": 2014,
+          "cited_by_count": 688
+        },
+        {
+          "year": 2013,
+          "cited_by_count": 306
+        },
+        {
+          "year": 2012,
+          "cited_by_count": 2
+        }
+      ],
+      "counts_by_year_len": 15,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "early",
+      "velocity": 59.67948717948718,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2050480410",
+      "title": "The new frontier of genome engineering with CRISPR-Cas9",
+      "year": 2014,
+      "citation_count": 6797,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 170
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 720
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 687
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 592
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 703
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 714
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 663
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 594
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 581
+        },
+        {
+          "year": 2017,
+          "cited_by_count": 556
+        },
+        {
+          "year": 2016,
+          "cited_by_count": 478
+        },
+        {
+          "year": 2015,
+          "cited_by_count": 317
+        },
+        {
+          "year": 2014,
+          "cited_by_count": 4
+        },
+        {
+          "year": 2013,
+          "cited_by_count": 4
+        },
+        {
+          "year": 2012,
+          "cited_by_count": 1
+        }
+      ],
+      "counts_by_year_len": 15,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "early",
+      "velocity": 47.201388888888886,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2096261947",
+      "title": "Development and Applications of CRISPR-Cas9 for Genome Engineering",
+      "year": 2014,
+      "citation_count": 5806,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 96
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 376
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 423
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 454
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 513
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 558
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 625
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 560
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 580
+        },
+        {
+          "year": 2017,
+          "cited_by_count": 518
+        },
+        {
+          "year": 2016,
+          "cited_by_count": 546
+        },
+        {
+          "year": 2015,
+          "cited_by_count": 443
+        },
+        {
+          "year": 2014,
+          "cited_by_count": 104
+        },
+        {
+          "year": 2013,
+          "cited_by_count": 2
+        }
+      ],
+      "counts_by_year_len": 14,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "early",
+      "velocity": 40.31944444444444,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W1973260880",
+      "title": "Genome-Scale CRISPR-Cas9 Knockout Screening in Human Cells",
+      "year": 2013,
+      "citation_count": 5456,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 96
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 397
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 523
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 502
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 498
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 556
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 577
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 516
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 465
+        },
+        {
+          "year": 2017,
+          "cited_by_count": 453
+        },
+        {
+          "year": 2016,
+          "cited_by_count": 389
+        },
+        {
+          "year": 2015,
+          "cited_by_count": 267
+        },
+        {
+          "year": 2014,
+          "cited_by_count": 204
+        },
+        {
+          "year": 2013,
+          "cited_by_count": 5
+        },
+        {
+          "year": 2012,
+          "cited_by_count": 1
+        }
+      ],
+      "counts_by_year_len": 15,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "early",
+      "velocity": 34.97435897435897,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2336828812",
+      "title": "Programmable editing of a target base in genomic DNA without double-stranded DNA cleavage",
+      "year": 2016,
+      "citation_count": 5296,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 145
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 682
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 725
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 778
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 713
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 658
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 567
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 418
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 355
+        },
+        {
+          "year": 2017,
+          "cited_by_count": 184
+        },
+        {
+          "year": 2016,
+          "cited_by_count": 65
+        },
+        {
+          "year": 2012,
+          "cited_by_count": 1
+        }
+      ],
+      "counts_by_year_len": 12,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "early",
+      "velocity": 44.13333333333333,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2160051211",
+      "title": "Repurposing CRISPR as an RNA-Guided Platform for Sequence-Specific Control of Gene Expression",
+      "year": 2013,
+      "citation_count": 5092,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 89
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 391
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 465
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 437
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 526
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 496
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 547
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 450
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 447
+        },
+        {
+          "year": 2017,
+          "cited_by_count": 397
+        },
+        {
+          "year": 2016,
+          "cited_by_count": 321
+        },
+        {
+          "year": 2015,
+          "cited_by_count": 236
+        },
+        {
+          "year": 2014,
+          "cited_by_count": 198
+        },
+        {
+          "year": 2013,
+          "cited_by_count": 86
+        }
+      ],
+      "counts_by_year_len": 14,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "early",
+      "velocity": 32.64102564102564,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2252568502",
+      "title": "Optimized sgRNA design to maximize activity and minimize off-target effects of CRISPR-Cas9",
+      "year": 2016,
+      "citation_count": 4875,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 166
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 703
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 688
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 680
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 609
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 569
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 535
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 368
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 287
+        },
+        {
+          "year": 2017,
+          "cited_by_count": 183
+        },
+        {
+          "year": 2016,
+          "cited_by_count": 82
+        },
+        {
+          "year": 2015,
+          "cited_by_count": 1
+        }
+      ],
+      "counts_by_year_len": 12,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "early",
+      "velocity": 40.625,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2036176224",
+      "title": "DNA targeting specificity of RNA-guided Cas9 nucleases",
+      "year": 2013,
+      "citation_count": 4840,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 72
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 316
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 334
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 361
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 404
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 484
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 442
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 445
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 478
+        },
+        {
+          "year": 2017,
+          "cited_by_count": 452
+        },
+        {
+          "year": 2016,
+          "cited_by_count": 411
+        },
+        {
+          "year": 2015,
+          "cited_by_count": 303
+        },
+        {
+          "year": 2014,
+          "cited_by_count": 278
+        },
+        {
+          "year": 2013,
+          "cited_by_count": 52
+        }
+      ],
+      "counts_by_year_len": 14,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "early",
+      "velocity": 31.025641025641026,
+      "acceleration_viable": true
+    },
+    {
+      "openalex_id": "W2165869860",
+      "title": "Cpf1 Is a Single RNA-Guided Endonuclease of a Class 2 CRISPR-Cas System",
+      "year": 2015,
+      "citation_count": 4798,
+      "counts_by_year_raw": [
+        {
+          "year": 2026,
+          "cited_by_count": 131
+        },
+        {
+          "year": 2025,
+          "cited_by_count": 522
+        },
+        {
+          "year": 2024,
+          "cited_by_count": 547
+        },
+        {
+          "year": 2023,
+          "cited_by_count": 538
+        },
+        {
+          "year": 2022,
+          "cited_by_count": 572
+        },
+        {
+          "year": 2021,
+          "cited_by_count": 569
+        },
+        {
+          "year": 2020,
+          "cited_by_count": 472
+        },
+        {
+          "year": 2019,
+          "cited_by_count": 426
+        },
+        {
+          "year": 2018,
+          "cited_by_count": 365
+        },
+        {
+          "year": 2017,
+          "cited_by_count": 335
+        },
+        {
+          "year": 2016,
+          "cited_by_count": 274
+        },
+        {
+          "year": 2015,
+          "cited_by_count": 39
+        },
+        {
+          "year": 2014,
+          "cited_by_count": 1
+        }
+      ],
+      "counts_by_year_len": 13,
+      "has_min_3_points": true,
+      "seed_id": "W2064815984",
+      "band": "early",
+      "velocity": 36.34848484848485,
+      "acceleration_viable": true
+    }
+  ]
+}
