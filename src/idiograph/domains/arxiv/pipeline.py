@@ -291,9 +291,8 @@ async def backward_traverse(
             rec = _work_to_record(work, hop_depth=hop_depth, root_ids=sorted(roots))
             merged[node_id] = rec
             return
-        # Keep lowest hop_depth; union root_ids.
-        if hop_depth < existing.hop_depth:
-            existing.hop_depth = hop_depth
+        # All hop=1 merges happen before any hop=2 merge, so existing.hop_depth
+        # is always ≤ hop_depth at this point. Only the root_ids union matters.
         existing.root_ids = sorted(set(existing.root_ids) | roots)
 
     # Walk depth=1 for each seed

@@ -274,6 +274,34 @@ def test_seeds_excluded_from_output():
     assert all(r.node_id not in {"arxiv:s1.1", "arxiv:s2.1"} for r in out)
 
 
+def test_batch_fetch_http_error_silently_skipped():
+    # Client raises on every batch call — traversal should return empty, not crash.
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.get = AsyncMock(side_effect=httpx.ConnectError("boom"))
+    seeds = [_seed_record("arxiv:seed.1", "S")]
+    out = asyncio.run(
+        backward_traverse(
+            seeds, client, api_key="k", n_backward=10, lambda_decay=0.05, sleep_ms=0
+        )
+    )
+    assert out == []
+
+
+def test_seed_refetch_miss_treated_as_empty_refs():
+    # The seed's OpenAlex ID isn't returned by the re-fetch (e.g. pulled from
+    # OpenAlex after Node 0 ran). Traversal must not crash — seed just yields
+    # zero depth-1 refs and the final output is empty.
+    works: dict[str, dict] = {}  # re-fetch returns nothing
+    client = _BatchClient(works)
+    seeds = [_seed_record("arxiv:seed.1", "S")]
+    out = asyncio.run(
+        backward_traverse(
+            seeds, client, api_key="k", n_backward=10, lambda_decay=0.05, sleep_ms=0
+        )
+    )
+    assert out == []
+
+
 def test_strip_openalex_id_helper():
     assert _strip_openalex_id("https://openalex.org/W123") == "W123"
     assert _strip_openalex_id("W123") == "W123"
