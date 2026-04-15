@@ -288,7 +288,7 @@ two agents mutating the same graph object simultaneously produces undefined beha
 and there is no mechanism for graph isolation, persistence, or session state across calls.
 
 Remediation is a defined 5-step strangler fig migration documented in
-`state_management_migration.md`. It is non-trivial (4–5 focused micro-sessions) and
+`docs/sessions/session-2026-04-06-2.md`. It is non-trivial (4–5 focused micro-sessions) and
 should not be confused with "adding FastAPI" (a surface-level description of Step 5 only).
 
 The forcing function: this migration is required before Phase 8 begins **only if** the
@@ -298,7 +298,7 @@ the constraint remains a documented liability and the migration is deferred inde
 Change: Evaluate forcing function at Phase 7 close. If triggered, execute the 5-step
 migration (extract loaders → graph registry → executor isolation test → JSON persistence
 → FastAPI layer) before Phase 8 implementation begins. Full migration detail in
-`state_management_migration.md`.  
+`docs/sessions/session-2026-04-06-2.md`.  
 Done when: Forcing function evaluated at Phase 7 close. Migration executed if triggered;
 constraint documented and deferred if not.
 
@@ -837,7 +837,7 @@ committed. README section present.
 | Executor must not import handler modules directly | Phase 6 onward | Covered in AMD-007. The executor is domain-agnostic. Handler registration happens at startup, not at import time. Keeps the core layer independent of implementation details. |
 | Handler business logic is capped at 30 lines | Phase 6 onward | Covered in AMD-008. Error handling and logging are excluded from the count. A handler whose core logic exceeds this limit is a signal that the node is incorrectly scoped, not that the limit should be raised. |
 | Demo domain is arXiv pipeline, not VFX tool handlers | Phase 6 | Covered in AMD-006. The thesis claims domain-agnosticism. The demo domain should demonstrate that. VFX node types remain in the schema — VFX tool dependencies do not enter the codebase. |
-| Module-level graph state is incompatible with stateless HTTP or concurrent agent requests | Phase 7 onward | Covered in AMD-009. Remediation is a defined 5-step strangler fig migration (`state_management_migration.md`), not an afternoon refactor. Triggered only if HTTP/SSE MCP transport or web demo is required. |
+| Module-level graph state is incompatible with stateless HTTP or concurrent agent requests | Phase 7 onward | Covered in AMD-009. Remediation is a defined 5-step strangler fig migration (`docs/sessions/session-2026-04-06-2.md`), not an afternoon refactor. Triggered only if HTTP/SSE MCP transport or web demo is required. |
 | `idiograph run` must be demonstrable without an API key | Phase 8 onward | Covered in AMD-010. The `--mock` flag is the mechanism. The architecture already supports this via the handler registry — the flag makes it explicit at the CLI surface. |
 | Domain implementations live under `domains/<domain>/`, never as siblings to `core/` | Phase 8 onward | Covered in AMD-011. `core/` is domain-agnostic. Domain-specific code belongs in its own namespace. The directory structure should communicate the architecture without a README. |
 | Edge type extensibility must remain open for USD arc types | Phase 8 onward | Covered in AMD-013. USD composition arc semantics (REFERENCES, INHERITS, SPECIALIZES, VARIANTS, PAYLOAD) must be addable as typed edges without modifying the Edge model. AMD-003 already enforces this; AMD-013 names the concrete future use. |

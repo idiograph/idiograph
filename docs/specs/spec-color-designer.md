@@ -267,4 +267,4 @@ tools/color-designer/
 
 ---
 
-*Companion documents: session-2026-04-09.md, session-2026-04-08.md, demo_design_spec-1.md*
+*Companion documents: ../sessions/session-2026-04-09.md, ../sessions/session-2026-04-08.md, demo_design_spec-1.md*
