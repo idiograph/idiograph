@@ -158,7 +158,7 @@ Idiograph is a proof of concept for what it looks like when you build AI-operabl
 
 Phase summaries and architectural decision logs are in [`docs/`](docs/).
 
-- [Blueprint](docs/blueprint.md) — full curriculum and system design
-- [Blueprint Amendments](docs/blueprint_amendments_1.md) · [2](docs/blueprint_amendments_2.md) · [3](docs/blueprint_amendments_3.md) — architectural decisions and constraint log
-- [Session Workflow](docs/session_workflow.md) — how development sessions are structured
-- Phase summaries: [Phase 0](docs/phase_0_summary.md) · [Phase 1](docs/phase_1_summary.md) · [Phase 2](docs/phase_2_summary.md) · [Phase 3](docs/phase_3_summary.md) · [Phase 4.5](docs/phase_4.5_summary.md) · [Phase 5](docs/phase_5_summary.md) · [Phase 6](docs/phase_6_summary.md) · [Phase 7](docs/phase_7_summary.md) · [Phase 8](docs/phase_8_summary.md)
+- [Blueprint](docs/vision/vision-blueprint-original.md) — full curriculum and system design
+- [Amendments](docs/decisions/amendments.md) — architectural decisions and constraint log
+- [Session Workflow](docs/workflow.md) — how development sessions are structured
+- Phase summaries: [Phase 0](docs/phases/phase-00-foundation.md) · [Phase 1](docs/phases/phase-01-rapid-fluency-semantic-output.md) · [Phase 2](docs/phases/phase-02-project-structure-reusability.md) · [Phase 3](docs/phases/phase-03-data-models-typing.md) · [Phase 4.5](docs/phases/phase-04-05-graph-query-analysis.md) · [Phase 5](docs/phases/phase-05-testing-logging-config.md) · [Phase 6](docs/phases/phase-06-async-execution-orchestration.md) · [Phase 7](docs/phases/phase-07-architecture-refinement.md) · [Phase 8](docs/phases/phase-08-mcp-integration.md)

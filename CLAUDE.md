@@ -26,7 +26,7 @@ Read it before doing anything else. Do not implement before completing Step 1 of
 - Smoke test script: `scripts/test_mcp_smoke.py`
 
 **Phase 9 — IN PROGRESS**
-See `docs/specs/spec-phase-09-plan.md` (or `phase_8_9_task_inventory.md` until migration) for the full task inventory.
+See `docs/specs/spec-phase-08-09-task-inventory.md` for the full task inventory.
 
 Four tracks:
 - **Track 1 — Demo** (blocking gate): richer arXiv pipeline, vector index, view functions, FastAPI, D3 renderer, self-description graph

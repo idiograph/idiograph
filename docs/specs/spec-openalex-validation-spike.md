@@ -1,7 +1,7 @@
 # Idiograph — OpenAlex CRISPR Validation Spike Spec
 **Status:** LIVING — freezes when both passes complete and findings doc is written
 **Created:** 2026-04-13
-**Companion documents:** spec-arxiv-pipeline-final.md, amd-016-llm-node-placement-2.md, amd-017-multi-seed-boolean-ops.md
+**Companion documents:** spec-arxiv-pipeline-final.md, ../decisions/amendments.md (AMD-016), amd-017-multi-seed-boolean-ops.md (not yet authored)
 **Freeze trigger:** Pass 2 findings document committed under `docs/specs/findings-openalex-crispr.md` (or moved to `docs/sessions/` if a session summary supersedes it).
 
 ---
@@ -145,4 +145,4 @@ After each Pass, work stops for human review before the next Pass begins.
 
 ---
 
-*Companion documents: spec-arxiv-pipeline-final.md, amd-016-llm-node-placement-2.md, amd-017-multi-seed-boolean-ops.md*
+*Companion documents: spec-arxiv-pipeline-final.md, ../decisions/amendments.md (AMD-016), amd-017-multi-seed-boolean-ops.md (not yet authored)*

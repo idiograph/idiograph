@@ -93,4 +93,4 @@ Current state unknown. Must reflect Phase 8 completion, MCP integration, correct
 
 ---
 
-*Companion documents: demo_design_spec.md, phase_8_summary.md, blueprint_amendments_3.md, essay_blueprint.md*
+*Companion documents: demo_design_spec.md, ../phases/phase-08-mcp-integration.md, blueprint_amendments_3.md, essay_blueprint.md*
