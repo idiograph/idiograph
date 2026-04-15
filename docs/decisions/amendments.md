@@ -1049,3 +1049,174 @@ The spec is currently marked FROZEN. This amendment supersedes the frozen state 
 *Amendment: AMD-016*
 *Follows: AMD-015*
 *Decided: 2026-04-07*
+
+---
+
+### AMD-017 — Multi-Seed Input and Boolean Graph Operations
+
+**Affects:** spec-arxiv-pipeline-final.md — extends Node 0, adds renderer-layer boolean operations
+**Status:** Accepted — Not Yet Implemented
+**Decided:** 2026-04-10
+**Follows:** AMD-016
+
+---
+
+#### Reason
+
+The frozen pipeline spec assumes a single seed paper as the graph root. This is correct
+for the common case but excludes a structurally distinct and analytically meaningful use
+case: simultaneous traversal from multiple known seed papers.
+
+The motivating case is the dual CRISPR breakthrough — Doudna/Charpentier (2012) and
+Zhang (2013) — two papers addressing the same problem via partially independent
+intellectual lineages, arriving at convergent results at roughly the same time. Neither
+paper's neighborhood alone tells the complete story. The relationship between the two
+neighborhoods is where the most analytically interesting structure lives.
+
+Multi-seed traversal exposes that structure. Boolean operations on the resulting graphs
+make it interrogable.
+
+This amendment specifies two related extensions:
+
+1. **Multi-seed input** — Node 0 accepts a list of identifiers. The pipeline runs each
+   to a root node. The assembled graph is a forest.
+2. **Boolean graph operations** — renderer-layer set operations (union, intersection,
+   difference) on two named graphs. No retraversal. Pipeline cost paid once per graph.
+
+Both extensions are consistent with the thesis. Multi-seed traversal is fully
+deterministic. Boolean operations are pure set logic on cached registry data. Neither
+introduces probabilistic behavior or structural decision-making.
+
+---
+
+#### Decision
+
+Extend Node 0 to accept a list of seed identifiers. Store `root_ids` per node at
+traversal time. Define three boolean operations — union, intersection, difference — as
+renderer-layer query parameters against two named graphs in the registry. Document
+architectural constraints on root semantics and downstream metric behavior.
+
+---
+
+#### Extension 1 — Multi-Seed Input
+
+**Node 0 — Direct Seed Entry (extended)**
+
+Prior behavior: accepts a single `arxiv_id` or `doi`, resolves to one root node,
+skips to Node 3.
+
+Extended behavior: accepts a list of identifiers. Each identifier is resolved
+independently using the existing single-seed resolution logic. All successfully resolved
+papers are promoted to root nodes. The assembled graph is a **forest** — multiple root
+nodes, no synthetic parent.
+
+Input:
+```
+seed_ids: list[dict]   # each entry: {arxiv_id: string} or {doi: string}
+```
+
+Minimum list length: 1. Single-element list is identical to prior behavior. No
+special case required.
+
+Resolution: each identifier is resolved in sequence. Failed resolutions are logged
+with a warning and excluded from the root set. If all identifiers fail to resolve, the
+pipeline halts with an error. If at least one resolves, the pipeline continues with the
+successful roots and logs the failures.
+
+Gate: skip to Node 3 for all successfully resolved roots. Node 0.5 is bypassed for
+all Node 0 paths — unchanged from prior behavior.
+
+**Forest Architecture — Rationale**
+
+A synthetic root connecting all seeds was considered and rejected. A synthetic root
+is an artifact of the tooling, not a feature of the data. It would distort topological
+depth calculations, produce misleading PageRank scores, and misrepresent the actual
+intellectual relationship between the seeds. The forest is the truthful representation.
+
+**Per-Node Root Provenance**
+
+Fields stored on every node at traversal time:
+
+```
+root_ids: list[str]            # all root node_ids this node is reachable from — REQUIRED
+hop_depth_per_root: dict[str, int]   # distance from each specific root — DEFERRED
+```
+
+`root_ids` is non-optional. For a single-seed run, `root_ids` contains one entry —
+identical behavior, no special case required.
+
+`hop_depth_per_root` is deferred. Cheap to add at traversal time, expensive to
+reconstruct afterward. Add before Phase 10 if per-root depth queries are needed.
+
+The overlap zone — nodes where `len(root_ids) > 1` — is the primary queryable surface
+of the forest. This is where the shared intellectual foundation of two concurrent works
+is structurally visible.
+
+**Downstream Metric Behavior in a Forest**
+
+| Metric | Impact | Resolution |
+|---|---|---|
+| `topological_depth` | Multiple roots in forest | Defined as longest path from any root. NetworkX `dag_longest_path_length` supports this without modification. |
+| `pagerank` | No root concept | Unchanged. |
+| `community_id` | No root concept | Unchanged. |
+| `hop_depth` | Per-root at traversal time | Minimum hop depth from nearest root recorded per node. |
+| `root_ids` | New field | Stored at traversal time. Single-seed graphs carry one entry — no special case. |
+
+---
+
+#### Extension 2 — Boolean Graph Operations
+
+Boolean operations are renderer-layer set operations on two named graphs already
+present in the registry. They do not trigger retraversal. They do not modify stored
+graph state. Pipeline cost is paid once per constituent graph.
+
+**Three operations:**
+
+- **Union** — all nodes and edges present in either graph. Functionally identical to
+  multi-seed traversal with merged results. Prefer multi-seed traversal over union
+  where possible — union on independently-cached graphs may carry parameter consistency risk.
+
+- **Intersection** — nodes present in both graphs. Edges between intersection nodes from
+  either graph are included. For the CRISPR case: a portrait of the shared intellectual
+  foundation — papers both labs independently cited.
+
+- **Difference** — nodes present in graph A but not graph B (asymmetric). The complement
+  (B minus A) is a separate query. For the CRISPR case: a portrait of intellectual
+  divergence — what each lab drew from that the other didn't.
+
+**API contract:**
+
+```
+GET /graph/d3?op=intersection&graph_a=arxiv:2012-doudna&graph_b=arxiv:2013-zhang&view=influence
+GET /graph/d3?op=difference&graph_a=arxiv:2012-doudna&graph_b=arxiv:2013-zhang&view=influence
+GET /graph/d3?op=union&graph_a=arxiv:2012-doudna&graph_b=arxiv:2013-zhang&view=influence
+```
+
+Both graphs must be present in the registry before the operation is valid.
+Missing graph returns a 404 with a logged error — no partial result.
+
+**Provenance:** boolean operation results are not auto-persisted to the registry.
+Persistence is an explicit act. Each response includes a provenance header recording
+the operation, both constituent graphs and their parameters, node count, edge count,
+and computation timestamp.
+
+---
+
+#### Architectural Constraints Added
+
+| Decision | Affects | Rationale |
+|---|---|---|
+| Synthetic root is disqualified | arXiv pipeline | Distorts topological depth, PageRank, and misrepresents concurrent_work relationships structurally |
+| `root_ids: list[str]` is required on every node | arXiv pipeline | Forest is only queryable if per-node root provenance is stored at traversal time |
+| `hop_depth` in forest graphs reflects nearest root | arXiv pipeline | Unambiguous, computable, consistent with single-seed behavior |
+| `hop_depth_per_root` is deferred | arXiv pipeline | Analytically useful but not required for current demo. Deferral is explicit and tracked. |
+| Boolean operations are renderer-layer only — no retraversal | arXiv pipeline | Pipeline cost paid once per graph |
+| Boolean operation results are not auto-persisted | arXiv pipeline | Persistence is an explicit act |
+| Mixed-parameter boolean operations are valid but must record provenance | arXiv pipeline | Validity and auditability are separate concerns |
+| Union prefers multi-seed traversal over post-hoc combination | arXiv pipeline | Multi-seed traversal produces a single coherent graph |
+
+---
+
+*Amendment: AMD-017*
+*Follows: AMD-016*
+*Decided: 2026-04-10*
