@@ -21,7 +21,7 @@ Idiograph applies that same architecture to AI agent workflows, and asks: what d
 
 Idiograph is a Python-based semantic graph system. It represents VFX pipeline stages and AI agent operations as nodes in a unified, typed, JSON-serializable graph. The graph is the single source of truth. CLI, agents, and (optionally) UI are all operators on that graph — none of them own state.
 
-The current implementation includes an arXiv research pipeline — nodes that fetch a paper, extract claims via LLM, evaluate against keyword criteria, and conditionally summarize. The architecture is domain-agnostic by design: VFX pipeline nodes (LoadAsset, ApplyShader, ShaderValidate) and additional AI agent node types are planned for Phase 10. Both would be represented identically to the existing nodes. There is no special-casing in the executor.
+The current implementation includes an arXiv research pipeline — nodes that fetch a paper, extract claims via LLM, evaluate against keyword criteria, and conditionally summarize. The architecture is domain-agnostic by design. Phase 9 builds a richer arXiv citation graph — multi-seed traversal, citation acceleration ranking, semantic relationship annotation — to make that domain-agnosticism visible as a running demo. Phase 10 applies the same architecture to USD composition inversion: a deterministic backward-chaining solver for VFX asset pipeline decisions, where the LLM earns exactly one bounded role — translating natural language intent into a validated constraint set — and every subsequent step is graph traversal. There is no special-casing in the executor across any of these domains.
 
 An MCP server wraps the core graph operations as six standards-compliant tools (`get_node`, `get_edges_from`, `update_node`, `summarize_intent`, `validate_graph`, `execute_graph`). Any MCP-compatible agent client can connect, inspect the graph, mutate node parameters, and trigger execution without bespoke adapter code.
 
@@ -40,8 +40,8 @@ An MCP server wraps the core graph operations as six standards-compliant tools (
 | 6 | Async execution engine | ✅ Complete |
 | 7 | Architecture refinement | ✅ Complete |
 | 8 | Agent integration (MCP) | ✅ Complete |
-| 9 | Documentation & visibility | 🔄 In progress |
-| 10 | Projection-aware rendering domain | Planned |
+| 9 | arXiv citation graph demo | 🔄 In progress |
+| 10 | USD composition inversion | Planned |
 
 ---
 
@@ -97,6 +97,20 @@ flowchart LR
 
 ---
 
+## Color Designer
+
+A node graph tool for designing interface color palettes — a second expression of the same thesis in a different domain.
+
+Color design is a pipeline: raw color values flow through semantic assignment nodes to produce a typed token file that drives a UI. The Color Designer makes that pipeline explicit, inspectable, and auditable. Same graph architecture as Idiograph's core. Same node-and-edge model. Same principle: the graph is the source of truth, the output file is a consequence of it.
+
+The tool is implemented as a PySide6 desktop application. Current nodes: Color Swatch, Color Array, Schema (token role registry), Assign, Write. A wire system with typed ports and connection validation is in progress.
+
+The Color Designer is not a companion tool. It is the domain-agnostic claim made concrete: the same architectural principles operating in UI design without modification. A technical evaluator who asks "but does this actually generalize?" is looking at the answer.
+
+The tool lives in `tools/color-designer/` and is designed to be extractable as a standalone application after the Idiograph demo is complete.
+
+---
+
 ## What You Can Do With It Right Now
 
 ```bash
@@ -145,12 +159,27 @@ Idiograph is a proof of concept for what it looks like when you build AI-operabl
 
 ## Stack
 
+**Core**
 - Python 3.13
 - [Pydantic](https://docs.pydantic.dev/) — typed models and validation
 - [Typer](https://typer.tiangolo.com/) — CLI interface
 - [NetworkX](https://networkx.org/) — graph traversal and analysis
 - [uv](https://github.com/astral-sh/uv) — dependency and environment management
-- [pytest](https://pytest.org/) — test suite
+- [ruff](https://docs.astral.sh/ruff/) — lint and format
+
+**Pipeline**
+- [httpx](https://www.python-httpx.org/) — async HTTP client
+- [anthropic](https://github.com/anthropic/anthropic-sdk-python) — LLM API
+- [python-dotenv](https://github.com/theskumar/python-dotenv) — environment config
+
+**Agent interface**
+- [mcp](https://github.com/modelcontextprotocol/python-sdk) — stdio transport, six tools
+
+**Color Designer**
+- [PySide6](https://doc.qt.io/qtforpython/) — node graph UI
+
+**Testing**
+- [pytest](https://pytest.org/) + [pytest-cov](https://pytest-cov.readthedocs.io/)
 
 ---
 
@@ -162,3 +191,4 @@ Phase summaries and architectural decision logs are in [`docs/`](docs/).
 - [Amendments](docs/decisions/amendments.md) — architectural decisions and constraint log
 - [Session Workflow](docs/workflow.md) — how development sessions are structured
 - Phase summaries: [Phase 0](docs/phases/phase-00-foundation.md) · [Phase 1](docs/phases/phase-01-rapid-fluency-semantic-output.md) · [Phase 2](docs/phases/phase-02-project-structure-reusability.md) · [Phase 3](docs/phases/phase-03-data-models-typing.md) · [Phase 4.5](docs/phases/phase-04-05-graph-query-analysis.md) · [Phase 5](docs/phases/phase-05-testing-logging-config.md) · [Phase 6](docs/phases/phase-06-async-execution-orchestration.md) · [Phase 7](docs/phases/phase-07-architecture-refinement.md) · [Phase 8](docs/phases/phase-08-mcp-integration.md)
+- Specs: [arXiv pipeline](docs/specs/spec-arxiv-pipeline-final.md) · [Color Designer](docs/specs/spec-color-designer.md) · [Phase 8–9 task inventory](docs/specs/spec-phase-08-09-task-inventory.md)
