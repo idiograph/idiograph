@@ -129,7 +129,7 @@ All architectural decisions are formalized as AMD-numbered entries in `docs/deci
 - `Deferred` — valid, not current build target
 - `Rejected` — considered and ruled out; keep the record
 
-**AMD sequence so far:** AMD-001 through AMD-015. Next is AMD-016.
+**AMD sequence so far:** AMD-001 through AMD-018. Next is AMD-019.
 
 When a decision is made or changed during a session, append an AMD entry before closing. Do not defer amendment logging to a later session.
 
