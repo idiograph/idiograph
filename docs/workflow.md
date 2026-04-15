@@ -1,4 +1,4 @@
-# Idiograph – Session Workflow Protocol
+# Idiograph — Session Workflow
 
 This document defines the standard structure for every working session on the Idiograph project.
 It exists so that sessions can be short, interrupted, and resumed without losing momentum or context.
