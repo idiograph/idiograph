@@ -321,6 +321,150 @@ async def backward_traverse(
     return scored[:n_backward]
 
 
+# ── Node 4 — Forward Traversal ──────────────────────────────────────────────
+
+_FORWARD_SELECT = (
+    "id,ids,title,publication_year,authorships,"
+    "abstract_inverted_index,cited_by_count,counts_by_year"
+)
+
+
+def _compute_velocity(
+    cited_by_count: int,
+    pub_year: int | None,
+    current_year: int,
+) -> float:
+    """Citations per month since publication; 0.0 when pub_year is unknown."""
+    if pub_year is None:
+        return 0.0
+    months = max(1, (current_year - pub_year) * 12)
+    return cited_by_count / months
+
+
+def _compute_acceleration(
+    counts_by_year: list[dict],
+    acceleration_method: str,
+) -> float | None:
+    """Mean year-over-year change in citation velocity.
+
+    Returns ``None`` when fewer than 3 time points are available; callers
+    should then fall back to β=0 scoring for that paper.
+    """
+    if acceleration_method == "regression":
+        raise NotImplementedError("regression acceleration not yet implemented")
+    if acceleration_method != "first_difference":
+        raise ValueError(f"unknown acceleration_method: {acceleration_method}")
+    sorted_counts = sorted(counts_by_year, key=lambda e: e["year"])
+    if len(sorted_counts) < 3:
+        return None
+    velocities = [e["cited_by_count"] / 12 for e in sorted_counts]
+    deltas = [velocities[i] - velocities[i - 1] for i in range(1, len(velocities))]
+    return sum(deltas) / len(deltas)
+
+
+def _node4_score(
+    velocity: float,
+    acceleration: float | None,
+    pub_year: int | None,
+    current_year: int,
+    alpha: float,
+    beta: float,
+    lambda_decay: float,
+) -> float:
+    """Node 4 ranking: α·velocity + β·acceleration·recency_weight.
+
+    Recency is *rewarded* here (multiplied), opposite to Node 3 where it is
+    penalized. Papers lacking acceleration data score with β=0.
+    """
+    years = current_year - pub_year if pub_year else 0
+    recency_weight = math.exp(years * lambda_decay)
+    effective_beta = beta if acceleration is not None else 0.0
+    accel = acceleration if acceleration is not None else 0.0
+    return alpha * velocity + effective_beta * accel * recency_weight
+
+
+async def forward_traverse(
+    seeds: list[PaperRecord],
+    api_key: str,
+    n_forward: int,
+    alpha: float,
+    beta: float,
+    lambda_decay: float,
+    acceleration_method: str = "first_difference",
+    current_year: int | None = None,
+) -> list[PaperRecord]:
+    """Forward traversal: fetch papers citing each seed, rank by α/β score.
+
+    For each seed, issues an OpenAlex ``cites:<openalex_id>`` query and maps
+    each returned work to a ``PaperRecord`` with ``hop_depth=1``. Papers
+    cited by multiple seeds are deduplicated by ``node_id`` with ``root_ids``
+    merged as a sorted union (AMD-017). Seeds themselves are excluded. The
+    merged set is scored by :func:`_node4_score`, sorted descending, and
+    truncated to ``n_forward``.
+
+    ``counts_by_year`` is fetched here only — it is not available from Node 0
+    or Node 3's ``select=`` fields.
+    """
+    if current_year is None:
+        current_year = date.today().year
+
+    seed_ids = {s.node_id for s in seeds}
+    merged: dict[str, PaperRecord] = {}
+    counts_by_id: dict[str, list[dict]] = {}
+
+    sleep_s = 0.150
+    async with httpx.AsyncClient() as client:
+        for idx, seed in enumerate(seeds):
+            if idx > 0:
+                await asyncio.sleep(sleep_s)
+
+            params = {
+                "filter": f"cites:{seed.openalex_id}",
+                "select": _FORWARD_SELECT,
+                "per-page": "200",
+                "api_key": api_key,
+            }
+            try:
+                response = await client.get(OPENALEX_BASE, params=params)
+                response.raise_for_status()
+            except httpx.HTTPError as e:
+                _log.debug("cites query failed for %s: %s", seed.node_id, e)
+                continue
+
+            results = (response.json() or {}).get("results") or []
+            for work in results:
+                node_id = make_node_id(work)
+                if node_id in seed_ids:
+                    continue
+                existing = merged.get(node_id)
+                if existing is None:
+                    rec = _work_to_record(work, hop_depth=1, root_ids=[seed.node_id])
+                    merged[node_id] = rec
+                    counts_by_id[node_id] = work.get("counts_by_year") or []
+                else:
+                    existing.root_ids = sorted(set(existing.root_ids) | {seed.node_id})
+
+    def _score(record: PaperRecord) -> float:
+        velocity = _compute_velocity(record.citation_count, record.year, current_year)
+        acceleration = _compute_acceleration(
+            counts_by_id.get(record.node_id, []), acceleration_method
+        )
+        if acceleration is None:
+            _log.debug("acceleration unavailable for %s, using beta=0", record.node_id)
+        return _node4_score(
+            velocity,
+            acceleration,
+            record.year,
+            current_year,
+            alpha,
+            beta,
+            lambda_decay,
+        )
+
+    scored = sorted(merged.values(), key=_score, reverse=True)
+    return scored[:n_forward]
+
+
 ARXIV_PIPELINE: Graph = Graph(
     name="arxiv_abstract_pipeline",
     version="1.0",
