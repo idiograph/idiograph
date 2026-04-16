@@ -10,11 +10,19 @@ import os
 from datetime import date
 
 import httpx
+import networkx as nx
 from dotenv import load_dotenv
 
 from idiograph.core.logging_config import get_logger
 from idiograph.core.models import Graph, Node, Edge
-from idiograph.domains.arxiv.models import PaperRecord, make_node_id
+from idiograph.domains.arxiv.models import (
+    CitationEdge,
+    CycleCleanResult,
+    CycleLog,
+    PaperRecord,
+    SuppressedEdge,
+    make_node_id,
+)
 
 load_dotenv()
 
@@ -463,6 +471,126 @@ async def forward_traverse(
 
     scored = sorted(merged.values(), key=_score, reverse=True)
     return scored[:n_forward]
+
+
+# ── Node 4.5 — Cycle Cleaning ───────────────────────────────────────────────
+
+
+def clean_cycles(
+    nodes: list[PaperRecord],
+    edges: list[CitationEdge],
+) -> CycleCleanResult:
+    """Detect and resolve cycles in the citation graph via weakest-link suppression.
+
+    Pure function — no I/O, no network, no mutation of inputs. See
+    docs/specs/spec-node4.5-cycle-cleaning.md for the full contract, including
+    the ordering of the weakest-link tiebreaker and the handling of missing-node
+    citation lookups.
+    """
+    _log.info(
+        "Node 4.5: cycle cleaning on %d nodes, %d edges", len(nodes), len(edges)
+    )
+
+    citation_by_node: dict[str, int] = {n.node_id: n.citation_count for n in nodes}
+    warned_missing: set[str] = set()
+
+    def _citation(node_id: str) -> int:
+        if node_id not in citation_by_node:
+            if node_id not in warned_missing:
+                warned_missing.add(node_id)
+                _log.warning(
+                    "Node 4.5: edge references unknown node_id %s; "
+                    "treating citation_count as 0",
+                    node_id,
+                )
+            return 0
+        return citation_by_node[node_id]
+
+    G = nx.DiGraph()
+    for n in nodes:
+        G.add_node(n.node_id)
+    for e in edges:
+        G.add_edge(e.source_id, e.target_id)
+
+    suppressed: list[SuppressedEdge] = []
+    suppressed_pairs: set[tuple[str, str]] = set()
+    iterations = 0
+    cycles_detected_count = 0
+    iteration_cap = len(edges)
+
+    while True:
+        try:
+            cycle = nx.find_cycle(G, orientation="original")
+        except nx.NetworkXNoCycle:
+            break
+
+        if iterations >= iteration_cap:
+            raise RuntimeError(
+                f"Node 4.5: iteration cap ({iteration_cap}) exceeded — "
+                "indicates a bug in the cycle cleaning loop, not malformed input."
+            )
+
+        iterations += 1
+        cycles_detected_count += 1
+
+        cycle_edges: list[tuple[str, str]] = [(edge[0], edge[1]) for edge in cycle]
+
+        seen: set[str] = set()
+        cycle_members: list[str] = []
+        for u, _v in cycle_edges:
+            if u not in seen:
+                seen.add(u)
+                cycle_members.append(u)
+
+        def _score(pair: tuple[str, str]) -> int:
+            u, v = pair
+            return _citation(u) + _citation(v)
+
+        weakest = min(cycle_edges, key=lambda e: (_score(e), e[0], e[1]))
+        citation_sum = _score(weakest)
+
+        _log.info(
+            "Suppressed edge %s -> %s (citation_sum=%d) to break cycle of length %d",
+            weakest[0],
+            weakest[1],
+            citation_sum,
+            len(cycle_edges),
+        )
+
+        G.remove_edge(weakest[0], weakest[1])
+        suppressed_pairs.add(weakest)
+        suppressed.append(
+            SuppressedEdge(
+                source_id=weakest[0],
+                target_id=weakest[1],
+                citation_sum=citation_sum,
+                cycle_members=cycle_members,
+            )
+        )
+
+    if iterations == 0:
+        _log.debug("Node 4.5: no cycles detected")
+
+    cleaned_edges = [
+        e for e in edges if (e.source_id, e.target_id) not in suppressed_pairs
+    ]
+
+    affected = {p[0] for p in suppressed_pairs} | {p[1] for p in suppressed_pairs}
+    _log.info(
+        "Node 4.5 complete: %d iterations, %d edges suppressed, %d affected node_ids",
+        iterations,
+        len(suppressed),
+        len(affected),
+    )
+
+    return CycleCleanResult(
+        cleaned_edges=cleaned_edges,
+        cycle_log=CycleLog(
+            suppressed_edges=suppressed,
+            cycles_detected_count=cycles_detected_count,
+            iterations=iterations,
+        ),
+    )
 
 
 ARXIV_PIPELINE: Graph = Graph(

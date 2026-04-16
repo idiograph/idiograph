@@ -66,6 +66,84 @@ class PaperRecord(BaseModel):
         description="Confidence score for relationship_type. Assigned by Node 5.5.",
     )
 
+class CitationEdge(BaseModel):
+    """Edge in the citation graph. Produced by traversal (cites) or derivation (co_citation).
+    Schema is the frozen renderer data contract from spec-arxiv-pipeline-final.md."""
+
+    source_id: str = Field(
+        description="node_id of the citing paper (for cites edges) or one member "
+                    "of the co-citation pair. References PaperRecord.node_id."
+    )
+    target_id: str = Field(
+        description="node_id of the cited paper (for cites edges) or the other "
+                    "member of the co-citation pair. References PaperRecord.node_id."
+    )
+    type: str = Field(
+        description="Edge type. 'cites' for direct citation (fact, from OpenAlex "
+                    "reference lists). 'co_citation' for derived relationship "
+                    "(inference, from Node 5). Open string — not a closed enum — "
+                    "to preserve Phase 10 causal semantics compatibility."
+    )
+    citing_paper_year: int | None = Field(
+        default=None,
+        description="Publication year of the citing paper. Not a citation-event "
+                    "timestamp. Null when year is unavailable from OpenAlex."
+    )
+    strength: int | None = Field(
+        default=None,
+        description="Shared citing paper count within the local traversal boundary. "
+                    "Populated for co_citation edges only. Null for cites edges. "
+                    "Field is always present in the schema, never absent."
+    )
+
+
+class SuppressedEdge(BaseModel):
+    """Record of a single edge removed during cycle cleaning."""
+
+    source_id: str = Field(description="node_id of edge source.")
+    target_id: str = Field(description="node_id of edge target.")
+    citation_sum: int = Field(
+        description="Sum of citation_count for source and target at removal time. "
+                    "The weakest-link heuristic selected the edge with the minimum of this value."
+    )
+    cycle_members: list[str] = Field(
+        description="node_ids of all nodes in the cycle this edge was breaking, in traversal order."
+    )
+
+
+class CycleLog(BaseModel):
+    """Audit trail of cycle cleaning. Flows to Node 8 provenance metadata."""
+
+    suppressed_edges: list[SuppressedEdge] = Field(
+        default_factory=list,
+        description="Every edge removed during cleaning, in order of removal."
+    )
+    cycles_detected_count: int = Field(
+        description="Total cycles found across all iterations. May exceed len(suppressed_edges) "
+                    "when one removal breaks multiple cycles."
+    )
+    iterations: int = Field(
+        description="Number of find_cycle -> remove passes executed before the graph was clean."
+    )
+
+    @property
+    def affected_node_ids(self) -> set[str]:
+        """node_ids whose topological_depth must be null downstream (Node 6 handoff)."""
+        result: set[str] = set()
+        for e in self.suppressed_edges:
+            result.add(e.source_id)
+            result.add(e.target_id)
+        return result
+
+
+class CycleCleanResult(BaseModel):
+    """Return value of clean_cycles(). Separates cleaned graph from audit log."""
+
+    cleaned_edges: list[CitationEdge] = Field(
+        description="Edge set with cycle-breaking edges removed. Safe for DAG algorithms."
+    )
+    cycle_log: CycleLog = Field(description="Audit trail of what was removed and why.")
+
 
 def make_node_id(work: dict) -> str:
     """Derive the canonical node_id from an OpenAlex work record.
