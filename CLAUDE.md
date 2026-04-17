@@ -63,14 +63,13 @@ Four tracks:
 
 ## Test Gate
 
-**44 tests must pass before and after every change.**
+**All tests must pass before and after every change. The test count never regresses — new work only adds tests.**
 
 ```bash
 uv run pytest tests/ -v
 ```
 
-If the gate fails after a change, stop and fix before continuing. Do not proceed with a broken gate.
-
+Record the baseline test count at session start. Any failure or regression: stop and fix before continuing.
 ---
 
 ## Directory Structure

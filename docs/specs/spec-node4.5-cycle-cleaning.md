@@ -75,8 +75,11 @@ class CycleLog(BaseModel):
         description="Every edge removed during cleaning, in order of removal."
     )
     cycles_detected_count: int = Field(
-        description="Total cycles found across all iterations. May exceed len(suppressed_edges) "
-                    "when one removal breaks multiple cycles."
+    description="Number of cycle-detection iterations that found a cycle. "
+                "Under the current one-cycle-per-iteration algorithm, this equals "
+                "len(suppressed_edges). Field retained because it stays semantically "
+                "correct under a future batch-enumeration variant (e.g. nx.simple_cycles) "
+                "where one removal could resolve multiple detected cycles."
     )
     iterations: int = Field(
         description="Number of find_cycle -> remove passes executed before the graph was clean."
@@ -120,7 +123,10 @@ loop:
     iterations += 1
     cycles_detected_count += 1
 
-    cycle_edges = list of (u, v) pairs from `cycle`
+    # Note: nx.find_cycle with orientation="original" returns 3-tuples
+    # (u, v, "forward"), not 2-tuples. Index positionally ([0], [1]);
+    # do not destructure as (u, v).
+    cycle_edges = list of (source, target) pairs extracted from `cycle` by positional index
     cycle_members = ordered list of node_ids in cycle
 
     For each (u, v) in cycle_edges:

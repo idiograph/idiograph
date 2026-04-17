@@ -10,7 +10,6 @@ session-YYYY-MM-DD-3.md, etc.
 Prints the path of the created file on success.
 """
 
-import sys
 from datetime import date
 from pathlib import Path
 
