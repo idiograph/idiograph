@@ -512,6 +512,10 @@ def clean_cycles(
     for e in edges:
         G.add_edge(e.source_id, e.target_id)
 
+    edge_by_pair: dict[tuple[str, str], CitationEdge] = {
+        (e.source_id, e.target_id): e for e in edges
+    }
+
     suppressed: list[SuppressedEdge] = []
     suppressed_pairs: set[tuple[str, str]] = set()
     iterations = 0
@@ -561,8 +565,7 @@ def clean_cycles(
         suppressed_pairs.add(weakest)
         suppressed.append(
             SuppressedEdge(
-                source_id=weakest[0],
-                target_id=weakest[1],
+                original=edge_by_pair[weakest],
                 citation_sum=citation_sum,
                 cycle_members=cycle_members,
             )

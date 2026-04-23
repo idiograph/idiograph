@@ -100,8 +100,10 @@ class CitationEdge(BaseModel):
 class SuppressedEdge(BaseModel):
     """Record of a single edge removed during cycle cleaning."""
 
-    source_id: str = Field(description="node_id of edge source.")
-    target_id: str = Field(description="node_id of edge target.")
+    original: CitationEdge = Field(
+        description="The full CitationEdge that was removed. All original fields preserved "
+                    "(type, citing_paper_year, strength) for downstream reconstruction."
+    )
     citation_sum: int = Field(
         description="Sum of citation_count for source and target at removal time. "
                     "The weakest-link heuristic selected the edge with the minimum of this value."
@@ -131,8 +133,8 @@ class CycleLog(BaseModel):
         """node_ids whose topological_depth must be null downstream (Node 6 handoff)."""
         result: set[str] = set()
         for e in self.suppressed_edges:
-            result.add(e.source_id)
-            result.add(e.target_id)
+            result.add(e.original.source_id)
+            result.add(e.original.target_id)
         return result
 
 

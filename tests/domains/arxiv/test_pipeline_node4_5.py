@@ -63,7 +63,7 @@ def test_two_cycle_simple() -> None:
 
     assert len(result.cycle_log.suppressed_edges) == 1
     s = result.cycle_log.suppressed_edges[0]
-    assert (s.source_id, s.target_id) == ("A", "B")
+    assert (s.original.source_id, s.original.target_id) == ("A", "B")
     assert set(s.cycle_members) == {"A", "B"}
     assert len(result.cleaned_edges) == 1
     assert (result.cleaned_edges[0].source_id, result.cleaned_edges[0].target_id) == (
@@ -94,7 +94,7 @@ def test_weakest_link_selected() -> None:
 
     assert len(result.cycle_log.suppressed_edges) == 1
     s = result.cycle_log.suppressed_edges[0]
-    assert (s.source_id, s.target_id) == ("B", "C")
+    assert (s.original.source_id, s.original.target_id) == ("B", "C")
     assert s.citation_sum == 6
 
 
@@ -106,7 +106,7 @@ def test_lex_tiebreaker() -> None:
     result = clean_cycles(nodes, edges)
 
     s = result.cycle_log.suppressed_edges[0]
-    assert (s.source_id, s.target_id) == ("A", "B")
+    assert (s.original.source_id, s.original.target_id) == ("A", "B")
 
 
 def test_two_disjoint_cycles() -> None:
