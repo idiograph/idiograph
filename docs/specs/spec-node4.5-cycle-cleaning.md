@@ -203,7 +203,7 @@ Each test has a one-line docstring. No pytest-asyncio (this is a synchronous fun
 ## Boundaries — what Node 4.5 does not do
 
 - Does not compute `topological_depth`. That is Node 6. Node 4.5 only flags *which* nodes will receive null via `cycle_log.affected_node_ids`.
-- Does not handle co-citation edges. Node 5 runs on the cleaned graph.
+- Does not handle co-citation edges. Node 5 runs on the full citation set (cleaned ∪ suppressed).
 - Does not attempt minimum feedback arc set. The weakest-link heuristic is declared, not claimed optimal. This is stated in the spec and must not be overstated in docstrings.
 - Does not touch `PaperRecord.topological_depth` fields. That field is populated by Node 6 using the `affected_node_ids` handoff.
 - Does not persist anything. Node 8 writes the `CycleLog` to provenance metadata later.
