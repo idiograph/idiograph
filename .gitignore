@@ -53,3 +53,7 @@ nodeforge.toml.local
 
 # Claude Code local config
 .claude/
+
+# Session scratch / prompt artifacts
+tmp/
+*-prompt.md

@@ -70,6 +70,21 @@ uv run pytest tests/ -v
 ```
 
 Record the baseline test count at session start. Any failure or regression: stop and fix before continuing.
+
+---
+
+## Branch Protection
+
+`main` is branch-protected. All changes — code, docs, session summaries — go through a PR. Never commit directly to `main`. Required status checks: `tests/test` and `codecov/patch`.
+
+To recover from an accidental commit to `main`:
+
+```bash
+git checkout -b <branch-name>
+git reset --soft origin/main
+git status  # confirm commit is on new branch, main is clean
+```
+
 ---
 
 ## Directory Structure
