@@ -1,7 +1,5 @@
 # CLAUDE.md — Idiograph
-
-**This file is the orientation entry point for every Claude Code session.**
-Read it before doing anything else. Do not implement before completing Step 1 of the session workflow.
+*Orientation entry point for every Claude Code session. Read before doing anything else.*
 
 ---
 
@@ -9,36 +7,25 @@ Read it before doing anything else. Do not implement before completing Step 1 of
 
 **Name:** Idiograph (never NodeForge — that name is retired)
 **Repo:** `idiograph/idiograph` on GitHub (user: `ryansmith3d-pixel`)
-**Domain:** `theidiograph.com` (via Porkbun)
-**Language:** Python 3.13
-**Package manager:** `uv`
+**Language:** Python 3.13 · Package manager: `uv`
 
-**Thesis:** Deterministic, semantically grounded systems are what AI tooling in production environments actually requires. The LLM is a node in the graph, not the orchestrator. Every phase should reinforce this argument, not just build features.
+**Thesis:** Deterministic, semantically grounded systems are what AI tooling in production environments actually requires. The LLM is a node in the graph, not the orchestrator. Every phase reinforces this argument.
 
 ---
 
-## Current State
+## Before You Write Any Code
 
-**Phase 8 — COMPLETE** (MCP integration via stdio transport)
-- Six tools exposed: `get_node`, `get_edges_from`, `update_node`, `summarize_intent`, `validate_graph`, `execute_graph`
-- 44 tests passing
-- GitHub Actions CI with test badge live
-- Smoke test script: `scripts/test_mcp_smoke.py`
-
-**Phase 9 — IN PROGRESS**
-See `docs/specs/spec-phase-08-09-task-inventory.md` for the full task inventory.
-
-Four tracks:
-- **Track 1 — Demo** (blocking gate): richer arXiv pipeline, vector index, view functions, FastAPI, D3 renderer, self-description graph
-- **Track 2 — Documentation scripts**: `scripts/new_session_summary.py`, `scripts/new_amendment.py`
-- **Track 3 — Essay** (parallel, mobile-compatible)
-- **Track 4 — Housekeeping**: CLAUDE.md audit, rename sweep, README polish, legal headers
+1. Read this file ✓
+2. Read the relevant spec file in `docs/specs/`
+3. Run `uv run pytest tests/ -v` — confirm baseline test count
+4. Declare the session type and give the orientation paragraph
+5. Only then proceed to implementation
 
 ---
 
 ## Session Workflow
 
-**Declare the session type before doing anything:**
+**Declare the session type:**
 
 | Type | Purpose | Produces |
 |---|---|---|
@@ -46,24 +33,20 @@ Four tracks:
 | **Design** | Plan before building | Update to a living spec |
 | **Reconciliation** | Align docs with code; resolve drift | Amendment entries only |
 
-**Every session runs these steps in order:**
+**Steps in order:**
+1. Orientation — one paragraph: current phase, last session output, this session's goal
+2. Spec review — read the relevant spec before any code
+3. Implementation — micro-sessions, system runnable at every stopping point
+4. Post-mortem — what completed, what deferred, amendments log updated
+5. Session artifact — one artifact per session
 
-1. **Orientation** — one paragraph: current phase, last session output, this session's goal
-2. **Prior phase review** — depth scaled to time since last session
-3. **Retention check** — opt-in, must be explicitly requested
-4. **Phase overview** — Implementation sessions only: goal, thesis connection, key decisions before any code
-5. **Implementation** — micro-sessions, system runnable at every stopping point
-6. **Post-mortem** — what completed, what deferred, amendments log updated
-7. **Session artifact** — one artifact per session, type determined by session type
-8. **Retention check on current session** — opt-in
-
-**No phase ends with broken code.** If a session ends mid-phase, record the stopping point in Step 6.
+**No phase ends with broken code.** If a session ends mid-phase, record the stopping point.
 
 ---
 
 ## Test Gate
 
-**All tests must pass before and after every change. The test count never regresses — new work only adds tests.**
+All tests must pass before and after every change. The test count never regresses.
 
 ```bash
 uv run pytest tests/ -v
@@ -75,14 +58,16 @@ Record the baseline test count at session start. Any failure or regression: stop
 
 ## Branch Protection
 
-`main` is branch-protected. All changes — code, docs, session summaries — go through a PR. Never commit directly to `main`. Required status checks: `tests/test` and `codecov/patch`.
+`main` is branch-protected. All changes go through a PR. Never commit directly to `main`.
+
+Required status checks: `tests/test` and `codecov/patch`.
 
 To recover from an accidental commit to `main`:
 
 ```bash
 git checkout -b <branch-name>
 git reset --soft origin/main
-git status  # confirm commit is on new branch, main is clean
+git status
 ```
 
 ---
@@ -97,11 +82,12 @@ src/idiograph/
             __init__.py     ← contains register_all()
             handlers.py
             pipeline.py
+        color_designer/     ← optional [qt] extra
     mcp_server.py       ← MCP interface layer, does not modify core/
     main.py             ← CLI: idiograph run, idiograph serve
 
-tests/                  ← 44 tests, all must pass
-scripts/                ← gen_diagrams.py, test_mcp_smoke.py, and Phase 9 automation scripts
+tests/
+scripts/                ← gen_diagrams.py, test_mcp_smoke.py, automation scripts
 docs/
     decisions/          ← amendments.md (single append-only file)
     phases/             ← frozen phase summaries
@@ -117,35 +103,30 @@ docs/
 
 ## Architectural Constraints
 
-These are non-negotiable. If a proposed change conflicts with one, stop and raise it explicitly before proceeding.
+Non-negotiable. If a proposed change conflicts with one, stop and raise it before proceeding.
 
 | Constraint | Source | Rationale |
 |---|---|---|
-| `summarize_intent()` must be purely algorithmic — no LLM calls | AMD-013 | An LLM call at the query layer undercuts the determinism thesis at its foundation |
-| Edge `type` must be an open string, never a closed enum | AMD-003 | Phase 10 requires causal edge types (MODULATES, DRIVES, OCCLUDES) without modifying the Edge model |
-| Node `domain` is metadata/label only, never a structural constraint | AMD-013 | Phase 10 rendering nodes must fit the same architecture without special-casing |
-| Domain implementations live under `domains/<domain>/`, never as siblings to `core/` | AMD-011 | The directory communicates the architecture without a README |
-| `open(path)` requires `encoding="utf-8"` explicitly | Windows compat | cp1252 default causes silent failures |
+| `summarize_intent()` must be purely algorithmic — no LLM calls | AMD-013 | LLM call at the query layer undercuts the determinism thesis |
+| Edge `type` is an open string — never a closed enum | AMD-003 | Phase 10 requires causal edge types without modifying the Edge model |
+| Node `domain` is metadata/label only — never a structural constraint | AMD-013 | Phase 10 rendering nodes must fit the same architecture without special-casing |
+| Domain implementations live under `domains/<domain>/` — never siblings to `core/` | AMD-011 | Directory communicates the architecture |
 | Generated files in `docs/generated/` are never hand-edited | AMD-012 | Fix the generator, not the output |
-| Port type enforcement: add after Phase 9, not Phase 10 | AMD-014 | Credibility requirement, not a stretch goal |
-| State management (AMD-009): module-level graph → registry | AMD-009 | Forcing function is a real multi-user or persistence requirement; do not migrate speculatively |
+| Port type enforcement: after Phase 9, not Phase 10 | AMD-014 | Credibility requirement, not stretch goal |
+| State management migration: only when a real forcing requirement exists | AMD-009 | Do not migrate speculatively |
+| `open(path)` requires `encoding="utf-8"` explicitly | Windows compat | cp1252 default causes silent failures |
 
 ---
 
 ## Amendment System
 
-All architectural decisions are formalized as AMD-numbered entries in `docs/decisions/amendments.md`.
+All architectural decisions are AMD-numbered entries in `docs/decisions/amendments.md`.
 
-**Status vocabulary:**
-- `Accepted` — in force, implemented
-- `Accepted — Not Yet Implemented` — decision made, code not written
-- `Superseded by AMD-NNN` — replaced; keep the record
-- `Deferred` — valid, not current build target
-- `Rejected` — considered and ruled out; keep the record
+**Status vocabulary:** `Accepted` · `Accepted — Not Yet Implemented` · `Superseded by AMD-NNN` · `Deferred` · `Rejected`
 
-**AMD sequence so far:** AMD-001 through AMD-018. Next is AMD-019.
+AMD-001 through AMD-018 complete. Next is AMD-019.
 
-When a decision is made or changed during a session, append an AMD entry before closing. Do not defer amendment logging to a later session.
+When a decision is made or changed during a session, append an AMD entry before closing.
 
 ---
 
@@ -184,8 +165,8 @@ uv run python scripts/test_mcp_smoke.py
 uv run python scripts/gen_diagrams.py
 ```
 
-**Windows / PowerShell notes:**
-- Use `Select-Object -First 30` not `head`
+**Windows / Git Bash notes:**
+- Use `Select-Object -First 30` not `head` in PowerShell
 - Write files via Python directly; PowerShell `>` produces empty files
 - Always `encoding="utf-8"` on `open()` calls
 
@@ -198,76 +179,23 @@ uv run python scripts/gen_diagrams.py
 | Pydantic V2 | Schema validation — Node, Edge, Graph, Port models |
 | Typer | CLI (`idiograph run`, `idiograph serve`) |
 | NetworkX | Graph topology, topological sort |
-| httpx | arXiv API calls |
-| anthropic | LLM call handler (Haiku in pipeline; Sonnet in dev) |
+| httpx | API calls |
+| anthropic | LLM call handler |
 | python-dotenv | `.env` loading |
+| PySide6 | Color Designer UI (`[qt]` extra) |
 | ruff | Linting |
 | pytest | Test runner |
 
 ---
 
-## What "NodeForge" Means
+## OpenAlex API
 
-If you encounter "NodeForge" anywhere in the codebase, it is a rename artifact. The project is Idiograph. Flag it — do not preserve it. Task 4.4 in the Phase 9 inventory is a full rename sweep.
-
----
-
-## Before You Write Any Code
-
-1. Read this file ✓
-2. Run `uv run pytest tests/ -v` — confirm 44 tests pass
-3. Declare the session type
-4. Give the orientation paragraph (Step 1 of the workflow)
-5. Only then proceed to implementation
+- Auth: `api_key=<value>` param loaded from `.env` via python-dotenv
+- Rate limit: 10 rps hard limit; 150ms sleep is project standard
+- Reference client: `scripts/spikes/openalex_crispr/openalex_client.py`
 
 ---
 
----
+## "NodeForge" References
 
-## Color Designer Tool
-
-**Location:** `tools/color-designer/`
-**Environment:** Separate `uv` environment — do NOT use the root environment
-**Spec:** `tools/color-designer/SPEC.md` — read before implementing anything
-
-### Environment commands
-
-```bash
-cd tools/color-designer
-uv run python src/main.py        # launch the app
-uv run python test_token_store.py  # verify token store
-```
-
-### Architecture constraints
-
-| Constraint | Rationale |
-|---|---|
-| No Idiograph-specific logic inside tool core | Tool is built to extract as standalone |
-| Token file is open registry — never hardcode role names in UI code | Roles are data, not code |
-| `token_store.py` is pure data layer — no UI imports | Survives any UI rewrite |
-| All file operations use `encoding="utf-8"` explicitly | Windows compat |
-| Node view state is per-instance, not global | Each node remembers its own view |
-
-### Test gate
-
-No pytest suite yet for the color designer. Before and after every change:
-
-```bash
-cd tools/color-designer
-uv run python test_token_store.py
-```
-
-Must exit cleanly with "Round-trip passed" before proceeding.
-
-### Current phase
-
-**Phase G — COMPLETE**
-**Verify first:** Schema Compact view collapse — may have residual height bug after
-port display mode strip removal. Run the app and switch Schema to Compact before
-starting any new work.
-
-**Phase H and beyond are deferred.** Next work is color design iteration using the
-tool as built.
-
-*Last updated: 2026-04-06*
-*Owner: Idiograph project — Ryan Smith*
+If you encounter "NodeForge" anywhere in the codebase, it is a rename artifact. Flag it — do not preserve it. Task 4.4 in the Phase 9 inventory is the full rename sweep.
