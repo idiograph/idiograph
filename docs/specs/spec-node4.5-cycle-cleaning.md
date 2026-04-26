@@ -101,9 +101,21 @@ class CycleCleanResult(BaseModel):
         description="Edge set with cycle-breaking edges removed. Safe for DAG algorithms."
     )
     cycle_log: CycleLog = Field(description="Audit trail of what was removed and why.")
+    input_node_ids: frozenset[str] = Field(
+        exclude=True,
+        repr=False,
+        description="Witness of the node_id set this result was validated "
+                    "against. Required at construction. See §Constructor invariant."
+    )
+
+    @model_validator(mode="after")
+    def _validate_edge_endpoints(self) -> "CycleCleanResult":
+        ...  # raises ValidationError on any orphaned endpoint
 ```
 
 **Why a property, not a stored field:** `affected_node_ids` is derived from `suppressed_edges`. Storing it would open the possibility of the two drifting. Deriving on access keeps a single source of truth.
+
+**Constructor invariant.** `CycleCleanResult` carries a required witness field `input_node_ids: frozenset[str] = Field(exclude=True, repr=False)` together with a `@model_validator(mode="after")` that raises `pydantic.ValidationError` if any endpoint of `cleaned_edges` is absent from the witness. `clean_cycles()` populates the witness directly from its `nodes` parameter at construction time. The `Field(exclude=True)` setting omits the witness from `model_dump()` output and from `repr()` while still requiring it on every construction path (direct `__init__`, `model_validate`, `model_validate_json`). A consequence: `model_validate(model_dump(result))` raises because the dumped payload lacks the witness — persistence reload sites (Node 8) must re-supply `input_node_ids` from the loaded node list. Once a `CycleCleanResult` exists, the invariant *every `cleaned_edges` endpoint is a `node_id` in the witness* holds, and downstream consumers (Node 5, Node 6, Node 7, Node 8) trust this contract without per-consumer defensive checks. This is the Python-idiomatic version of "make illegal states unrepresentable" — the type system enforces the contract once at the boundary, not at every consumption site. The pattern was chosen specifically over `PrivateAttr` and over a `construct_validated` factory because both leave direct `CycleCleanResult(...)` construction unprotected; `Field(exclude=True)` on a required field fires the validator on every construction path while keeping the witness out of the serialized payload.
 
 ---
 
@@ -151,7 +163,10 @@ Return CycleCleanResult(cleaned_edges=remaining_edges, cycle_log=CycleLog(...))
 
 ## Contracts and edge cases
 
-**Missing node in citation lookup.** If a `CitationEdge` references a `node_id` not present in `nodes`, the edge is treated as having `citation_count=0` for that endpoint. Log at WARNING with the missing `node_id`. Do not raise — the spec requires Node 4.5 to handle the graph it is given, including malformed data. Node 8 provenance will show these warnings.
+**Missing node in citation lookup — supersedes the prior graceful-degradation contract.** If a `CitationEdge` references a `node_id` not present in `nodes`:
+
+- Citation-count lookup during cycle scoring still treats the missing endpoint as `citation_count=0` and logs at WARNING naming the missing `node_id`. This part of the prior contract stands; the warning still flows to Node 8 provenance.
+- Result construction raises `pydantic.ValidationError` if the surviving `cleaned_edges` set retains an edge whose endpoint is not in the input node set. The `Field(exclude=True)` witness on `CycleCleanResult` and its `@model_validator(mode="after")` (see §Data models — Constructor invariant) make orphaned endpoints unconstructible. The previous "Do not raise — the spec requires Node 4.5 to handle the graph it is given, including malformed data" language is superseded: malformed input now surfaces at the type boundary instead of propagating silently downstream. The graceful-degradation contract was incompatible with the "make illegal states unrepresentable" pattern adopted for Node 6 and beyond, and the validator is the chosen resolution.
 
 **Empty cycle set.** If `find_cycle` raises on the first call, return `CycleCleanResult(cleaned_edges=list(edges), cycle_log=CycleLog(suppressed_edges=[], cycles_detected_count=0, iterations=0))`. The input edge list is copied, not aliased.
 
@@ -194,7 +209,7 @@ Each test has a one-line docstring. No pytest-asyncio (this is a synchronous fun
 | `test_nested_cycles` | One edge removal breaks multiple cycles: cycles_detected_count ≥ len(suppressed_edges) |
 | `test_self_loop` | Self-loop removed; cycle_members is a single node_id |
 | `test_affected_node_ids_property` | Derived property returns union of source and target node_ids across suppressed edges |
-| `test_missing_citation_node_warns` | Edge referencing unknown node_id: treated as citation_count=0, WARNING logged, no raise |
+| `test_missing_citation_node_raises` | Edge referencing unknown node_id: WARNING still logged, then `clean_cycles()` raises `ValidationError` at result construction (supersedes the prior "do not raise" contract) |
 | `test_preserves_input_edge_order` | cleaned_edges retains input ordering for non-removed edges |
 | `test_input_not_mutated` | Original input lists unchanged after call (pure function property) |
 

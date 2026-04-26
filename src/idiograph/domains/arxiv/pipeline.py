@@ -593,6 +593,7 @@ def clean_cycles(
             cycles_detected_count=cycles_detected_count,
             iterations=iterations,
         ),
+        input_node_ids=frozenset(n.node_id for n in nodes),
     )
 
 

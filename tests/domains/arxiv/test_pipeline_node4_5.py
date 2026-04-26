@@ -5,10 +5,12 @@ import logging
 
 import networkx as nx
 import pytest
+from pydantic import ValidationError
 
 from idiograph.domains.arxiv.models import (
     CitationEdge,
     CycleCleanResult,
+    CycleLog,
     PaperRecord,
 )
 from idiograph.domains.arxiv.pipeline import clean_cycles
@@ -191,18 +193,31 @@ def test_affected_node_ids_property() -> None:
     assert result.cycle_log.affected_node_ids == {"A", "B", "C", "D"}
 
 
-def test_missing_citation_node_warns(caplog: pytest.LogCaptureFixture) -> None:
-    """Edge referencing unknown node_id: treated as citation_count=0, WARNING logged, no raise."""
+def test_missing_citation_node_raises(caplog: pytest.LogCaptureFixture) -> None:
+    """Edge with unknown node_id: WARNING logged, then ValidationError at construction.
+
+    Supersedes the prior graceful-degradation contract. The citation-count
+    lookup during cycle scoring still treats the unknown endpoint as 0 and
+    emits a WARNING (preserved behavior), but the CycleCleanResult validator
+    now raises when the surviving cleaned_edges retain an orphaned endpoint
+    not in the input node set. See spec-node4.5-cycle-cleaning.md §Contracts
+    "Missing node in citation lookup — supersedes the prior graceful-
+    degradation contract".
+    """
     # Node "C" is referenced by edges but not in nodes.
     nodes = [_rec("A", 10), _rec("B", 10)]
     edges = [_edge("A", "B"), _edge("B", "C"), _edge("C", "A")]
 
     with caplog.at_level(logging.WARNING, logger="idiograph.arxiv.pipeline"):
-        result = clean_cycles(nodes, edges)
+        with pytest.raises(ValidationError) as exc_info:
+            clean_cycles(nodes, edges)
 
+    # Citation-count WARNING still fires before the construction-time raise.
     warnings = [r for r in caplog.records if r.levelname == "WARNING"]
     assert any("C" in r.getMessage() for r in warnings)
-    assert result.cycle_log.iterations >= 1
+    # Validator names the orphan endpoint and the witness contract.
+    assert "C" in str(exc_info.value)
+    assert "input_node_ids" in str(exc_info.value)
 
 
 def test_preserves_input_edge_order() -> None:
@@ -230,3 +245,103 @@ def test_input_not_mutated() -> None:
     assert nodes == nodes_snapshot
     assert edges == edges_snapshot
     assert len(edges) == 2
+
+
+# ── CycleCleanResult validator tests (Node 6 prerequisite) ──────────────────
+
+
+def test_validator_passes_on_clean_cycles_output() -> None:
+    """Happy path: results produced by clean_cycles() always satisfy the validator."""
+    nodes = [_rec("A", 10), _rec("B", 10), _rec("C", 10)]
+    edges = [_edge("A", "B"), _edge("B", "C"), _edge("C", "A")]
+
+    result = clean_cycles(nodes, edges)
+
+    assert result.input_node_ids == frozenset({"A", "B", "C"})
+    for e in result.cleaned_edges:
+        assert e.source_id in result.input_node_ids
+        assert e.target_id in result.input_node_ids
+
+
+def test_validator_rejects_orphan_source() -> None:
+    """Direct construction with an edge whose source_id is absent from the witness raises."""
+    edge = _edge("X", "A")
+    with pytest.raises(ValidationError) as exc_info:
+        CycleCleanResult(
+            cleaned_edges=[edge],
+            cycle_log=CycleLog(cycles_detected_count=0, iterations=0),
+            input_node_ids=frozenset({"A", "B"}),
+        )
+    msg = str(exc_info.value)
+    assert "orphaned source_id" in msg
+    assert "'X'" in msg
+
+
+def test_validator_rejects_orphan_target() -> None:
+    """Direct construction with an edge whose target_id is absent from the witness raises."""
+    edge = _edge("A", "Y")
+    with pytest.raises(ValidationError) as exc_info:
+        CycleCleanResult(
+            cleaned_edges=[edge],
+            cycle_log=CycleLog(cycles_detected_count=0, iterations=0),
+            input_node_ids=frozenset({"A", "B"}),
+        )
+    msg = str(exc_info.value)
+    assert "orphaned target_id" in msg
+    assert "'Y'" in msg
+
+
+def test_witness_required_at_construction() -> None:
+    """Constructing without input_node_ids raises ValidationError for the missing field."""
+    with pytest.raises(ValidationError) as exc_info:
+        CycleCleanResult(
+            cleaned_edges=[],
+            cycle_log=CycleLog(cycles_detected_count=0, iterations=0),
+        )
+    # Pydantic v2 surfaces missing required fields with type=missing and the
+    # field name in the error report.
+    assert "input_node_ids" in str(exc_info.value)
+
+
+def test_model_dump_omits_witness() -> None:
+    """Field(exclude=True) keeps the witness out of model_dump() JSON output."""
+    nodes = [_rec("A", 5), _rec("B", 5)]
+    edges = [_edge("A", "B")]
+
+    result = clean_cycles(nodes, edges)
+    dumped = result.model_dump()
+
+    assert "input_node_ids" not in dumped
+    assert "cleaned_edges" in dumped
+    assert "cycle_log" in dumped
+
+
+def test_serialization_round_trip_requires_witness() -> None:
+    """model_validate(model_dump(result)) raises because the witness was excluded.
+
+    Distinguishes Field(exclude=True) from PrivateAttr (which would round-trip
+    silently as the default empty value) and from a factory pattern (which
+    would not enforce on plain construction at all). Persistence reload sites
+    must re-supply input_node_ids from the loaded node list — the contract
+    Node 8 will honor.
+    """
+    nodes = [_rec("A", 5), _rec("B", 5)]
+    edges = [_edge("A", "B")]
+
+    result = clean_cycles(nodes, edges)
+    dumped = result.model_dump()
+
+    with pytest.raises(ValidationError) as exc_info:
+        CycleCleanResult.model_validate(dumped)
+    assert "input_node_ids" in str(exc_info.value)
+
+
+def test_clean_cycles_populates_witness() -> None:
+    """clean_cycles() builds input_node_ids from its nodes parameter."""
+    nodes = [_rec("A", 5), _rec("B", 5), _rec("C", 5), _rec("D", 5)]
+    edges = [_edge("A", "B"), _edge("C", "D")]
+
+    result = clean_cycles(nodes, edges)
+
+    assert result.input_node_ids == frozenset(n.node_id for n in nodes)
+    assert result.input_node_ids == frozenset({"A", "B", "C", "D"})

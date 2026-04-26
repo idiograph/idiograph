@@ -4,7 +4,7 @@
 # Idiograph — deterministic semantic graph execution for production AI pipelines.
 # https://github.com/idiograph/idiograph
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class PaperRecord(BaseModel):
@@ -139,12 +139,53 @@ class CycleLog(BaseModel):
 
 
 class CycleCleanResult(BaseModel):
-    """Return value of clean_cycles(). Separates cleaned graph from audit log."""
+    """Return value of clean_cycles(). Separates cleaned graph from audit log.
+
+    Carries a witness of the input node set against which cleaned_edges has
+    been validated. The witness is required at construction; the validator
+    fires on every construction path, so the invariant 'every cleaned_edges
+    endpoint is a node_id in the witness' holds whenever a CycleCleanResult
+    exists. Downstream consumers (Node 5, Node 6, Node 7, Node 8) trust
+    this contract and run no per-consumer defensive checks.
+
+    The witness is excluded from model_dump() output and from repr() — it
+    is structural metadata, not part of the serialized graph payload. A
+    consequence: model_validate(model_dump(result)) raises ValidationError
+    because the witness is missing from the dump and required on reload.
+    Persistence reload sites must re-supply input_node_ids from the loaded
+    node list. This is the contract Node 8 will honor.
+    """
 
     cleaned_edges: list[CitationEdge] = Field(
         description="Edge set with cycle-breaking edges removed. Safe for DAG algorithms."
     )
     cycle_log: CycleLog = Field(description="Audit trail of what was removed and why.")
+    input_node_ids: frozenset[str] = Field(
+        exclude=True,
+        repr=False,
+        description="Witness of the node_id set this result was validated "
+                    "against. Required at construction. Excluded from "
+                    "model_dump() and repr(). Persistence reload sites "
+                    "must re-supply this from the loaded node list.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_edge_endpoints(self) -> "CycleCleanResult":
+        """Every cleaned_edges endpoint must be a node_id in the witness."""
+        for e in self.cleaned_edges:
+            if e.source_id not in self.input_node_ids:
+                raise ValueError(
+                    f"cleaned_edges contains orphaned source_id "
+                    f"{e.source_id!r} on edge {e!r} — not present in "
+                    f"input_node_ids witness"
+                )
+            if e.target_id not in self.input_node_ids:
+                raise ValueError(
+                    f"cleaned_edges contains orphaned target_id "
+                    f"{e.target_id!r} on edge {e!r} — not present in "
+                    f"input_node_ids witness"
+                )
+        return self
 
 
 def make_node_id(work: dict) -> str:
