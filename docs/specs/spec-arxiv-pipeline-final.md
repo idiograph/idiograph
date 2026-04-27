@@ -2,6 +2,7 @@
 **Status:** FROZEN — implementation ready
 **Created:** 2026-04-06
 **Revised:** 2026-04-07 (v3 — final review pass; hop_depth added to renderer contract; N_max_co_citation added to declared parameters)
+**Revised:** 2026-04-27 (post-Node-6 sweep — Node 6 section rewritten and renderer contract updated per AMD-019)
 **Companion documents:** demo_design_spec-1.md, session-2026-04-06.md
 
 ---
@@ -28,8 +29,8 @@ Every node exiting the pipeline must carry:
 | `authors` | list[string] | arXiv / OpenAlex | |
 | `community_id` | string | Node 7 — Infomap | |
 | `pagerank` | float | Node 6 — NetworkX | |
-| `topological_depth` | integer \| null | Node 6 — NetworkX | Longest path from root in the cycle-cleaned DAG. Null if node is part of a suppressed cycle. |
-| `hop_depth` | integer | Node 3 / Node 4 | BFS traversal distance from seed at time of retrieval. Available immediately; does not depend on Node 6. Distinct from `topological_depth` — see Node 3 ranking note. |
+| `hop_depth_per_root` | dict[string, integer] | Node 6 — NetworkX | BFS distance to each root in the assembled (forest-aware) graph. Single-seed graphs carry one entry. Per AMD-019. |
+| `traversal_direction` | string | Node 6 — NetworkX | One of `seed`, `backward`, `forward`, `mixed`. Records the directed-graph relationship between this node and the root set. Per AMD-019. |
 
 **Node Identity:** `arxiv_id` cannot serve as the universal registry key. Backward traversal surfaces papers that predate arXiv entirely — foundational ML works (backpropagation, Hopfield networks, original PageRank) have DOIs but no arXiv IDs. The pipeline uses a synthetic `node_id` as the canonical internal key:
 
@@ -147,7 +148,7 @@ Where:
 
 **Note on hop_depth scoring:** `log(hop_depth + 1)` is monotonically increasing — papers at hop_depth=2 score higher than equally-cited papers at hop_depth=1. This is intentional: deeper foundational works are what backward traversal is designed to surface. A paper cited by 5000 works across 30 years scores higher than a paper cited by 5000 works across 5 years, all else equal. If this behavior is not desired, replace with `log(1 / hop_depth)` to invert. The current formula must be treated as a declared design choice, not a default.
 
-**Note on `hop_depth` vs `topological_depth`:** The full graph-structural `topological_depth` (longest path from root in the complete DAG) is computed in Node 6, after traversal is complete. Node 3's ranking uses `hop_depth` — the BFS traversal distance — which is available immediately and is a valid proxy for lineage distance at ranking time. These are related but distinct metrics; both are retained in the final node schema.
+**Note on Node 3's hop_depth vs Node 6's hop_depth_per_root:** Node 3's ranking uses the BFS traversal distance from the seed at retrieval time — a transient quantity available immediately, used to score candidates during traversal. Node 6 computes `hop_depth_per_root` against the assembled forest after Node 4.5. The two are related (Node 6's distance from the seed root agrees with Node 3's BFS depth in the single-seed case) but distinct in role. Per AMD-019, only `hop_depth_per_root` and `traversal_direction` are retained on the final node schema; Node 3's BFS depth is a ranking-time scalar, not a persisted field.
 
 **Optimizes for:** foundational works, persistent citation across time, intellectual lineage. Older papers with high accumulated citation count score highest. Recency penalized — this is intentional.
 
@@ -210,7 +211,7 @@ The two ranking functions are fully independent. They answer different questions
 2. Log all detected cycles with their member `node_id`s and edge directions.
 3. For each cycle, remove the edge with the lowest `citation_count` sum between source and target (weakest link heuristic). If tied, remove the lexicographically later edge by `node_id` pair — deterministic tiebreaker.
 4. Repeat until no cycles remain.
-5. Nodes involved in suppressed edges retain `topological_depth: null` in their schema to mark that their depth is not computable without the suppressed edge.
+5. Cycle suppression is recorded in `cycle_log` for audit and provenance (Node 8). Per AMD-019, no per-node depth field is nulled or annotated as a result of suppression; depth metrics derive from the cleaned graph only, and `cycle_log.affected_node_ids` is the audit-side record of which nodes were involved.
 
 **This is not a silent fix.** Cycle suppression is logged to provenance metadata (Node 8). The renderer surfaces a count of suppressed edges in the graph metadata panel. The user must be able to audit what was cleaned and why.
 
@@ -237,14 +238,16 @@ A minimum strength threshold (shared citation count below which co-citation edge
 **Purpose:** compute graph-structural metrics per node
 
 **Inputs:** complete node + direct citation edge set (post-cycle cleaning from Node 4.5)
-**Outputs:** `pagerank`, `topological_depth` added to each node
-**Implementation:** NetworkX, deterministic
+**Outputs:** `pagerank`, `hop_depth_per_root`, `traversal_direction` added to each node
+**Implementation:** NetworkX, deterministic. Two pure functions: `compute_depth_metrics()` and `compute_pagerank()`.
 
-**Prerequisite:** Node 4.5 must complete before Node 6 runs. Metric computation assumes a cycle-free graph. This dependency is explicit in the pipeline execution order.
+**Prerequisite:** Node 4.5 must complete before Node 6 runs. Metric computation operates on the cleaned graph. This dependency is explicit in the pipeline execution order.
 
-**`pagerank`:** computed with declared damping factor (default 0.85). All parameters explicit.
+**`pagerank`:** computed via `nx.pagerank` over the cleaned directed graph with declared damping factor (default 0.85). Isolates included. All parameters explicit.
 
-**`topological_depth`:** longest path from root node in the cycle-cleaned citation DAG. Computed via NetworkX `dag_longest_path_length` from root. Nodes with `topological_depth: null` (from suppressed cycle edges) are excluded from this computation and carry null in their schema.
+**`hop_depth_per_root`:** per-root BFS distance over the undirected view of the cleaned graph. One entry per root in the assembled (possibly multi-seed, per AMD-017) graph. Single-seed graphs carry one entry — no special case. Per AMD-019.
+
+**`traversal_direction`:** one of `seed`, `backward`, `forward`, `mixed`, derived from per-root reachability over the directed view. Records the citation-semantic relationship between each node and the root set: `backward` for papers the seed cites (descendants in the directed graph); `forward` for papers citing the seed (ancestors); `seed` for roots; `mixed` when multiple roots produce conflicting labels in a forest. Per AMD-019.
 
 ---
 
