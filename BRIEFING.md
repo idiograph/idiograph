@@ -1,14 +1,14 @@
 # BRIEFING.md — Idiograph
 *Live state. Updated when main changes, not at session end.*
-*Last updated: 2026-04-26 (post PR #16 merge)*
+*Last updated: 2026-04-26 (post PR #18 merge)*
 
 ---
 
 ## Current State
 
 **Phase 9 — IN PROGRESS**
-Main head: `dc2f6e4`
-Test baseline: **120 passing**
+Main head: `22a32b8`
+Test baseline: **144 passing**
 Worktree: clean; no open branches pending merge.
 
 ---
@@ -24,13 +24,14 @@ All functions individually callable and tested. No orchestrator chains them yet.
 - **Node 4** — `forward_traverse()` — emerging-work ranking (α·velocity + β·acceleration)
 - **Node 4.5** — `clean_cycles()` — weakest-link cycle suppression; returns `CycleCleanResult` with `cleaned_edges` and `cycle_log.suppressed_edges[].original` (full `CitationEdge`, no field loss). As of PR #16, `CycleCleanResult` carries a `Field(exclude=True)` witness `input_node_ids` and a `@model_validator(mode='after')` that fails construction on orphan-endpoint edges. Round-trip through `model_dump()` / `model_validate()` requires the witness to be re-supplied — persistence contract for Node 8.
 - **Node 5** — `compute_co_citations()` — undirected co-citation edges, strength = shared-citer count, sorted `(-strength, source_id, target_id)`
+- **Node 6** — `compute_depth_metrics()` (per-root BFS over directed and undirected views; `traversal_direction` ∈ {seed, backward, forward, mixed} per AMD-019) and `compute_pagerank()` (single `nx.pagerank` call, isolates included). Two pure functions, deterministic. PR #18 also removed `topological_depth` from `PaperRecord` and added `hop_depth_per_root` + `traversal_direction` per AMD-019; `CycleLog.affected_node_ids` becomes audit/provenance-only.
 
 ### Adjacent systems
 
 - Phase 6 arXiv abstract-processing pipeline in `handlers.py` (old executor-style, separate from the citation graph)
 - Color Designer domain in `domains/color_designer/` — complete through AMD-018
 - MCP server (`mcp_server.py`) — Phase 8 complete, six tools exposed over stdio
-- 120 tests: 10 Node 0, 13 Node 3, 9 Node 4, 12 Node 4.5 + 7 validator, 20 Node 5, plus core/executor/query/graph/models
+- 144 tests: 10 Node 0, 13 Node 3, 9 Node 4, 12 Node 4.5 + 7 validator, 20 Node 5, 16 Node 6 depth + 8 Node 6 pagerank, plus core/executor/query/graph/models
 
 ---
 
@@ -38,24 +39,24 @@ All functions individually callable and tested. No orchestrator chains them yet.
 
 | Decision | Status |
 |---|---|
-| Next pipeline node | **Node 6 (metric computation)** — spec landing-ready (`spec-node6-metrics.md`), implementation session opens directly |
-| Orchestrator placement | Deferred until Node 6 lands |
+| Next pipeline node | **Node 7 (community detection)** — Infomap with Leiden fallback. Own design session expected (Infomap parameters, community-count emergence, LOD implications) |
+| Orchestrator placement | Deferred to post-Node-7 per Node 6 design session — needs more producers to compose meaningfully |
+| Post-Node-6 docs sweep | Pending — small one-shot doc PR; can land alongside or before Node 7 design |
 
 ---
 
 ## What's Next
 
 **Pipeline build-out (sequential):**
-1. **Node 6 — metric computation** — `compute_depth_metrics()` (per-root BFS, traversal direction) + `compute_pagerank()` via NetworkX on the cleaned graph. Pure computation, deterministic, no new deps. Spec frozen-ready; implementation prompt drafted at `tmp/prompt-node6-implementation.md`. Lands the spec in the same PR per §Spec landing note. Target: 120 → 144 (+24 tests).
-2. **Pipeline orchestrator** — first `run_arxiv_pipeline(seeds)` chaining Node 0 → (3, 4) → 4.5 → 5 → 6. Motivates the shape of Node 8's registry.
-3. **Node 7 — community detection** — Infomap with Leiden fallback. Own design session (Infomap parameters, community-count emergence, LOD implications).
-4. **Node 8 — registry** — content-addressed cache, JSON-serializable graphs on disk. Honors the round-trip-requires-witness contract from PR #16: every reload site reconstructs `input_node_ids` from the loaded node list before constructing `CycleCleanResult`.
-5. **Demo surface** — vector index (ChromaDB), view functions, FastAPI, D3 renderer, self-description graph.
-6. **Node 0.5 + Node 5.5 (AMD-016 LLM nodes)** — placement after the demo surface exists, not before.
+1. **Node 7 — community detection** — Infomap with Leiden fallback. Own design session opens it. Inherits the same `CycleCleanResult` trust pattern PR #16 established; expected to surface its own prerequisite refactor (validator on the next-stage result type that adds Node 6's metrics).
+2. **Pipeline orchestrator** — `run_arxiv_pipeline(seeds)` chaining Node 0 → (3, 4) → 4.5 → 5 → 6 → 7. Deferred per Node 6 design session: composing two producers is a thin wrapper; composing four is a real architecture decision with shape implications for Node 8's registry.
+3. **Node 8 — registry** — content-addressed cache, JSON-serializable graphs on disk. Honors the round-trip-requires-witness contract from PR #16: every reload site reconstructs `input_node_ids` from the loaded node list before constructing `CycleCleanResult`.
+4. **Demo surface** — vector index (ChromaDB), view functions, FastAPI, D3 renderer, self-description graph.
+5. **Node 0.5 + Node 5.5 (AMD-016 LLM nodes)** — placement after the demo surface exists, not before.
 
-**Post-Node-6 docs sweep (separate PR, deferred):**
+**Post-Node-6 docs sweep (separate PR, well-scoped):**
 - `spec-arxiv-pipeline-final.md` renderer data contract: remove `topological_depth` row, add `hop_depth_per_root` and `traversal_direction` rows. Node 6 section rewritten to match AMD-019.
-- `spec-node4.5-cycle-cleaning.md` step-5 null-handling language: note that the behavior was superseded by AMD-019. (Note: PR #16 already superseded the "do not raise" graceful-degradation contract on this same spec — the step-5 null-handling edit is independent.)
+- `spec-node4.5-cycle-cleaning.md` step-5 null-handling language: note that the behavior was superseded by AMD-019. (PR #16 already superseded the "do not raise" graceful-degradation contract on this same spec; the §Constructor invariant and the missing-node §Contracts bullet both landed there. The step-5 null-handling edit is the only remaining Node 4.5 spec touch.)
 - `amendments.md` AMD-017 "Downstream Metric Behavior in a Forest" table: AMD-019 cross-reference.
 
 **Parallel tracks:**
@@ -68,21 +69,22 @@ All functions individually callable and tested. No orchestrator chains them yet.
 
 | Spec | Status |
 |---|---|
-| `docs/specs/spec-arxiv-pipeline-final.md` | Frozen — pipeline architecture (Node 6 section superseded by AMD-019; renderer data contract update deferred) |
-| `docs/specs/spec-node4.5-cycle-cleaning.md` | Frozen — "do not raise" graceful-degradation language superseded by PR #16 (`Field(exclude=True)` validator); step-5 null-handling language pending AMD-019 update |
+| `docs/specs/spec-arxiv-pipeline-final.md` | Frozen — pipeline architecture (Node 6 section superseded by AMD-019; renderer data contract update deferred to docs sweep PR) |
+| `docs/specs/spec-node4.5-cycle-cleaning.md` | Frozen — "do not raise" graceful-degradation language and §Constructor invariant landed in PR #16 (`Field(exclude=True)` validator); step-5 null-handling language pending AMD-019 update in docs sweep PR |
 | `docs/specs/spec-node5-co-citation.md` | Frozen — landed with PR #13, §Boundaries correction in PR #14 |
-| `docs/specs/spec-node6-metrics.md` | **LIVING — landing with Node 6 implementation PR** (drop-in version on disk pinned to `Field(exclude=True)` pattern) |
+| `docs/specs/spec-node6-metrics.md` | Frozen — landed with PR #18, including in-PR §Implementation constraints clarification (numpy/scipy as substrate dependencies, not graph-library alternatives) |
 
 ---
 
 ## Recent History
 
-- **PR #16** (`dc2f6e4`, 2026-04-26) — `CycleCleanResult` validator, prerequisite to Node 6. `Field(exclude=True)` witness pattern; supersedes Node 4.5's "do not raise" graceful-degradation contract. 120 tests.
+- **PR #18** (`22a32b8`, 2026-04-26) — Node 6 metric computation: `compute_depth_metrics` + `compute_pagerank`. AMD-019 implemented. Spec freezes on merge. In-PR §Implementation constraints clarification for numpy/scipy substrate distinction. 120 → 144 tests.
+- **PR #17** (`24d99fa`, 2026-04-26) — `BRIEFING.md` refresh post PR #16
+- **PR #16** (`dc2f6e4`, 2026-04-26) — `CycleCleanResult` validator, prerequisite to Node 6. `Field(exclude=True)` witness pattern; supersedes Node 4.5's "do not raise" graceful-degradation contract. 113 → 120 tests.
 - **PR #14** (`8123a19`, 2026-04-23) — post-Node 5 housekeeping: `.gitignore`, CLAUDE.md branch protection note, Node 4.5 spec §Boundaries correction
 - **PR #13** (`53a803b`, 2026-04-23) — Node 5 co-citation + spec freeze, 20 tests
 - **PR #12** (`61b9218`, 2026-04-21) — Node 5 design sessions (primary + addendum)
 - **PR #11** (`801f84b`, 2026-04-22) — SuppressedEdge refactor, composes CitationEdge
-- **PR #10–#8** — post-Node 4.5 housekeeping, Node 4.5 implementation, Node 4 forward traversal
 
 ---
 
