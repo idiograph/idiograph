@@ -1,6 +1,6 @@
 # Spec — Node 4.5: Cycle Detection and Cleaning
-**Status:** LIVING — governs implementation
-**Freezes when:** all tests passing, branch merged to main
+**Status:** FROZEN — historical record
+**Frozen:** 2026-04-26 (post PR #16 merge; constructor invariant landed)
 **Target file:** `src/idiograph/domains/arxiv/pipeline.py`
 **Companion documents:** spec-arxiv-pipeline-final.md (frozen v3)
 
@@ -25,7 +25,7 @@ Detect and resolve cycles in the assembled citation graph before Node 5 (co-cita
 2. Log all detected cycles with member `node_id`s and edge directions.
 3. For each cycle, remove the edge with the lowest `citation_count` sum between source and target (weakest link). Lex tiebreaker by `(source_id, target_id)`.
 4. Repeat until no cycles remain.
-5. Nodes involved in suppressed edges are marked for `topological_depth: null` downstream.
+5. Cycle suppression is recorded in `cycle_log` for audit and provenance. No per-node depth field is nulled (per AMD-019).
 
 This is **not a silent fix.** The cycle log is part of the return value and flows to Node 8 provenance.
 
@@ -87,7 +87,7 @@ class CycleLog(BaseModel):
 
     @property
     def affected_node_ids(self) -> set[str]:
-        """node_ids whose topological_depth must be null downstream (Node 6 handoff)."""
+        """node_ids involved in any suppressed cycle. Audit/provenance handoff for Node 8 (per AMD-019)."""
         result: set[str] = set()
         for e in self.suppressed_edges:
             result.add(e.source_id)
@@ -217,10 +217,10 @@ Each test has a one-line docstring. No pytest-asyncio (this is a synchronous fun
 
 ## Boundaries — what Node 4.5 does not do
 
-- Does not compute `topological_depth`. That is Node 6. Node 4.5 only flags *which* nodes will receive null via `cycle_log.affected_node_ids`.
+- Does not compute graph-structural metrics (`hop_depth_per_root`, `pagerank`, `traversal_direction`). Those are Node 6. Node 4.5 only records cycle suppression in `cycle_log.affected_node_ids` for audit purposes (per AMD-019).
 - Does not handle co-citation edges. Node 5 runs on the full citation set (cleaned ∪ suppressed).
 - Does not attempt minimum feedback arc set. The weakest-link heuristic is declared, not claimed optimal. This is stated in the spec and must not be overstated in docstrings.
-- Does not touch `PaperRecord.topological_depth` fields. That field is populated by Node 6 using the `affected_node_ids` handoff.
+- Does not touch `PaperRecord` metric fields. Per AMD-019, Node 6 computes `hop_depth_per_root`, `pagerank`, and `traversal_direction` from the cleaned graph independently; no node-level field is nulled or annotated by Node 4.5's suppression decisions.
 - Does not persist anything. Node 8 writes the `CycleLog` to provenance metadata later.
 
 ---

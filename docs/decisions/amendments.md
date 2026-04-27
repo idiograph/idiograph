@@ -1154,6 +1154,8 @@ is structurally visible.
 
 **Downstream Metric Behavior in a Forest**
 
+*Note: Per AMD-019 (2026-04-26), the `topological_depth` and `hop_depth` rows below are superseded — those fields were removed from `PaperRecord`. `hop_depth_per_root` and `traversal_direction` are the AMD-019 successors. The table is preserved for historical context; AMD-019 governs current behavior.*
+
 | Metric | Impact | Resolution |
 |---|---|---|
 | `topological_depth` | Multiple roots in forest | Defined as longest path from any root. NetworkX `dag_longest_path_length` supports this without modification. |
