@@ -1,3 +1,9 @@
+# Copyright 2026 Ryan Smith
+# SPDX-License-Identifier: Apache-2.0
+#
+# Idiograph — deterministic semantic graph execution for production AI pipelines.
+# https://github.com/idiograph/idiograph
+
 from PySide6.QtWidgets import QGraphicsScene, QGraphicsView
 from PySide6.QtCore import Qt, QPointF, QRectF
 from PySide6.QtGui import QPainter, QColor, QBrush
