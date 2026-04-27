@@ -128,9 +128,17 @@ implementation short-circuits before calling NetworkX.
 
 The original spec language was right about the architectural concern (don't
 let dependencies sprawl) and wrong about the literal scope (numpy/scipy
-were always implicit). Same edit-in-scope posture as the Node 4.5
-supersession in PR #16: spec edit lands with the implementation, named
-in the session summary.
+were always implicit).
+
+The architectural distinction worth naming for future precedent: numpy and
+scipy are substrate dependencies of NetworkX (foundational scientific-Python
+infrastructure with no canonical alternative), not alternative graph
+libraries (igraph, graph-tool, snap.py — competitors to NetworkX in the
+same architectural slot). The "no new top-level dependencies" constraint
+targets the latter; the former are out of scope for that constraint.
+
+Same edit-in-scope posture as the Node 4.5 supersession in PR #16: spec
+edit lands with the implementation, named in the session summary.
 
 No other spec ambiguities surfaced.
 
