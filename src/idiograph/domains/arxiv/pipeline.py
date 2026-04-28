@@ -18,6 +18,7 @@ from idiograph.core.logging_config import get_logger
 from idiograph.core.models import Graph, Node, Edge
 from idiograph.domains.arxiv.models import (
     CitationEdge,
+    CommunityResult,
     CycleCleanResult,
     CycleLog,
     DepthMetrics,
@@ -820,6 +821,177 @@ def compute_pagerank(
     _log.info("Node 6 pagerank complete")
 
     return dict(pr)
+
+
+# ── Node 7 — Community Detection ────────────────────────────────────────────
+
+
+def detect_communities(
+    nodes: list[PaperRecord],
+    cites_edges: list[CitationEdge],
+    infomap_seed: int = 42,
+    infomap_trials: int = 10,
+    infomap_teleportation: float = 0.15,
+    leiden_seed: int = 42,
+    community_count_min: int = 5,
+    community_count_max: int = 40,
+) -> CommunityResult:
+    """Assign a community label to every node in the assembled citation graph.
+
+    Runs Infomap (primary) over the directed citation graph, falling back to
+    Leiden when ``infomap`` is not installed. Both algorithms produce a flat
+    partition keyed by ``node_id``; isolates receive an assignment. The
+    function does not modify graph structure or filter nodes.
+
+    See docs/specs/spec-node7-community-detection.md for the full contract,
+    including fallback policy, edge-input semantics (cleaned ∪ suppressed),
+    and LOD validation thresholds.
+
+    Raises ``RuntimeError`` if neither ``infomap`` nor ``leidenalg`` is
+    installed. Pure function — no I/O, no mutation of inputs.
+    """
+    if not nodes:
+        _log.debug("Node 7: empty input — no communities to detect")
+        return CommunityResult(
+            community_assignments={},
+            algorithm_used="infomap",
+            community_count=0,
+            validation_flags=[],
+        )
+
+    _log.info("Node 7: %d nodes, %d edges", len(nodes), len(cites_edges))
+
+    node_id_set = {n.node_id for n in nodes}
+    warned_missing: set[str] = set()
+    valid_edges: list[CitationEdge] = []
+    for e in cites_edges:
+        for nid in (e.source_id, e.target_id):
+            if nid not in node_id_set and nid not in warned_missing:
+                warned_missing.add(nid)
+                _log.warning(
+                    "Node 7: edge references unknown node_id %s; skipping",
+                    nid,
+                )
+        if e.source_id in node_id_set and e.target_id in node_id_set:
+            valid_edges.append(e)
+
+    try:
+        from infomap import Infomap  # noqa: F401
+        partial = _run_infomap(
+            nodes,
+            valid_edges,
+            infomap_seed,
+            infomap_trials,
+            infomap_teleportation,
+        )
+    except ImportError:
+        try:
+            import igraph  # noqa: F401
+            import leidenalg  # noqa: F401
+            partial = _run_leiden(nodes, valid_edges, leiden_seed)
+        except ImportError:
+            raise RuntimeError(
+                "Neither infomap nor leidenalg is installed. "
+                "Install community detection dependencies: "
+                "uv sync --extra community"
+            ) from None
+
+    flags: list[str] = []
+    if partial.community_count < community_count_min:
+        flags.append("community_count_below_minimum")
+    if partial.community_count > community_count_max:
+        flags.append("community_count_above_maximum")
+
+    result = CommunityResult(
+        community_assignments=partial.community_assignments,
+        algorithm_used=partial.algorithm_used,
+        community_count=partial.community_count,
+        validation_flags=flags,
+    )
+
+    _log.info(
+        "Node 7 complete: %d communities via %s — flags: %s",
+        result.community_count,
+        result.algorithm_used,
+        result.validation_flags or "none",
+    )
+
+    return result
+
+
+def _run_infomap(
+    nodes: list[PaperRecord],
+    cites_edges: list[CitationEdge],
+    seed: int,
+    trials: int,
+    teleportation: float,
+) -> CommunityResult:
+    """Infomap path. Builds nx.DiGraph then hands it to Infomap via
+    add_networkx_graph(). --two-level forces a flat partition; the graph
+    is unweighted (every input edge is a 'cites' edge with strength=None).
+    """
+    from infomap import Infomap
+
+    G: nx.DiGraph = nx.DiGraph()
+    G.add_nodes_from(n.node_id for n in nodes)
+    G.add_edges_from((e.source_id, e.target_id) for e in cites_edges)
+
+    im = Infomap(f"--two-level --silent --seed {seed}")
+    internal_to_name: dict[int, str] = im.add_networkx_graph(G)
+    im.num_trials = trials
+    im.teleportation_probability = teleportation
+    im.run()
+
+    modules = im.get_modules()
+    assignments = {
+        internal_to_name[i]: str(mid) for i, mid in modules.items()
+    }
+
+    return CommunityResult(
+        community_assignments=assignments,
+        algorithm_used="infomap",
+        community_count=len(set(assignments.values())),
+        validation_flags=[],
+    )
+
+
+def _run_leiden(
+    nodes: list[PaperRecord],
+    cites_edges: list[CitationEdge],
+    seed: int,
+) -> CommunityResult:
+    """Leiden fallback. Round-trips node_ids through integer indices: igraph
+    preserves vertex insertion order, so partition.membership[i] is the
+    community for node_ids[i]. add_vertices() runs before add_edges() so
+    isolates are pre-registered and receive an assignment.
+    """
+    import igraph
+    import leidenalg
+
+    node_ids = [n.node_id for n in nodes]
+    idx = {nid: i for i, nid in enumerate(node_ids)}
+
+    g = igraph.Graph(directed=True)
+    g.add_vertices(len(node_ids))
+    g.vs["name"] = node_ids
+    g.add_edges([(idx[e.source_id], idx[e.target_id]) for e in cites_edges])
+
+    partition = leidenalg.find_partition(
+        g,
+        leidenalg.ModularityVertexPartition,
+        seed=seed,
+    )
+
+    assignments = {
+        node_ids[i]: str(partition.membership[i]) for i in range(len(node_ids))
+    }
+
+    return CommunityResult(
+        community_assignments=assignments,
+        algorithm_used="leiden",
+        community_count=len(set(assignments.values())),
+        validation_flags=[],
+    )
 
 
 ARXIV_PIPELINE: Graph = Graph(

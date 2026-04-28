@@ -17,6 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 qt = ["pyside6"]
+community = ["infomap", "leidenalg", "igraph"]
 
 [project.scripts]
 idiograph = "idiograph.main:app"
@@ -32,4 +33,5 @@ packages = ["src/idiograph"]
 dev = [
     "pytest>=9.0.2",
     "pytest-cov>=7.1.0",
+    "pytest-repeat>=0.9.4",
 ]

@@ -27,6 +27,35 @@ class DepthMetrics(BaseModel):
     )
 
 
+class CommunityResult(BaseModel):
+    """Per-graph community partition produced by Node 7 detect_communities.
+
+    community_assignments maps every input node_id to a community label
+    (string-encoded module id). Merged into PaperRecord.community_id at
+    the pipeline orchestrator layer via model_copy.
+    """
+
+    community_assignments: dict[str, str] = Field(
+        description="Maps node_id -> community_id. Every input node appears "
+                    "as a key. No node is omitted, including isolates."
+    )
+    algorithm_used: Literal["infomap", "leiden"] = Field(
+        description="Which algorithm produced this partition. 'infomap' is "
+                    "the primary; 'leiden' is the automatic fallback when "
+                    "infomap is not installed."
+    )
+    community_count: int = Field(
+        description="Number of distinct communities in the partition. Equal "
+                    "to len(set(community_assignments.values()))."
+    )
+    validation_flags: list[str] = Field(
+        default_factory=list,
+        description="LOD validation warnings (e.g. "
+                    "'community_count_below_minimum'). Empty list if "
+                    "thresholds are satisfied. Never blocks execution."
+    )
+
+
 class PaperRecord(BaseModel):
     # --- Identity ---
     node_id: str = Field(
