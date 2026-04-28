@@ -196,6 +196,13 @@ No in-spec edits. No structural deviations.
      session start, included in this PR)
    - `uv.lock` (transitive resolver update for `[community]` extra and
      pytest-repeat)
+   - `.github/workflows/tests.yml` (CI install step changed from
+     `uv sync` to `uv sync --extra community` — the spec's
+     §Dependencies command. Without it, 14 of 15 Node 7 tests raise
+     the "neither infomap nor leidenalg installed" `RuntimeError`.
+     Surfaced by CI failure on the first push of PR #25; load-bearing
+     for the Node 7 test gate; included in this PR rather than split
+     into a separate workflow-only PR.)
    - this session summary
 2. All 15 tests in spec §Tests present by name — verified in `pytest -v`
    output, no test from the spec dropped or renamed.
