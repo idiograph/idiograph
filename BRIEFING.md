@@ -1,13 +1,13 @@
 # BRIEFING.md — Idiograph
 *Live state. Updated when main changes, not at session end.*
-*Last updated: 2026-04-26 (post PR #18 merge)*
+*Last updated: 2026-04-27 (post PR #22 merge)*
 
 ---
 
 ## Current State
 
 **Phase 9 — IN PROGRESS**
-Main head: `22a32b8`
+Main head: `c683eb5`
 Test baseline: **144 passing**
 Worktree: clean; no open branches pending merge.
 
@@ -24,7 +24,7 @@ All functions individually callable and tested. No orchestrator chains them yet.
 - **Node 4** — `forward_traverse()` — emerging-work ranking (α·velocity + β·acceleration)
 - **Node 4.5** — `clean_cycles()` — weakest-link cycle suppression; returns `CycleCleanResult` with `cleaned_edges` and `cycle_log.suppressed_edges[].original` (full `CitationEdge`, no field loss). As of PR #16, `CycleCleanResult` carries a `Field(exclude=True)` witness `input_node_ids` and a `@model_validator(mode='after')` that fails construction on orphan-endpoint edges. Round-trip through `model_dump()` / `model_validate()` requires the witness to be re-supplied — persistence contract for Node 8.
 - **Node 5** — `compute_co_citations()` — undirected co-citation edges, strength = shared-citer count, sorted `(-strength, source_id, target_id)`
-- **Node 6** — `compute_depth_metrics()` (per-root BFS over directed and undirected views; `traversal_direction` ∈ {seed, backward, forward, mixed} per AMD-019) and `compute_pagerank()` (single `nx.pagerank` call, isolates included). Two pure functions, deterministic. PR #18 also removed `topological_depth` from `PaperRecord` and added `hop_depth_per_root` + `traversal_direction` per AMD-019; `CycleLog.affected_node_ids` becomes audit/provenance-only.
+- **Node 6** — `compute_depth_metrics()` (per-root BFS over directed and undirected views; `traversal_direction` ∈ {seed, backward, forward, mixed} per AMD-019) and `compute_pagerank()` (single `nx.pagerank` call, isolates included). Two pure functions, deterministic. PR #18 also removed `topological_depth` from `PaperRecord` and added `hop_depth_per_root` + `traversal_direction` per AMD-019; `CycleLog.affected_node_ids` becomes audit/provenance-only. PR #21 (post-implementation refactor) renamed `forward_from` / `backward_from` locals inside `compute_depth_metrics()` so each variable name matches the `traversal_direction` label assigned to nodes in that set — eliminates the graph-direction-vs-citation-semantic vocabulary trap. No behavior change.
 
 ### Adjacent systems
 
@@ -32,6 +32,7 @@ All functions individually callable and tested. No orchestrator chains them yet.
 - Color Designer domain in `domains/color_designer/` — complete through AMD-018
 - MCP server (`mcp_server.py`) — Phase 8 complete, six tools exposed over stdio
 - 144 tests: 10 Node 0, 13 Node 3, 9 Node 4, 12 Node 4.5 + 7 validator, 20 Node 5, 16 Node 6 depth + 8 Node 6 pagerank, plus core/executor/query/graph/models
+- Repo-wide SPDX header coverage as of PR #20 (color_designer app/domain and `scripts/`); three docstring-only `__init__.py` stubs skipped per Track 4.2 inclusion rule
 
 ---
 
@@ -41,7 +42,6 @@ All functions individually callable and tested. No orchestrator chains them yet.
 |---|---|
 | Next pipeline node | **Node 7 (community detection)** — Infomap with Leiden fallback. Own design session expected (Infomap parameters, community-count emergence, LOD implications) |
 | Orchestrator placement | Deferred to post-Node-7 per Node 6 design session — needs more producers to compose meaningfully |
-| Post-Node-6 docs sweep | Pending — small one-shot doc PR; can land alongside or before Node 7 design |
 
 ---
 
@@ -54,11 +54,6 @@ All functions individually callable and tested. No orchestrator chains them yet.
 4. **Demo surface** — vector index (ChromaDB), view functions, FastAPI, D3 renderer, self-description graph.
 5. **Node 0.5 + Node 5.5 (AMD-016 LLM nodes)** — placement after the demo surface exists, not before.
 
-**Post-Node-6 docs sweep (separate PR, well-scoped):**
-- `spec-arxiv-pipeline-final.md` renderer data contract: remove `topological_depth` row, add `hop_depth_per_root` and `traversal_direction` rows. Node 6 section rewritten to match AMD-019.
-- `spec-node4.5-cycle-cleaning.md` step-5 null-handling language: note that the behavior was superseded by AMD-019. (PR #16 already superseded the "do not raise" graceful-degradation contract on this same spec; the §Constructor invariant and the missing-node §Contracts bullet both landed there. The step-5 null-handling edit is the only remaining Node 4.5 spec touch.)
-- `amendments.md` AMD-017 "Downstream Metric Behavior in a Forest" table: AMD-019 cross-reference.
-
 **Parallel tracks:**
 - Essay editing pass — still queued.
 - Seed pair validation spikes — once a complete pipeline exists to validate against.
@@ -69,15 +64,18 @@ All functions individually callable and tested. No orchestrator chains them yet.
 
 | Spec | Status |
 |---|---|
-| `docs/specs/spec-arxiv-pipeline-final.md` | Frozen — pipeline architecture (Node 6 section superseded by AMD-019; renderer data contract update deferred to docs sweep PR) |
-| `docs/specs/spec-node4.5-cycle-cleaning.md` | Frozen — "do not raise" graceful-degradation language and §Constructor invariant landed in PR #16 (`Field(exclude=True)` validator); step-5 null-handling language pending AMD-019 update in docs sweep PR |
-| `docs/specs/spec-node5-co-citation.md` | Frozen — landed with PR #13, §Boundaries correction in PR #14 |
-| `docs/specs/spec-node6-metrics.md` | Frozen — landed with PR #18, including in-PR §Implementation constraints clarification (numpy/scipy as substrate dependencies, not graph-library alternatives) |
+| `docs/specs/spec-arxiv-pipeline-final.md` | Frozen — pipeline architecture. Renderer data contract and Node 6 section aligned with AMD-019 in PR #22 (post-Node-6 docs sweep). |
+| `docs/specs/spec-node4.5-cycle-cleaning.md` | Frozen — status header bumped FROZEN in PR #22; `topological_depth` references rewritten in algorithm step 5, property docstring, and §Boundaries bullets per AMD-019. Constructor invariant landed in PR #16 (`Field(exclude=True)` validator). |
+| `docs/specs/spec-node5-co-citation.md` | Frozen — landed with PR #13, §Boundaries correction in PR #14. |
+| `docs/specs/spec-node6-metrics.md` | Frozen — landed with PR #18, including in-PR §Implementation constraints clarification (numpy/scipy as substrate dependencies, not graph-library alternatives). |
 
 ---
 
 ## Recent History
 
+- **PR #22** (`c683eb5`, 2026-04-27) — post-Node-6 docs sweep: pipeline spec / Node 4.5 spec / AMD-017 language aligned with AMD-019. Three files, +20/-15. No code or test changes. `topological_depth` purged from both spec files (preserved in AMD-017's historical forest-metrics table with cross-reference). Node 4.5 spec status bumped LIVING → FROZEN.
+- **PR #21** (`4e97444`, 2026-04-27) — Node 6 direction rename: `forward_from`/`backward_from` variable bindings swapped inside `compute_depth_metrics()` to match the `traversal_direction` labels they produce. One function, one file, no behavior change, no test changes. 144/144.
+- **PR #20** (`d7196f8`, 2026-04-27) — SPDX header sweep: color_designer app/domain and top-level `scripts/`. 14 files modified, +84 lines. Three docstring-only `__init__.py` stubs skipped per Track 4.2 inclusion rule. 144/144.
 - **PR #18** (`22a32b8`, 2026-04-26) — Node 6 metric computation: `compute_depth_metrics` + `compute_pagerank`. AMD-019 implemented. Spec freezes on merge. In-PR §Implementation constraints clarification for numpy/scipy substrate distinction. 120 → 144 tests.
 - **PR #17** (`24d99fa`, 2026-04-26) — `BRIEFING.md` refresh post PR #16
 - **PR #16** (`dc2f6e4`, 2026-04-26) — `CycleCleanResult` validator, prerequisite to Node 6. `Field(exclude=True)` witness pattern; supersedes Node 4.5's "do not raise" graceful-degradation contract. 113 → 120 tests.
