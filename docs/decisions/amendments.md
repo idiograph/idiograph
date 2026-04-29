@@ -825,83 +825,9 @@ committed. README section present.
 
 ---
 
-## Architectural Constraints Log
-
-| Decision | Affects | Rationale |
-|---|---|---|
-| Edge `type` must be an open/extensible string, not a closed enum | Phase 3 onward | Covered in AMD-003. Phase 10 requires causal edge types (MODULATES, DRIVES, OCCLUDES, EMITS, PROJECTS_TO). A closed enum would require breaking changes. |
-| Node domain (VFX / AI / rendering) is metadata only, never a structural constraint | Phase 3 onward | Phase 10 rendering nodes must fit the same architecture without special-casing. Domain is a label for query filtering, not a type gate. |
-| Content-addressed caching preferred over dirty flagging | Phase 6+ | Hash each node's params + input hashes as the cache key. Stateless, fits JSON-serializable graph, reinforces determinism thesis. Event sourcing is a secondary option for agent audit trails only. |
-| Idiograph is not a DCC adapter | All phases | The system is an independent semantic graph — not a Houdini plugin or a wrapper for proprietary tools. Agent integration targets the Idiograph graph directly, not downstream software. |
-| File I/O must specify UTF-8 encoding explicitly | Phase 3 onward | Windows default encoding is cp1252. Any open() call on a JSON file without encoding="utf-8" will silently misread non-ASCII characters. All file reads and writes in Idiograph must specify encoding explicitly. |
-| Executor must not import handler modules directly | Phase 6 onward | Covered in AMD-007. The executor is domain-agnostic. Handler registration happens at startup, not at import time. Keeps the core layer independent of implementation details. |
-| Handler business logic is capped at 30 lines | Phase 6 onward | Covered in AMD-008. Error handling and logging are excluded from the count. A handler whose core logic exceeds this limit is a signal that the node is incorrectly scoped, not that the limit should be raised. |
-| Demo domain is arXiv pipeline, not VFX tool handlers | Phase 6 | Covered in AMD-006. The thesis claims domain-agnosticism. The demo domain should demonstrate that. VFX node types remain in the schema — VFX tool dependencies do not enter the codebase. |
-| Module-level graph state is incompatible with stateless HTTP or concurrent agent requests | Phase 7 onward | Covered in AMD-009. Remediation is a defined 5-step strangler fig migration (`docs/sessions/session-2026-04-06-2.md`), not an afternoon refactor. Triggered only if HTTP/SSE MCP transport or web demo is required. |
-| `idiograph run` must be demonstrable without an API key | Phase 8 onward | Covered in AMD-010. The `--mock` flag is the mechanism. The architecture already supports this via the handler registry — the flag makes it explicit at the CLI surface. |
-| Domain implementations live under `domains/<domain>/`, never as siblings to `core/` | Phase 8 onward | Covered in AMD-011. `core/` is domain-agnostic. Domain-specific code belongs in its own namespace. The directory structure should communicate the architecture without a README. |
-| Edge type extensibility must remain open for USD arc types | Phase 8 onward | Covered in AMD-013. USD composition arc semantics (REFERENCES, INHERITS, SPECIALIZES, VARIANTS, PAYLOAD) must be addable as typed edges without modifying the Edge model. AMD-003 already enforces this; AMD-013 names the concrete future use. |
-| `summarize_intent()` must remain purely algorithmic — no LLM calls at the query layer | Phase 8 onward | Covered in AMD-013. Will be called on composition strategy subgraphs in Phase 10. An LLM call inside the query layer would undercut the determinism thesis at its foundation. |
-| Node schema must support optional `input_ports` / `output_ports` | Immediate | Covered in AMD-014. Required for port model without breaking existing graphs. |
-| Edge schema must support optional `from_port` / `to_port` | Immediate | Covered in AMD-014. Required for typed edge connections without breaking existing edges. |
-| Graph schema must support optional `type_registry` top-level key | Immediate | Covered in AMD-014. Type definitions must live in the graph document, not a separate store. |
-| Port type enforcement is a post-Phase-8 build target, not Phase 10 | Post-Phase-8 | Covered in AMD-014. This is a credibility requirement. Phase 10 is not the right gate. |
-| `validate_integrity()` is the enforcement entry point for port types | Post-Phase-8 | Covered in AMD-014. No new public API method required; extend existing validation surface. |
-
----
-
-## Open Questions
-
-| Question | Raised | Notes |
-|---|---|---|
-| Should `summarize_intent()` use an LLM call internally, or be purely algorithmic? | 2026-03 | Algorithmic is safer for determinism thesis. LLM-assisted version could be a Phase 9 extension. Don't conflate the two. |
-| MCP server: stdio transport or HTTP/SSE? | Not yet raised | stdio is simpler for local dev; HTTP/SSE supports remote agents. Decide at Phase 8 start based on demo requirements. |
-| Should the handler registry support async-only handlers, or mixed sync/async? | 2026-03 | Async-only is cleaner and consistent with the execution model. Sync handlers can be wrapped with `asyncio.to_thread` if needed. Decide at Phase 6 implementation start. |
-| How should the results dict handle failed nodes — omit the key, or store the error? | 2026-03 | Storing a structured error dict under the node ID is preferable. Downstream nodes can inspect it; the executor can distinguish "not run yet" from "ran and failed." Decide at Phase 6 implementation start. |
-| Should `Discard` be a real node type or a terminal status on `Router`? | 2026-03 | Separate node is preferable — preserves the decision trail in graph state and keeps Router's responsibility narrow. But worth confirming once the routing logic is implemented. |
-| How does the discrete node/edge model handle continuous field evaluation in Phase 10 without losing the clean input/output contract the executor depends on? | 2026-03 | Field nodes in Phase 10 (ScalarField, VectorField, OrientationField) are continuous mathematical objects — they evaluate over a surface or volume rather than consuming and producing discrete data dicts. This is structurally different from every other node type in the system. Three candidate approaches: (1) handlers return a callable (the field function itself) as a value in the output dict — downstream projection nodes invoke it; (2) fields are evaluated at a fixed sample set defined in params and returned as a structured array; (3) field evaluation is treated as a dedicated pre-execution pass, separate from the main executor loop. Option 1 has two compounding problems: it breaks JSON serializability, and it breaks agent-readability — an agent inspecting graph state post-execution would find an opaque callable object where it expects structured data. That is a thesis violation, not merely a technical inconvenience. Option 2 preserves serializability but discretizes what is inherently continuous — the fidelity loss may be acceptable for a demo but is architecturally dishonest. Option 3 introduces a second execution model, which sounds like a compromise but may be the most defensible: a well-defined field evaluation pass with explicit structure and clear semantics is fully consistent with the thesis. The thesis does not require one execution model for everything — it requires explicit structure at every level. A principled second pass is not a contradiction; a collapsed workaround is. Resolve at Phase 10 design stage, not before — but the resolution should be framed as an architectural decision, not a technical patch. |
-| What are the compatibility rules for port types? | 2026-03 (AMD-014) | Minimum viable: exact match. Structural subtyping is a refinement. Decide at enforcement implementation, not now. |
-| How does the type registry handle versioned types? | 2026-03 (AMD-014) | A `SurfaceProperties_v2` is a different type, not a version of `SurfaceProperties`. Versioning strategy is a Phase 8.5 design question. |
-| Should MCP expose `get_type_registry` as a named tool? | 2026-03 (AMD-014) | Likely yes — an agent inspecting a graph needs the type registry to interpret port declarations. Decide at Phase 8 MCP tool surface design. |
-| What is the ConstraintSet schema? | 2026-03 (AMD-013) | Must be defined before gate milestone work begins. Minimum fields: prim path, attribute name, value type, layer context, ownership constraints. Exact schema is a Phase 10 design task, not a current gate. |
-| How does the backward-chaining solver handle contradictory constraints? | 2026-03 (AMD-013) | Contradiction is a first-class output, not an error. The solver should return a structured result explaining which constraints are in conflict and why — traceable to specific LIVRPS rules. Phase 10 design task. |
-| Should `register_all()` live in `domains/arxiv/__init__.py` or a dedicated `domains/arxiv/register.py`? | 2026-03 | Decide at AMD-011 implementation. `__init__.py` is simpler; a dedicated file is more explicit about what it does. Either is acceptable — consistency with the existing handler registration pattern matters more than the specific choice. |
-
----
-
-### AMD-018 — Stable Node Identity for Color Designer Qt Nodes
-Affects: apps/color_designer — BaseNode and all subclasses
-Status: Accepted — Not Yet Implemented
-Decided: 2026-04-13
-Reason: BaseNode instances currently have no stable identity. Two SwatchNode instances
-with identical params are indistinguishable. build_graph() cannot construct a valid
-Idiograph Graph without a stable Node.id for each Qt node.
-
-Change: BaseNode.__init__ assigns self.node_id: str = str(uuid.uuid4()) at construction.
-This ID is the bridge between the Qt UI layer and the Idiograph graph model — it becomes
-Node.id when to_idiograph_node() is called on each Qt node.
-
-Constraints:
-- node_id is assigned once at construction and never reassigned
-- node_id is not displayed in the UI
-- node_id is not the same as the display title
-- node_id is session-stable but not persisted — nodes get new IDs on each launch
-- This is acceptable because color designer does not save or reload graph topology,
-  only the token file output
-
-Done when: BaseNode.__init__ assigns node_id, all subclasses inherit it, and the
-field is verified present on a constructed node instance in a test or manual check.
-
----
-
-*Last updated: 2026-04-06*
-*Owner: Idiograph project*
-
----
-
 <!-- AMD-016 appended from standalone file during doc consolidation 2026-04-15 -->
 
-# AMD-016 — LLM Node Placement in the arXiv Citation Pipeline
+### AMD-016 — LLM Node Placement in the arXiv Citation Pipeline
 
 **Affects:** spec-arxiv-pipeline-final.md — adds two new nodes
 **Status:** Accepted — Not Yet Implemented (v2 — vocabulary and renderer contract corrected)
@@ -1222,3 +1148,95 @@ and computation timestamp.
 *Amendment: AMD-017*
 *Follows: AMD-016*
 *Decided: 2026-04-10*
+
+---
+
+### AMD-018 — Stable Node Identity for Color Designer Qt Nodes
+Affects: apps/color_designer — BaseNode and all subclasses
+Status: Accepted — Not Yet Implemented
+Decided: 2026-04-13
+Reason: BaseNode instances currently have no stable identity. Two SwatchNode instances
+with identical params are indistinguishable. build_graph() cannot construct a valid
+Idiograph Graph without a stable Node.id for each Qt node.
+
+Change: BaseNode.__init__ assigns self.node_id: str = str(uuid.uuid4()) at construction.
+This ID is the bridge between the Qt UI layer and the Idiograph graph model — it becomes
+Node.id when to_idiograph_node() is called on each Qt node.
+
+Constraints:
+- node_id is assigned once at construction and never reassigned
+- node_id is not displayed in the UI
+- node_id is not the same as the display title
+- node_id is session-stable but not persisted — nodes get new IDs on each launch
+- This is acceptable because color designer does not save or reload graph topology,
+  only the token file output
+
+Done when: BaseNode.__init__ assigns node_id, all subclasses inherit it, and the
+field is verified present on a constructed node instance in a test or manual check.
+
+---
+
+### AMD-019 — Per-Root Hop Depth and Traversal Direction
+Affects: `spec-arxiv-pipeline-final.md` (Node 6 section, renderer data contract), `PaperRecord` model, Node 4.5 `affected_node_ids` handoff semantics
+Status: Accepted — lands with Node 6 implementation
+Decided: 2026-04-24
+Reason: The frozen spec's `topological_depth: int | None` on `PaperRecord` had three problems surfaced during Node 6 design. (1) Direction ambiguity — citation edges point `citer → cited`, so a single scalar "longest path from root" either leaves Node 4's forward-traversal output undefined or collapses direction into magnitude. (2) Forest semantics — under AMD-017, multiple roots make "longest path from root" ambiguous and lose per-root information that is analytically valuable for the multi-seed case. (3) NetworkX API mismatch — `dag_longest_path_length` returns a graph-level scalar, not a per-node depth; the spec's language implied an API call that does not exist.
+
+Change: Replace `topological_depth: int | None` with two fields. `hop_depth_per_root: dict[str, int]` keys on root `node_id` and stores unsigned BFS distance over the undirected view of the cleaned citation graph (always non-negative; zero only when the node is that root). `traversal_direction: Literal["seed", "backward", "forward", "mixed"]` records categorical position relative to the seed set, computed from the directed cleaned graph. Renderer projections (Y-axis coordinate, signed scalar depth) are view-layer concerns computed on demand from these two fields. Node 6 under AMD-019 assigns normal depth to suppressed-cycle nodes — the cleaned DAG is traversable regardless of which cycle edges were suppressed. `CycleLog.affected_node_ids` is retained for audit/provenance value (Node 8) but is no longer a pipeline-critical handoff.
+
+Done when: `PaperRecord` carries the two new fields and no `topological_depth`. `spec-arxiv-pipeline-final.md` renderer data contract updated in a follow-up PR. AMD-017's "Downstream Metric Behavior in a Forest" table updated with an AMD-019 cross-reference.
+
+*Full text and rationale: `docs/specs/spec-node6-metrics.md`.*
+
+---
+
+## Architectural Constraints Log
+
+*Coverage current through AMD-014. Entries from AMD-015 onward pending — see individual AMD bodies for constraints.*
+
+| Decision | Affects | Rationale |
+|---|---|---|
+| Edge `type` must be an open/extensible string, not a closed enum | Phase 3 onward | Covered in AMD-003. Phase 10 requires causal edge types (MODULATES, DRIVES, OCCLUDES, EMITS, PROJECTS_TO). A closed enum would require breaking changes. |
+| Node domain (VFX / AI / rendering) is metadata only, never a structural constraint | Phase 3 onward | Phase 10 rendering nodes must fit the same architecture without special-casing. Domain is a label for query filtering, not a type gate. |
+| Content-addressed caching preferred over dirty flagging | Phase 6+ | Hash each node's params + input hashes as the cache key. Stateless, fits JSON-serializable graph, reinforces determinism thesis. Event sourcing is a secondary option for agent audit trails only. |
+| Idiograph is not a DCC adapter | All phases | The system is an independent semantic graph — not a Houdini plugin or a wrapper for proprietary tools. Agent integration targets the Idiograph graph directly, not downstream software. |
+| File I/O must specify UTF-8 encoding explicitly | Phase 3 onward | Windows default encoding is cp1252. Any open() call on a JSON file without encoding="utf-8" will silently misread non-ASCII characters. All file reads and writes in Idiograph must specify encoding explicitly. |
+| Executor must not import handler modules directly | Phase 6 onward | Covered in AMD-007. The executor is domain-agnostic. Handler registration happens at startup, not at import time. Keeps the core layer independent of implementation details. |
+| Handler business logic is capped at 30 lines | Phase 6 onward | Covered in AMD-008. Error handling and logging are excluded from the count. A handler whose core logic exceeds this limit is a signal that the node is incorrectly scoped, not that the limit should be raised. |
+| Demo domain is arXiv pipeline, not VFX tool handlers | Phase 6 | Covered in AMD-006. The thesis claims domain-agnosticism. The demo domain should demonstrate that. VFX node types remain in the schema — VFX tool dependencies do not enter the codebase. |
+| Module-level graph state is incompatible with stateless HTTP or concurrent agent requests | Phase 7 onward | Covered in AMD-009. Remediation is a defined 5-step strangler fig migration (`docs/sessions/session-2026-04-06-2.md`), not an afternoon refactor. Triggered only if HTTP/SSE MCP transport or web demo is required. |
+| `idiograph run` must be demonstrable without an API key | Phase 8 onward | Covered in AMD-010. The `--mock` flag is the mechanism. The architecture already supports this via the handler registry — the flag makes it explicit at the CLI surface. |
+| Domain implementations live under `domains/<domain>/`, never as siblings to `core/` | Phase 8 onward | Covered in AMD-011. `core/` is domain-agnostic. Domain-specific code belongs in its own namespace. The directory structure should communicate the architecture without a README. |
+| Edge type extensibility must remain open for USD arc types | Phase 8 onward | Covered in AMD-013. USD composition arc semantics (REFERENCES, INHERITS, SPECIALIZES, VARIANTS, PAYLOAD) must be addable as typed edges without modifying the Edge model. AMD-003 already enforces this; AMD-013 names the concrete future use. |
+| `summarize_intent()` must remain purely algorithmic — no LLM calls at the query layer | Phase 8 onward | Covered in AMD-013. Will be called on composition strategy subgraphs in Phase 10. An LLM call inside the query layer would undercut the determinism thesis at its foundation. |
+| Node schema must support optional `input_ports` / `output_ports` | Immediate | Covered in AMD-014. Required for port model without breaking existing graphs. |
+| Edge schema must support optional `from_port` / `to_port` | Immediate | Covered in AMD-014. Required for typed edge connections without breaking existing edges. |
+| Graph schema must support optional `type_registry` top-level key | Immediate | Covered in AMD-014. Type definitions must live in the graph document, not a separate store. |
+| Port type enforcement is a post-Phase-8 build target, not Phase 10 | Post-Phase-8 | Covered in AMD-014. This is a credibility requirement. Phase 10 is not the right gate. |
+| `validate_integrity()` is the enforcement entry point for port types | Post-Phase-8 | Covered in AMD-014. No new public API method required; extend existing validation surface. |
+
+---
+
+## Open Questions
+
+*Coverage current through AMD-014. Entries from AMD-015 onward pending — see individual AMD bodies for open questions.*
+
+| Question | Raised | Notes |
+|---|---|---|
+| Should `summarize_intent()` use an LLM call internally, or be purely algorithmic? | 2026-03 | Algorithmic is safer for determinism thesis. LLM-assisted version could be a Phase 9 extension. Don't conflate the two. |
+| MCP server: stdio transport or HTTP/SSE? | Not yet raised | stdio is simpler for local dev; HTTP/SSE supports remote agents. Decide at Phase 8 start based on demo requirements. |
+| Should the handler registry support async-only handlers, or mixed sync/async? | 2026-03 | Async-only is cleaner and consistent with the execution model. Sync handlers can be wrapped with `asyncio.to_thread` if needed. Decide at Phase 6 implementation start. |
+| How should the results dict handle failed nodes — omit the key, or store the error? | 2026-03 | Storing a structured error dict under the node ID is preferable. Downstream nodes can inspect it; the executor can distinguish "not run yet" from "ran and failed." Decide at Phase 6 implementation start. |
+| Should `Discard` be a real node type or a terminal status on `Router`? | 2026-03 | Separate node is preferable — preserves the decision trail in graph state and keeps Router's responsibility narrow. But worth confirming once the routing logic is implemented. |
+| How does the discrete node/edge model handle continuous field evaluation in Phase 10 without losing the clean input/output contract the executor depends on? | 2026-03 | Field nodes in Phase 10 (ScalarField, VectorField, OrientationField) are continuous mathematical objects — they evaluate over a surface or volume rather than consuming and producing discrete data dicts. This is structurally different from every other node type in the system. Three candidate approaches: (1) handlers return a callable (the field function itself) as a value in the output dict — downstream projection nodes invoke it; (2) fields are evaluated at a fixed sample set defined in params and returned as a structured array; (3) field evaluation is treated as a dedicated pre-execution pass, separate from the main executor loop. Option 1 has two compounding problems: it breaks JSON serializability, and it breaks agent-readability — an agent inspecting graph state post-execution would find an opaque callable object where it expects structured data. That is a thesis violation, not merely a technical inconvenience. Option 2 preserves serializability but discretizes what is inherently continuous — the fidelity loss may be acceptable for a demo but is architecturally dishonest. Option 3 introduces a second execution model, which sounds like a compromise but may be the most defensible: a well-defined field evaluation pass with explicit structure and clear semantics is fully consistent with the thesis. The thesis does not require one execution model for everything — it requires explicit structure at every level. A principled second pass is not a contradiction; a collapsed workaround is. Resolve at Phase 10 design stage, not before — but the resolution should be framed as an architectural decision, not a technical patch. |
+| What are the compatibility rules for port types? | 2026-03 (AMD-014) | Minimum viable: exact match. Structural subtyping is a refinement. Decide at enforcement implementation, not now. |
+| How does the type registry handle versioned types? | 2026-03 (AMD-014) | A `SurfaceProperties_v2` is a different type, not a version of `SurfaceProperties`. Versioning strategy is a Phase 8.5 design question. |
+| Should MCP expose `get_type_registry` as a named tool? | 2026-03 (AMD-014) | Likely yes — an agent inspecting a graph needs the type registry to interpret port declarations. Decide at Phase 8 MCP tool surface design. |
+| What is the ConstraintSet schema? | 2026-03 (AMD-013) | Must be defined before gate milestone work begins. Minimum fields: prim path, attribute name, value type, layer context, ownership constraints. Exact schema is a Phase 10 design task, not a current gate. |
+| How does the backward-chaining solver handle contradictory constraints? | 2026-03 (AMD-013) | Contradiction is a first-class output, not an error. The solver should return a structured result explaining which constraints are in conflict and why — traceable to specific LIVRPS rules. Phase 10 design task. |
+| Should `register_all()` live in `domains/arxiv/__init__.py` or a dedicated `domains/arxiv/register.py`? | 2026-03 | Decide at AMD-011 implementation. `__init__.py` is simpler; a dedicated file is more explicit about what it does. Either is acceptable — consistency with the existing handler registration pattern matters more than the specific choice. |
+
+---
+
+*Last updated: 2026-04-29*
+*Owner: Idiograph project*
