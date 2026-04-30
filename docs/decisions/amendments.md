@@ -1190,9 +1190,23 @@ Done when: `PaperRecord` carries the two new fields and no `topological_depth`. 
 
 ---
 
+### AMD-020 — Node 3/Node 4 Edge Emission and Failure Provenance
+Affects: Phase 9 — arXiv pipeline, Node 3 (backward traversal), Node 4 (forward traversal)
+Status: Accepted
+Decided: 2026-04-29
+Reason: Nodes 3 and 4 fetch reference data from OpenAlex during traversal but discard the relational structure at return time, returning only `list[PaperRecord]`. Downstream stages (cycle cleaning, co-citation, depth metrics, communities) all consume edge lists. Nothing in the current pipeline produces them. The orchestrator cannot run end-to-end against the existing per-stage functions because no upstream stage produces the edge input that downstream stages require. Three failure modes are also currently invisible at return time: Node 3's silent batch-fetch degradation in `_fetch_works_by_ids`, Node 4's per-seed call failures, and Node 4's silent truncation at 200 citers (compounded by nondeterministic OpenAlex default sort order, which violates the determinism thesis at its foundation).
+
+Change: Extend Node 3 and Node 4 return types via wrapper models — `Node3Result(papers, edges, failed_batches)` and `Node4Result(papers, edges, failed_seeds, truncated_seeds)`. Emit citation edges at traversal time using data structures already constructed by the existing functions (`seed_to_depth1`, `depth1_to_depth2`, per-seed citing-paper loop). Surface failure modes as structured provenance: `FailedBatch` for Node 3 batch-fetch failures, `FailedSeed` for Node 4 per-seed call failures, `TruncatedSeed` for Node 4 cap events. Add required `sort` parameter to `forward_traverse` from a closed `Literal` of OpenAlex sort values; eliminates nondeterminism in the existing 200-citer cap. Apply post-rank/cap edge filter in both functions to enforce the contract that all edge endpoints are in the returned papers (or are seeds for backward edges). `_fetch_works_by_ids` return type changes to `tuple[list[dict], list[FailedBatch]]`.
+
+Done when: Implementation PR merged with `Node3Result` and `Node4Result` returned by their respective functions, all five new models present in `models.py` with `Field(description=...)` and class docstrings, `forward_traverse` requires `sort` kwarg, `pytest` baseline at 161 + 24 net new tests = 185 passing, and `spec-pipeline-orchestrator.md` revised to add `sort` field to `ForwardParameters`.
+
+*Full text and rationale: `docs/specs/spec-node3-node4-edge-emission.md`.*
+
+---
+
 ## Architectural Constraints Log
 
-*Coverage current through AMD-014. Entries from AMD-015 onward pending — see individual AMD bodies for constraints.*
+*Coverage current through AMD-014 and AMD-020. Entries from AMD-015 through AMD-019 pending — see individual AMD bodies for constraints.*
 
 | Decision | Affects | Rationale |
 |---|---|---|
@@ -1214,12 +1228,15 @@ Done when: `PaperRecord` carries the two new fields and no `topological_depth`. 
 | Graph schema must support optional `type_registry` top-level key | Immediate | Covered in AMD-014. Type definitions must live in the graph document, not a separate store. |
 | Port type enforcement is a post-Phase-8 build target, not Phase 10 | Post-Phase-8 | Covered in AMD-014. This is a credibility requirement. Phase 10 is not the right gate. |
 | `validate_integrity()` is the enforcement entry point for port types | Post-Phase-8 | Covered in AMD-014. No new public API method required; extend existing validation surface. |
+| Edge emission must happen after rank/cap, never before | Phase 9 onward | Covered in AMD-020. Edges to/from papers dropped by the cap would violate the `Node3Result` / `Node4Result` invariant that all endpoints are in the returned papers (or are seeds). Pre-cap emission would produce dangling edges; post-cap filter is mandatory, not an optimization. |
+| `forward_traverse` requires a `sort` parameter; no default | Phase 9 onward | Covered in AMD-020. OpenAlex's default sort order is not contractual and can change with their indexing, producing nondeterministic "first 200" sets across runs of the same parameters. The `sort` parameter eliminates this nondeterminism. The choice between `cited_by_count:desc` and `publication_date:desc` is a research-question decision that must be made by the caller, not hardcoded. |
+| Failure provenance is per-batch for Node 3 batch fetches, not per-target-ID | Phase 9 onward | Covered in AMD-020. `_fetch_works_by_ids` issues atomic HTTP calls of up to 50 OpenAlex IDs at a time. When a batch raises, the function does not have per-ID failure information. The structured `FailedBatch` records the requested-IDs list and stage at the batch boundary, which is the only granularity available without restructuring the helper to fall back to per-ID calls (deferred). |
 
 ---
 
 ## Open Questions
 
-*Coverage current through AMD-014. Entries from AMD-015 onward pending — see individual AMD bodies for open questions.*
+*Coverage current through AMD-014 and AMD-020. Entries from AMD-015 through AMD-019 pending — see individual AMD bodies for open questions.*
 
 | Question | Raised | Notes |
 |---|---|---|
@@ -1235,6 +1252,8 @@ Done when: `PaperRecord` carries the two new fields and no `topological_depth`. 
 | What is the ConstraintSet schema? | 2026-03 (AMD-013) | Must be defined before gate milestone work begins. Minimum fields: prim path, attribute name, value type, layer context, ownership constraints. Exact schema is a Phase 10 design task, not a current gate. |
 | How does the backward-chaining solver handle contradictory constraints? | 2026-03 (AMD-013) | Contradiction is a first-class output, not an error. The solver should return a structured result explaining which constraints are in conflict and why — traceable to specific LIVRPS rules. Phase 10 design task. |
 | Should `register_all()` live in `domains/arxiv/__init__.py` or a dedicated `domains/arxiv/register.py`? | 2026-03 | Decide at AMD-011 implementation. `__init__.py` is simpler; a dedicated file is more explicit about what it does. Either is acceptable — consistency with the existing handler registration pattern matters more than the specific choice. |
+| Should Node 4 paginate citing-paper retrieval to overcome the 200-citer cap? | 2026-04-29 (AMD-020) | The `truncated_seeds` field on `Node4Result` makes the coverage limitation auditable. Pagination is the natural follow-up — eliminates the cap entirely and produces complete citer lists. Out of scope for AMD-020 because the cap is no longer a determinism violation once `sort` is required; it's a coverage limitation, addressable in its own time. |
+| Should the OpenAlex transport gain retry/backoff on transient failures, and should it move to a separate `openalex_client.py` module? | 2026-04-29 (AMD-020, originally orchestrator audit's open question 5) | Currently no retry on any OpenAlex call site. `_fetch_works_by_ids` catches `httpx.HTTPError` per batch and surfaces the failure (post-AMD-020) but does not retry. Adding retry is tangled with the code-organization concern that OpenAlex transport lives directly in `pipeline.py` rather than in a separate client module. The right scope is a dedicated transport refactor PR, not a Node-3/4-internal change. |
 
 ---
 

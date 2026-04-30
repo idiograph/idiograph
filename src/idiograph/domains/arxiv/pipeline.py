@@ -22,8 +22,14 @@ from idiograph.domains.arxiv.models import (
     CycleCleanResult,
     CycleLog,
     DepthMetrics,
+    FailedBatch,
+    FailedSeed,
+    ForwardSort,
+    Node3Result,
+    Node4Result,
     PaperRecord,
     SuppressedEdge,
+    TruncatedSeed,
     make_node_id,
 )
 
@@ -197,11 +203,18 @@ async def _fetch_works_by_ids(
     client: httpx.AsyncClient,
     api_key: str,
     sleep_ms: int,
-) -> list[dict]:
-    """Batch-fetch OpenAlex works by ID (50 per call). Silently skips misses."""
+    stage: Literal["seed_refetch", "depth_1", "depth_2"],
+) -> tuple[list[dict], list[FailedBatch]]:
+    """Batch-fetch OpenAlex works by ID (50 per call).
+
+    Returns ``(works, failed_batches)``. Batches that raise ``httpx.HTTPError``
+    are recorded as ``FailedBatch`` entries with the supplied ``stage`` label
+    rather than dropped silently — see AMD-020.
+    """
     if not openalex_ids:
-        return []
+        return [], []
     works: list[dict] = []
+    failed_batches: list[FailedBatch] = []
     sleep_s = sleep_ms / 1000.0
     batch_size = 50
     for i in range(0, len(openalex_ids), batch_size):
@@ -219,11 +232,18 @@ async def _fetch_works_by_ids(
             response = await client.get(OPENALEX_BASE, params=params)
             response.raise_for_status()
         except httpx.HTTPError as e:
-            _log.debug("Batch fetch failed for %s: %s", batch, e)
+            _log.info("Batch fetch failed for %s (stage=%s): %s", batch, stage, e)
+            failed_batches.append(
+                FailedBatch(
+                    requested_ids=list(batch),
+                    stage=stage,
+                    reason=f"http_error: {e}",
+                )
+            )
             continue
         results = (response.json() or {}).get("results") or []
         works.extend(results)
-    return works
+    return works, failed_batches
 
 
 async def backward_traverse(
@@ -233,26 +253,36 @@ async def backward_traverse(
     n_backward: int,
     lambda_decay: float,
     sleep_ms: int = 150,
-) -> list[PaperRecord]:
+) -> Node3Result:
     """Backward traversal from seed nodes up to depth 2.
 
     For each seed, fetches its direct references (depth=1) and the references
     of those references (depth=2). Deduplicates by ``node_id`` — when a paper
     appears via multiple paths, the lowest ``hop_depth`` wins and ``root_ids``
     is the union of every root reachable through any path. Seeds themselves
-    are excluded from the output. The merged records are then scored by
-    :func:`_node3_score`, sorted descending, and truncated to ``n_backward``.
+    are excluded from the output papers. The merged records are then scored
+    by :func:`_node3_score`, sorted descending, and truncated to
+    ``n_backward``.
+
+    Returns a :class:`Node3Result` carrying the ranked papers, the citation
+    edges discovered during traversal (seed→depth-1 and depth-1→depth-2),
+    and any batch-level fetch failures recorded by ``_fetch_works_by_ids``.
+    See AMD-020.
     """
     seed_ids = {s.node_id for s in seeds}
+    failed_batches: list[FailedBatch] = []
 
     # Seeds must first be re-fetched to obtain ``referenced_works`` since
     # Node 0 doesn't store it. In the common case the caller is the pipeline
     # orchestrator and has the seed OpenAlex IDs already — we fetch via the
     # OpenAlex-ID batch endpoint.
     seed_oa_ids = [s.openalex_id for s in seeds]
+    seed_works, seed_failed = await _fetch_works_by_ids(
+        seed_oa_ids, client, api_key, sleep_ms, stage="seed_refetch"
+    )
+    failed_batches.extend(seed_failed)
     seed_works_by_oa: dict[str, dict] = {
-        _strip_openalex_id(w["id"]): w
-        for w in await _fetch_works_by_ids(seed_oa_ids, client, api_key, sleep_ms)
+        _strip_openalex_id(w["id"]): w for w in seed_works
     }
 
     # Map seed node_id -> list of depth-1 OpenAlex IDs (bare, e.g. "W123")
@@ -268,9 +298,10 @@ async def backward_traverse(
         all_depth1_ids.update(refs)
 
     # Fetch all depth-1 works in one deduplicated batch run.
-    depth1_works = await _fetch_works_by_ids(
-        sorted(all_depth1_ids), client, api_key, sleep_ms
+    depth1_works, depth1_failed = await _fetch_works_by_ids(
+        sorted(all_depth1_ids), client, api_key, sleep_ms, stage="depth_1"
     )
+    failed_batches.extend(depth1_failed)
     depth1_by_oa: dict[str, dict] = {
         _strip_openalex_id(w["id"]): w for w in depth1_works
     }
@@ -283,9 +314,10 @@ async def backward_traverse(
         depth1_to_depth2[oa_id] = refs
         all_depth2_ids.update(refs)
 
-    depth2_works = await _fetch_works_by_ids(
-        sorted(all_depth2_ids), client, api_key, sleep_ms
+    depth2_works, depth2_failed = await _fetch_works_by_ids(
+        sorted(all_depth2_ids), client, api_key, sleep_ms, stage="depth_2"
     )
+    failed_batches.extend(depth2_failed)
     depth2_by_oa: dict[str, dict] = {
         _strip_openalex_id(w["id"]): w for w in depth2_works
     }
@@ -323,13 +355,70 @@ async def backward_traverse(
                     continue
                 _merge(work, hop_depth=2, roots={seed.node_id})
 
+    # Edge emission. Edges are produced from the same maps the merge walk
+    # consumes, then filtered post-rank/cap so endpoints are guaranteed to
+    # be in `papers` ∪ seeds (see Node3Result invariants).
+    edges: list[CitationEdge] = []
+
+    # Depth-1 edges: seed -> depth-1 paper. Skipped when the depth-1 metadata
+    # failed to fetch (recorded in failed_batches instead).
+    for seed in seeds:
+        for oa_id in seed_to_depth1.get(seed.node_id, []):
+            work = depth1_by_oa.get(oa_id)
+            if work is None:
+                continue
+            edges.append(
+                CitationEdge(
+                    source_id=seed.node_id,
+                    target_id=make_node_id(work),
+                    type="cites",
+                    citing_paper_year=seed.year,
+                    strength=None,
+                )
+            )
+
+    # Depth-2 edges: depth-1 paper -> depth-2 paper. Skipped when the depth-1
+    # paper is itself a seed (its outgoing edges already covered above) or
+    # when depth-2 metadata failed to fetch.
+    for oa1, work1 in depth1_by_oa.items():
+        source_node_id = make_node_id(work1)
+        if source_node_id in seed_ids:
+            continue
+        source_year = work1.get("publication_year")
+        for oa2 in depth1_to_depth2.get(oa1, []):
+            work2 = depth2_by_oa.get(oa2)
+            if work2 is None:
+                continue
+            edges.append(
+                CitationEdge(
+                    source_id=source_node_id,
+                    target_id=make_node_id(work2),
+                    type="cites",
+                    citing_paper_year=source_year,
+                    strength=None,
+                )
+            )
+
     current_year = date.today().year
     scored = sorted(
         merged.values(),
         key=lambda r: _node3_score(r, lambda_decay, current_year),
         reverse=True,
     )
-    return scored[:n_backward]
+    papers = scored[:n_backward]
+
+    valid_endpoints = {p.node_id for p in papers} | seed_ids
+    filtered_edges = [
+        e for e in edges
+        if e.source_id in valid_endpoints and e.target_id in valid_endpoints
+    ]
+    filtered_edges.sort(key=lambda e: (e.source_id, e.target_id))
+
+    return Node3Result(
+        papers=papers,
+        edges=filtered_edges,
+        failed_batches=failed_batches,
+    )
 
 
 # ── Node 4 — Forward Traversal ──────────────────────────────────────────────
@@ -401,9 +490,11 @@ async def forward_traverse(
     alpha: float,
     beta: float,
     lambda_decay: float,
+    *,
+    sort: ForwardSort,
     acceleration_method: str = "first_difference",
     current_year: int | None = None,
-) -> list[PaperRecord]:
+) -> Node4Result:
     """Forward traversal: fetch papers citing each seed, rank by α/β score.
 
     For each seed, issues an OpenAlex ``cites:<openalex_id>`` query and maps
@@ -412,6 +503,15 @@ async def forward_traverse(
     merged as a sorted union (AMD-017). Seeds themselves are excluded. The
     merged set is scored by :func:`_node4_score`, sorted descending, and
     truncated to ``n_forward``.
+
+    ``sort`` is required (no default): OpenAlex's default sort order is not
+    contractual and produces nondeterministic "first 200" sets across runs.
+    See AMD-020.
+
+    Returns a :class:`Node4Result` carrying the ranked papers, the citer→seed
+    citation edges, per-seed call failures, and per-seed truncation events
+    when OpenAlex reports a ``meta.count`` exceeding the returned-results
+    length (currently capped at 200).
 
     ``counts_by_year`` is fetched here only — it is not available from Node 0
     or Node 3's ``select=`` fields.
@@ -422,6 +522,9 @@ async def forward_traverse(
     seed_ids = {s.node_id for s in seeds}
     merged: dict[str, PaperRecord] = {}
     counts_by_id: dict[str, list[dict]] = {}
+    failed_seeds: list[FailedSeed] = []
+    truncated_seeds: list[TruncatedSeed] = []
+    edges: list[CitationEdge] = []
 
     sleep_s = 0.150
     async with httpx.AsyncClient() as client:
@@ -433,16 +536,38 @@ async def forward_traverse(
                 "filter": f"cites:{seed.openalex_id}",
                 "select": _FORWARD_SELECT,
                 "per-page": "200",
+                "sort": sort,
                 "api_key": api_key,
             }
             try:
                 response = await client.get(OPENALEX_BASE, params=params)
                 response.raise_for_status()
             except httpx.HTTPError as e:
-                _log.debug("cites query failed for %s: %s", seed.node_id, e)
+                _log.info("cites query failed for %s: %s", seed.node_id, e)
+                failed_seeds.append(
+                    FailedSeed(seed_id=seed.node_id, reason=f"http_error: {e}")
+                )
                 continue
 
-            results = (response.json() or {}).get("results") or []
+            payload = response.json() or {}
+            results = payload.get("results") or []
+            meta = payload.get("meta") or {}
+            total_count = meta.get("count")
+            if total_count is not None and total_count > len(results):
+                _log.info(
+                    "Node 4: seed %s truncated — returned %d, total %d",
+                    seed.node_id,
+                    len(results),
+                    total_count,
+                )
+                truncated_seeds.append(
+                    TruncatedSeed(
+                        seed_id=seed.node_id,
+                        returned_count=len(results),
+                        total_count=total_count,
+                    )
+                )
+
             for work in results:
                 node_id = make_node_id(work)
                 if node_id in seed_ids:
@@ -454,6 +579,15 @@ async def forward_traverse(
                     counts_by_id[node_id] = work.get("counts_by_year") or []
                 else:
                     existing.root_ids = sorted(set(existing.root_ids) | {seed.node_id})
+                edges.append(
+                    CitationEdge(
+                        source_id=node_id,
+                        target_id=seed.node_id,
+                        type="cites",
+                        citing_paper_year=work.get("publication_year"),
+                        strength=None,
+                    )
+                )
 
     def _score(record: PaperRecord) -> float:
         velocity = _compute_velocity(record.citation_count, record.year, current_year)
@@ -473,7 +607,21 @@ async def forward_traverse(
         )
 
     scored = sorted(merged.values(), key=_score, reverse=True)
-    return scored[:n_forward]
+    papers = scored[:n_forward]
+
+    paper_ids = {p.node_id for p in papers}
+    filtered_edges = [
+        e for e in edges
+        if e.source_id in paper_ids and e.target_id in seed_ids
+    ]
+    filtered_edges.sort(key=lambda e: (e.source_id, e.target_id))
+
+    return Node4Result(
+        papers=papers,
+        edges=filtered_edges,
+        failed_seeds=failed_seeds,
+        truncated_seeds=truncated_seeds,
+    )
 
 
 # ── Node 4.5 — Cycle Cleaning ───────────────────────────────────────────────

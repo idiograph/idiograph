@@ -249,6 +249,131 @@ class CycleCleanResult(BaseModel):
         return self
 
 
+ForwardSort = Literal[
+    "cited_by_count:desc",
+    "cited_by_count:asc",
+    "publication_date:desc",
+    "publication_date:asc",
+]
+
+
+class FailedBatch(BaseModel):
+    """Batch-level fetch failure during Node 3 backward traversal.
+
+    Recorded when a call to ``_fetch_works_by_ids`` raises an HTTP error.
+    Per-ID granularity is not available — the OpenAlex batch endpoint is
+    atomic at the call boundary, so all IDs in the batch are recorded
+    together. Callers consuming Node3Result decide whether the partial
+    result is usable.
+    """
+
+    requested_ids: list[str] = Field(
+        description="OpenAlex IDs requested in the failed batch (up to "
+                    "batch_size in length)."
+    )
+    stage: Literal["seed_refetch", "depth_1", "depth_2"] = Field(
+        description="Which traversal stage the batch belonged to."
+    )
+    reason: str = Field(
+        description="Failure description (e.g., 'http_error: 503', 'timeout')."
+    )
+
+
+class Node3Result(BaseModel):
+    """Return value of Node 3 backward traversal.
+
+    Carries the ranked, capped paper set together with the citation edges
+    discovered during traversal and any batch-level fetch failures. Edges
+    cover seed→depth-1 and depth-1→depth-2 citations; their endpoints are
+    either papers in ``papers`` or input seeds (seeds are excluded from
+    ``papers`` per existing behavior but remain valid edge endpoints).
+    """
+
+    papers: list[PaperRecord] = Field(
+        description="Backward-traversal papers, ranked and capped."
+    )
+    edges: list[CitationEdge] = Field(
+        description="Citation edges discovered during traversal. Source "
+                    "cites target. Includes seed→depth-1 and depth-1→depth-2 "
+                    "edges. Edges are emitted only when both endpoints have "
+                    "full PaperRecord metadata; failures to fetch metadata "
+                    "are recorded in failed_batches instead."
+    )
+    failed_batches: list[FailedBatch] = Field(
+        default_factory=list,
+        description="Batch-level fetch failures. Empty list when no batches "
+                    "failed. Each entry records up to batch_size OpenAlex "
+                    "IDs that were requested but not retrieved. Per-ID "
+                    "granularity is not available."
+    )
+
+
+class FailedSeed(BaseModel):
+    """Per-seed forward-traversal call failure for Node 4."""
+
+    seed_id: str = Field(
+        description="The seed whose forward-traversal call failed."
+    )
+    reason: str = Field(
+        description="Failure description (e.g., 'http_error: 503')."
+    )
+
+
+class TruncatedSeed(BaseModel):
+    """Record of a seed whose citer count exceeded Node 4's per-seed cap.
+
+    OpenAlex returns at most 200 citers per request without pagination;
+    when the seed's actual citer count exceeds 200, the additional citers
+    are silently dropped at fetch time. ``returned_count`` and
+    ``total_count`` make the truncation auditable so callers can decide
+    whether to paginate (deferred follow-up) or accept the partial result.
+    """
+
+    seed_id: str = Field(
+        description="The seed whose forward-traversal hit the per-seed cap."
+    )
+    returned_count: int = Field(
+        description="Citers actually returned (currently capped at 200)."
+    )
+    total_count: int = Field(
+        description="Total citers reported by OpenAlex's response metadata. "
+                    "When returned_count < total_count, "
+                    "(total_count - returned_count) citers were silently "
+                    "truncated."
+    )
+
+
+class Node4Result(BaseModel):
+    """Return value of Node 4 forward traversal.
+
+    Carries the ranked, capped citing-paper set together with the citer→seed
+    citation edges and provenance for failure modes (per-seed call failures
+    and per-seed truncation events). All edges have a citing paper in
+    ``papers`` as source and an input seed as target.
+    """
+
+    papers: list[PaperRecord] = Field(
+        description="Forward-traversal papers (citing papers), ranked and "
+                    "capped."
+    )
+    edges: list[CitationEdge] = Field(
+        description="Citation edges discovered during traversal. Source "
+                    "cites target. Direction is citer → seed. Edges are "
+                    "emitted only for papers in the returned papers list."
+    )
+    failed_seeds: list[FailedSeed] = Field(
+        default_factory=list,
+        description="Seeds whose forward-traversal call raised. Empty list "
+                    "when no seeds failed. Distinct from succeeded-but-zero-"
+                    "citers seeds, which produce no entry."
+    )
+    truncated_seeds: list[TruncatedSeed] = Field(
+        default_factory=list,
+        description="Seeds whose citer count exceeded the per-seed cap. "
+                    "Empty list when no seeds were truncated."
+    )
+
+
 def make_node_id(work: dict) -> str:
     """Derive the canonical node_id from an OpenAlex work record.
 
