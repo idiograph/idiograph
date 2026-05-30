@@ -248,11 +248,12 @@ async def _fetch_works_by_ids(
 
 async def backward_traverse(
     seeds: list[PaperRecord],
-    client: httpx.AsyncClient,
     api_key: str,
     n_backward: int,
     lambda_decay: float,
     sleep_ms: int = 150,
+    *,
+    client: httpx.AsyncClient,
 ) -> Node3Result:
     """Backward traversal from seed nodes up to depth 2.
 
@@ -491,6 +492,7 @@ async def forward_traverse(
     beta: float,
     lambda_decay: float,
     *,
+    client: httpx.AsyncClient,
     sort: ForwardSort,
     acceleration_method: str = "first_difference",
     current_year: int | None = None,
@@ -527,67 +529,66 @@ async def forward_traverse(
     edges: list[CitationEdge] = []
 
     sleep_s = 0.150
-    async with httpx.AsyncClient() as client:
-        for idx, seed in enumerate(seeds):
-            if idx > 0:
-                await asyncio.sleep(sleep_s)
+    for idx, seed in enumerate(seeds):
+        if idx > 0:
+            await asyncio.sleep(sleep_s)
 
-            params = {
-                "filter": f"cites:{seed.openalex_id}",
-                "select": _FORWARD_SELECT,
-                "per-page": "200",
-                "sort": sort,
-                "api_key": api_key,
-            }
-            try:
-                response = await client.get(OPENALEX_BASE, params=params)
-                response.raise_for_status()
-            except httpx.HTTPError as e:
-                _log.info("cites query failed for %s: %s", seed.node_id, e)
-                failed_seeds.append(
-                    FailedSeed(seed_id=seed.node_id, reason=f"http_error: {e}")
+        params = {
+            "filter": f"cites:{seed.openalex_id}",
+            "select": _FORWARD_SELECT,
+            "per-page": "200",
+            "sort": sort,
+            "api_key": api_key,
+        }
+        try:
+            response = await client.get(OPENALEX_BASE, params=params)
+            response.raise_for_status()
+        except httpx.HTTPError as e:
+            _log.info("cites query failed for %s: %s", seed.node_id, e)
+            failed_seeds.append(
+                FailedSeed(seed_id=seed.node_id, reason=f"http_error: {e}")
+            )
+            continue
+
+        payload = response.json() or {}
+        results = payload.get("results") or []
+        meta = payload.get("meta") or {}
+        total_count = meta.get("count")
+        if total_count is not None and total_count > len(results):
+            _log.info(
+                "Node 4: seed %s truncated — returned %d, total %d",
+                seed.node_id,
+                len(results),
+                total_count,
+            )
+            truncated_seeds.append(
+                TruncatedSeed(
+                    seed_id=seed.node_id,
+                    returned_count=len(results),
+                    total_count=total_count,
                 )
+            )
+
+        for work in results:
+            node_id = make_node_id(work)
+            if node_id in seed_ids:
                 continue
-
-            payload = response.json() or {}
-            results = payload.get("results") or []
-            meta = payload.get("meta") or {}
-            total_count = meta.get("count")
-            if total_count is not None and total_count > len(results):
-                _log.info(
-                    "Node 4: seed %s truncated — returned %d, total %d",
-                    seed.node_id,
-                    len(results),
-                    total_count,
+            existing = merged.get(node_id)
+            if existing is None:
+                rec = _work_to_record(work, hop_depth=1, root_ids=[seed.node_id])
+                merged[node_id] = rec
+                counts_by_id[node_id] = work.get("counts_by_year") or []
+            else:
+                existing.root_ids = sorted(set(existing.root_ids) | {seed.node_id})
+            edges.append(
+                CitationEdge(
+                    source_id=node_id,
+                    target_id=seed.node_id,
+                    type="cites",
+                    citing_paper_year=work.get("publication_year"),
+                    strength=None,
                 )
-                truncated_seeds.append(
-                    TruncatedSeed(
-                        seed_id=seed.node_id,
-                        returned_count=len(results),
-                        total_count=total_count,
-                    )
-                )
-
-            for work in results:
-                node_id = make_node_id(work)
-                if node_id in seed_ids:
-                    continue
-                existing = merged.get(node_id)
-                if existing is None:
-                    rec = _work_to_record(work, hop_depth=1, root_ids=[seed.node_id])
-                    merged[node_id] = rec
-                    counts_by_id[node_id] = work.get("counts_by_year") or []
-                else:
-                    existing.root_ids = sorted(set(existing.root_ids) | {seed.node_id})
-                edges.append(
-                    CitationEdge(
-                        source_id=node_id,
-                        target_id=seed.node_id,
-                        type="cites",
-                        citing_paper_year=work.get("publication_year"),
-                        strength=None,
-                    )
-                )
+            )
 
     def _score(record: PaperRecord) -> float:
         velocity = _compute_velocity(record.citation_count, record.year, current_year)
