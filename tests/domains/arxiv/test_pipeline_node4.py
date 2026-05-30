@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -95,19 +95,9 @@ class _CitesClient:
         )
         return resp
 
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *args):
-        return False
-
 
 def _run_forward(client: _CitesClient, **kwargs) -> Node4Result:
-    with patch(
-        "idiograph.domains.arxiv.pipeline.httpx.AsyncClient",
-        return_value=client,
-    ):
-        return asyncio.run(forward_traverse(**kwargs))
+    return asyncio.run(forward_traverse(client=client, **kwargs))
 
 
 # ── Tests ───────────────────────────────────────────────────────────────────
@@ -608,21 +598,18 @@ def test_node4_sort_parameter_required():
     client = _CitesClient({"W_SEED": []})
     seeds = [_seed_record("arxiv:seed.1", "W_SEED")]
     with pytest.raises(TypeError):
-        with patch(
-            "idiograph.domains.arxiv.pipeline.httpx.AsyncClient",
-            return_value=client,
-        ):
-            asyncio.run(
-                forward_traverse(
-                    seeds=seeds,
-                    api_key="k",
-                    n_forward=10,
-                    alpha=1.0,
-                    beta=0.0,
-                    lambda_decay=0.05,
-                    current_year=2026,
-                )
+        asyncio.run(
+            forward_traverse(
+                seeds=seeds,
+                api_key="k",
+                n_forward=10,
+                alpha=1.0,
+                beta=0.0,
+                lambda_decay=0.05,
+                current_year=2026,
+                client=client,
             )
+        )
 
 
 def test_node4_sort_passes_through_to_query():
@@ -807,3 +794,79 @@ def test_node4_deterministic_same_input():
     ]
     assert r1.failed_seeds == r2.failed_seeds
     assert r1.truncated_seeds == r2.truncated_seeds
+
+
+# ── Client-contract tests (IDG-022 / IDG-024) ──────────────────────────────
+
+
+def test_node4_uses_passed_in_client(monkeypatch):
+    """The injected client is the one .get is called on; forward_traverse
+    constructs no httpx.AsyncClient of its own (IDG-022/IDG-024).
+    """
+    constructed = []
+
+    def _explode(*args, **kwargs):
+        constructed.append((args, kwargs))
+        raise AssertionError("forward_traverse must not construct httpx.AsyncClient")
+
+    monkeypatch.setattr(
+        "idiograph.domains.arxiv.pipeline.httpx.AsyncClient", _explode
+    )
+
+    client = _CitesClient(
+        {"W_SEED": [_work("W_C1", arxiv_id="c1.1", cited_by_count=10, year=2022)]}
+    )
+    seeds = [_seed_record("arxiv:seed.1", "W_SEED")]
+    result = _run_forward(
+        client,
+        seeds=seeds,
+        api_key="k",
+        n_forward=10,
+        alpha=1.0,
+        beta=0.0,
+        lambda_decay=0.05,
+        sort="cited_by_count:desc",
+        current_year=2026,
+    )
+    assert constructed == []
+    assert len(client.calls) == 1
+    assert client.calls[0]["filter"] == "cites:W_SEED"
+    assert {p.node_id for p in result.papers} == {"arxiv:c1.1"}
+
+
+def test_node4_does_not_close_client():
+    """forward_traverse does not close, aclose, or context-manage the passed
+    client. Uses a real httpx.AsyncClient backed by MockTransport so
+    is_closed is meaningful.
+    """
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    _work("W_C1", arxiv_id="c1.1", cited_by_count=10, year=2022),
+                ],
+                "meta": {"count": 1},
+            },
+        )
+
+    transport = httpx.MockTransport(_handler)
+    client = httpx.AsyncClient(transport=transport)
+    seeds = [_seed_record("arxiv:seed.1", "W_SEED")]
+    try:
+        asyncio.run(
+            forward_traverse(
+                seeds=seeds,
+                api_key="k",
+                n_forward=10,
+                alpha=1.0,
+                beta=0.0,
+                lambda_decay=0.05,
+                sort="cited_by_count:desc",
+                current_year=2026,
+                client=client,
+            )
+        )
+        assert client.is_closed is False
+    finally:
+        asyncio.run(client.aclose())
