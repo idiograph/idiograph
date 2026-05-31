@@ -149,6 +149,8 @@ def test_missing_edge_node_warns(caplog: pytest.LogCaptureFixture) -> None:
 
     warnings = [r for r in caplog.records if r.levelname == "WARNING"]
     assert any("Z" in r.getMessage() for r in warnings)
+    # The unknown node_id surfaces as structured data, not just a log line.
+    assert "Z" in result.warnings
     # All known nodes still receive assignments.
     assert set(result.community_assignments.keys()) == {"A", "B", "C"}
 
@@ -240,6 +242,17 @@ def test_validation_flags_always_list() -> None:
     result = detect_communities(nodes, edges)
 
     assert isinstance(result.validation_flags, list)
+
+
+def test_warnings_always_list() -> None:
+    """warnings is a list — never None — on a clean run with no unknown ids."""
+    nodes = [_rec(x) for x in ("A", "B", "C")]
+    edges = [_edge("A", "B"), _edge("B", "C")]
+
+    result = detect_communities(nodes, edges)
+
+    assert isinstance(result.warnings, list)
+    assert result.warnings == []
 
 
 # Beyond the spec §Tests minimum set — these close coverage gaps for the

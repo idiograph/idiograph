@@ -1012,17 +1012,20 @@ def detect_communities(
             algorithm_used="infomap",
             community_count=0,
             validation_flags=[],
+            warnings=[],  # no edge validation runs on empty input
         )
 
     _log.info("Node 7: %d nodes, %d edges", len(nodes), len(cites_edges))
 
     node_id_set = {n.node_id for n in nodes}
-    warned_missing: set[str] = set()
+    warned_missing: set[str] = set()  # dedup guard — membership test only
+    warnings: list[str] = []  # ordered, first-encounter — the RETURNED field
     valid_edges: list[CitationEdge] = []
     for e in cites_edges:
         for nid in (e.source_id, e.target_id):
             if nid not in node_id_set and nid not in warned_missing:
                 warned_missing.add(nid)
+                warnings.append(nid)  # preserves order — never derive from set
                 _log.warning(
                     "Node 7: edge references unknown node_id %s; skipping",
                     nid,
@@ -1062,6 +1065,7 @@ def detect_communities(
         algorithm_used=partial.algorithm_used,
         community_count=partial.community_count,
         validation_flags=flags,
+        warnings=warnings,
     )
 
     _log.info(
