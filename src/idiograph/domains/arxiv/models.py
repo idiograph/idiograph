@@ -54,6 +54,15 @@ class CommunityResult(BaseModel):
                     "'community_count_below_minimum'). Empty list if "
                     "thresholds are satisfied. Never blocks execution."
     )
+    warnings: list[str] = Field(
+        default_factory=list,
+        description="Data-quality warnings from input validation. Each entry "
+                    "names a node_id whose referencing edge was skipped due to "
+                    "absence from nodes. Empty list if no unknown node_ids. "
+                    "Never None. Distinct from validation_flags (those are "
+                    "algorithm-configuration feedback; warnings is input-data "
+                    "feedback)."
+    )
 
 
 class PaperRecord(BaseModel):
