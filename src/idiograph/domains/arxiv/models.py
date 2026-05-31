@@ -374,6 +374,30 @@ class Node4Result(BaseModel):
     )
 
 
+class Node5Result(BaseModel):
+    """Return value of Node 5 co-citation computation.
+
+    Carries the co-citation edge set together with data-quality warnings
+    from input validation. Each warning names a ``node_id`` whose
+    referencing edge was skipped due to absence from ``nodes``; entries are
+    de-duplicated to one per distinct unknown ``node_id``, in first-encounter
+    order. Both endpoints of every edge are checked, so a node appearing only
+    as the target of an unknown-source edge is still recorded (Option A,
+    IDG-023). ``warnings`` is always a list, never None.
+    """
+
+    edges: list[CitationEdge] = Field(
+        description="Co-citation edges, sorted and capped per the function "
+                    "contract. Does not include the input cites_edges."
+    )
+    warnings: list[str] = Field(
+        default_factory=list,
+        description="Data-quality warnings from input validation. One entry "
+                    "per distinct unknown node_id, in first-encounter order. "
+                    "Empty list if no unknown node_ids encountered."
+    )
+
+
 def make_node_id(work: dict) -> str:
     """Derive the canonical node_id from an OpenAlex work record.
 
