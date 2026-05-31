@@ -27,6 +27,7 @@ from idiograph.domains.arxiv.models import (
     ForwardSort,
     Node3Result,
     Node4Result,
+    Node5Result,
     PaperRecord,
     SuppressedEdge,
     TruncatedSeed,
@@ -757,7 +758,7 @@ def compute_co_citations(
     cites_edges: list[CitationEdge],
     min_strength: int = 2,
     max_edges: int | None = None,
-) -> list[CitationEdge]:
+) -> Node5Result:
     """Compute co-citation edges across the assembled citation graph.
 
     Two papers A and B are co-cited whenever any third paper C cites both;
@@ -765,6 +766,11 @@ def compute_co_citations(
     docs/specs/spec-node5-co-citation.md for the full contract, including
     the global cross-root semantics (AMD-017), canonical form, and sort
     ordering.
+
+    Returns a :class:`Node5Result` carrying the co-citation edges and any
+    data-quality warnings. Both endpoints of every edge are checked for
+    unknown-ness unconditionally (Option A, IDG-023), so ``warnings`` lists
+    every distinct unknown ``node_id`` in first-encounter order.
 
     Raises ``ValueError`` on invalid ``min_strength`` (< 1) or ``max_edges``
     (< 0). Pure function — no I/O, no mutation of inputs.
@@ -783,26 +789,26 @@ def compute_co_citations(
 
     node_ids: set[str] = {n.node_id for n in nodes}
     citers: dict[str, set[str]] = {nid: set() for nid in node_ids}
-    warned_missing: set[str] = set()
+    warned_missing: set[str] = set()  # dedup guard — membership test only
+    warnings: list[str] = []  # ordered, first-encounter — the RETURNED field
 
     for e in cites_edges:
+        # Missing-node provenance pass — examine BOTH endpoints, UNCONDITIONALLY,
+        # before any index-construction skip. One entry per distinct unknown
+        # node_id, in first-encounter order. The set guards dedup; the list
+        # preserves order — never derive warnings from the set.
+        for nid in (e.source_id, e.target_id):
+            if nid not in node_ids and nid not in warned_missing:
+                warned_missing.add(nid)
+                warnings.append(nid)
+                _log.warning(
+                    "Node 5: citation edge references unknown node_id %s; skipping",
+                    nid,
+                )
+        # Index-construction skips — Node-5-specific; they NEVER suppress a warning.
         if e.source_id == e.target_id:
             continue
-        if e.source_id not in node_ids:
-            if e.source_id not in warned_missing:
-                warned_missing.add(e.source_id)
-                _log.warning(
-                    "Node 5: citation edge references unknown node_id %s; skipping",
-                    e.source_id,
-                )
-            continue
-        if e.target_id not in node_ids:
-            if e.target_id not in warned_missing:
-                warned_missing.add(e.target_id)
-                _log.warning(
-                    "Node 5: citation edge references unknown node_id %s; skipping",
-                    e.target_id,
-                )
+        if e.source_id not in node_ids or e.target_id not in node_ids:
             continue
         citers[e.target_id].add(e.source_id)
 
@@ -844,7 +850,7 @@ def compute_co_citations(
         max_edges,
     )
 
-    return co_edges
+    return Node5Result(edges=co_edges, warnings=warnings)
 
 
 # ── Node 6 — Metric Computation ─────────────────────────────────────────────

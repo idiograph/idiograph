@@ -44,7 +44,7 @@ def test_minimal_co_citation() -> None:
 
     result = compute_co_citations(nodes, edges, min_strength=1)
 
-    assert _triples(result) == [("A", "B", 1)]
+    assert _triples(result.edges) == [("A", "B", 1)]
 
 
 def test_strength_accumulates() -> None:
@@ -59,7 +59,7 @@ def test_strength_accumulates() -> None:
 
     result = compute_co_citations(nodes, edges, min_strength=1)
 
-    assert _triples(result) == [("A", "B", 2)]
+    assert _triples(result.edges) == [("A", "B", 2)]
 
 
 def test_multiple_independent_pairs() -> None:
@@ -74,7 +74,7 @@ def test_multiple_independent_pairs() -> None:
 
     result = compute_co_citations(nodes, edges, min_strength=1)
 
-    assert _triples(result) == [("A", "B", 1), ("E", "F", 1)]
+    assert _triples(result.edges) == [("A", "B", 1), ("E", "F", 1)]
 
 
 def test_min_strength_filters_singletons() -> None:
@@ -85,7 +85,7 @@ def test_min_strength_filters_singletons() -> None:
 
     result = compute_co_citations(nodes, edges)  # default min_strength=2
 
-    assert result == []
+    assert result.edges == []
 
 
 def test_min_strength_one_includes_all() -> None:
@@ -96,7 +96,7 @@ def test_min_strength_one_includes_all() -> None:
 
     result = compute_co_citations(nodes, edges, min_strength=1)
 
-    assert _triples(result) == [
+    assert _triples(result.edges) == [
         ("A", "B", 1),
         ("A", "D", 1),
         ("B", "D", 1),
@@ -112,7 +112,7 @@ def test_max_edges_none_emits_all() -> None:
     result = compute_co_citations(nodes, edges, min_strength=1)
 
     # 4 choose 2 = 6 pairs.
-    assert len(result) == 6
+    assert len(result.edges) == 6
 
 
 def test_max_edges_enforces_hard_cap() -> None:
@@ -139,14 +139,18 @@ def test_max_edges_enforces_hard_cap() -> None:
 
     result = compute_co_citations(nodes, edges, min_strength=1, max_edges=2)
 
-    assert len(result) == 2
+    assert len(result.edges) == 2
     # Strongest pair first.
-    assert (result[0].source_id, result[0].target_id, result[0].strength) == (
+    assert (
+        result.edges[0].source_id,
+        result.edges[0].target_id,
+        result.edges[0].strength,
+    ) == (
         "A",
         "B",
         3,
     )
-    assert result[1].strength == 2
+    assert result.edges[1].strength == 2
 
 
 def test_output_sorted_by_contract() -> None:
@@ -186,7 +190,7 @@ def test_output_sorted_by_contract() -> None:
 
     # Expected by contract (strength desc, source_id asc, target_id asc):
     #  (A,B,2), (B,D,2), (A,C,1), (A,D,1), (B,C,1)
-    assert _triples(result) == [
+    assert _triples(result.edges) == [
         ("A", "B", 2),
         ("B", "D", 2),
         ("A", "C", 1),
@@ -203,8 +207,8 @@ def test_canonical_form_dedup() -> None:
     result = compute_co_citations(nodes, edges, min_strength=1)
 
     # Exactly one edge; canonical form.
-    assert len(result) == 1
-    e = result[0]
+    assert len(result.edges) == 1
+    e = result.edges[0]
     assert e.source_id < e.target_id
     assert (e.source_id, e.target_id) == ("A", "B")
 
@@ -217,9 +221,9 @@ def test_no_self_co_citation() -> None:
 
     result = compute_co_citations(nodes, edges, min_strength=1)
 
-    assert result == []
+    assert result.edges == []
     # Also: ensure we never emit an edge with source==target.
-    for e in result:
+    for e in result.edges:
         assert e.source_id != e.target_id
 
 
@@ -237,7 +241,7 @@ def test_cross_root_co_citation() -> None:
 
     result = compute_co_citations([a, b, c], edges, min_strength=1)
 
-    assert _triples(result) == [("A", "B", 1)]
+    assert _triples(result.edges) == [("A", "B", 1)]
 
 
 def test_truncation_boundary_deterministic() -> None:
@@ -251,9 +255,9 @@ def test_truncation_boundary_deterministic() -> None:
     r2 = compute_co_citations(nodes, edges, min_strength=1, max_edges=3)
 
     # Deterministic across calls.
-    assert _triples(r1) == _triples(r2)
+    assert _triples(r1.edges) == _triples(r2.edges)
     # And the first three by secondary sort are (A,B), (A,C), (A,D).
-    assert _triples(r1) == [("A", "B", 1), ("A", "C", 1), ("A", "D", 1)]
+    assert _triples(r1.edges) == [("A", "B", 1), ("A", "C", 1), ("A", "D", 1)]
 
 
 def test_edge_type_is_co_citation() -> None:
@@ -263,8 +267,8 @@ def test_edge_type_is_co_citation() -> None:
 
     result = compute_co_citations(nodes, edges, min_strength=1)
 
-    assert result  # precondition for the assertion below
-    for e in result:
+    assert result.edges  # precondition for the assertion below
+    for e in result.edges:
         assert e.type == "co_citation"
         assert e.citing_paper_year is None
         assert isinstance(e.strength, int) and e.strength > 0
@@ -330,12 +334,12 @@ def test_routing_independence() -> None:
     r2 = compute_co_citations(nodes, route_all_suppressed, min_strength=1)
     r3 = compute_co_citations(nodes, route_mixed, min_strength=1)
 
-    assert _triples(r1) == _triples(r2) == _triples(r3)
-    assert _triples(r1) == [("A", "B", 2)]
+    assert _triples(r1.edges) == _triples(r2.edges) == _triples(r3.edges)
+    assert _triples(r1.edges) == [("A", "B", 2)]
 
 
 def test_missing_citation_node_warns(caplog: pytest.LogCaptureFixture) -> None:
-    """Edge referencing unknown node_id: skipped with WARNING, no raise."""
+    """Edge referencing unknown node_id: skipped, WARNING logged, id in result.warnings, no raise."""
     # Node "Z" appears only in an edge, not in nodes — must trigger a warning
     # and be skipped, not raise.
     nodes = [_rec("A"), _rec("B"), _rec("C")]
@@ -351,8 +355,24 @@ def test_missing_citation_node_warns(caplog: pytest.LogCaptureFixture) -> None:
 
     warnings = [r for r in caplog.records if r.levelname == "WARNING"]
     assert any("Z" in r.getMessage() for r in warnings)
+    # The unknown node_id is surfaced in the returned warnings (deduped once).
+    assert result.warnings == ["Z"]
     # Output still reflects the valid portion: C co-cites A and B.
-    assert _triples(result) == [("A", "B", 1)]
+    assert _triples(result.edges) == [("A", "B", 1)]
+
+
+def test_missing_citation_node_both_endpoints_unknown() -> None:
+    """Both endpoints of one edge unknown: BOTH ids in result.warnings (Option A completeness)."""
+    # Edge P→Q where neither P nor Q is in nodes. The check is unconditional on
+    # both endpoints, so a node appearing only as the target of an unknown-source
+    # edge (Q) is still recorded — not source-only. First-encounter order: P, Q.
+    nodes = [_rec("A"), _rec("B")]
+    edges = [_edge("P", "Q")]
+
+    result = compute_co_citations(nodes, edges, min_strength=1)
+
+    assert result.warnings == ["P", "Q"]
+    assert result.edges == []
 
 
 def test_min_strength_zero_raises() -> None:
@@ -376,7 +396,7 @@ def test_max_edges_negative_raises() -> None:
         compute_co_citations(nodes, edges, max_edges=-1)
 
     # max_edges=0 is valid (returns []) per spec §Contracts.
-    assert compute_co_citations(nodes, edges, max_edges=0) == []
+    assert compute_co_citations(nodes, edges, max_edges=0).edges == []
 
 
 # Beyond the spec §Tests minimum set — these close gaps in spec §Contracts
@@ -385,8 +405,8 @@ def test_max_edges_negative_raises() -> None:
 
 def test_empty_inputs() -> None:
     """Empty nodes or empty edges returns [] without error (spec §Contracts)."""
-    assert compute_co_citations([], [], min_strength=1) == []
-    assert compute_co_citations([_rec("A")], [], min_strength=1) == []
+    assert compute_co_citations([], [], min_strength=1).edges == []
+    assert compute_co_citations([_rec("A")], [], min_strength=1).edges == []
 
 
 def test_single_node() -> None:
@@ -394,4 +414,15 @@ def test_single_node() -> None:
     nodes = [_rec("A")]
     edges = [_edge("A", "A")]  # self-citation defensively filtered
 
-    assert compute_co_citations(nodes, edges, min_strength=1) == []
+    assert compute_co_citations(nodes, edges, min_strength=1).edges == []
+
+
+def test_warnings_always_list() -> None:
+    """warnings is a list, never None, on a clean run with no unknown node_ids."""
+    nodes = [_rec("A"), _rec("B"), _rec("C")]
+    edges = [_edge("C", "A"), _edge("C", "B")]
+
+    result = compute_co_citations(nodes, edges, min_strength=1)
+
+    assert result.warnings == []
+    assert isinstance(result.warnings, list)
