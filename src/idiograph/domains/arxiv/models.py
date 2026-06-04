@@ -6,7 +6,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class DepthMetrics(BaseModel):
@@ -404,6 +404,249 @@ class Node5Result(BaseModel):
         description="Data-quality warnings from input validation. One entry "
                     "per distinct unknown node_id, in first-encounter order. "
                     "Empty list if no unknown node_ids encountered."
+    )
+
+
+class BackwardParameters(BaseModel):
+    """Node 3 backward-traversal tunables. Field names match the
+    ``backward_traverse`` kwargs exactly so the orchestrator maps them at the
+    call site without renaming. No defaults — λ and N are TBD-pending-validation
+    per the frozen pipeline spec, so the caller must supply them.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    n_backward: int = Field(
+        ...,
+        description="Cap on backward traversal results (global top-N by score "
+                    "across all seeds).",
+    )
+    lambda_decay: float = Field(
+        ..., description="Recency decay rate in the Node 3 score."
+    )
+
+
+class ForwardParameters(BaseModel):
+    """Node 4 forward-traversal tunables. Field names match the
+    ``forward_traverse`` kwargs exactly. No defaults — α, β, λ, N are
+    TBD-pending-validation per the frozen pipeline spec.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    n_forward: int = Field(
+        ...,
+        description="Cap on forward traversal results (global top-N by score "
+                    "across all seeds).",
+    )
+    lambda_decay: float = Field(
+        ..., description="Recency decay rate in the Node 4 score."
+    )
+    alpha: float = Field(
+        ..., description="Weight on citation_velocity in forward ranking."
+    )
+    beta: float = Field(
+        ..., description="Weight on citation_acceleration in forward ranking."
+    )
+    sort: ForwardSort = Field(
+        ...,
+        description="OpenAlex sort order for the per-seed citing-paper query. "
+                    "Required: OpenAlex's default sort is not contractual and "
+                    "produces nondeterministic results. See AMD-020.",
+    )
+
+
+class CoCitationParameters(BaseModel):
+    """Node 5 co-citation tunables. Defaults inherited from the frozen Node 5
+    contract.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    min_strength: int = Field(
+        2, description="Minimum shared citing papers to emit a co-citation edge."
+    )
+    max_edges: int | None = Field(
+        None, description="Hard cap on total co-citation edges; None = no cap."
+    )
+
+
+class PageRankParameters(BaseModel):
+    """Node 6 PageRank tunables. Defaults inherited from the frozen Node 6
+    contract.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    damping: float = Field(
+        0.85, description="PageRank damping factor (passed to nx.pagerank as alpha)."
+    )
+
+
+class CommunitiesParameters(BaseModel):
+    """Node 7 community-detection tunables. Defaults inherited from the frozen
+    Node 7 contract.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    infomap_seed: int = Field(42, description="Random seed for Infomap.")
+    infomap_trials: int = Field(
+        10, description="Number of Infomap optimization trials."
+    )
+    infomap_teleportation: float = Field(
+        0.15, description="Teleportation probability for Infomap."
+    )
+    leiden_seed: int = Field(42, description="Random seed for Leiden fallback.")
+    community_count_min: int = Field(
+        5, description="Below-threshold flag for LOD validation."
+    )
+    community_count_max: int = Field(
+        40, description="Above-threshold flag for LOD validation."
+    )
+
+
+class PipelineParameters(BaseModel):
+    """Per-stage configuration for ``run_arxiv_pipeline``, as nested model
+    objects. ``backward`` and ``forward`` are required; the rest default to the
+    frozen per-node defaults. Frozen — an immutable config input.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    backward: BackwardParameters = Field(
+        ..., description="Node 3 backward-traversal parameters."
+    )
+    forward: ForwardParameters = Field(
+        ..., description="Node 4 forward-traversal parameters."
+    )
+    co_citation: CoCitationParameters = Field(
+        default_factory=CoCitationParameters,
+        description="Node 5 co-citation parameters.",
+    )
+    pagerank: PageRankParameters = Field(
+        default_factory=PageRankParameters,
+        description="Node 6 PageRank parameters.",
+    )
+    communities: CommunitiesParameters = Field(
+        default_factory=CommunitiesParameters,
+        description="Node 7 community-detection parameters.",
+    )
+
+
+class SeedResolutionFailure(BaseModel):
+    """Typed wrapper around Node 0's currently-untyped failure dicts, so the
+    pipeline result is provenance-sufficient and round-trippable.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    seed: dict = Field(
+        ..., description="The original seed identifier dict that failed to resolve."
+    )
+    reason: str = Field(
+        ...,
+        description="Failure description from Node 0 (e.g. 'http error: 503', "
+                    "'no results', 'unrecognized seed shape').",
+    )
+
+
+class EdgeMetadataMismatch(BaseModel):
+    """Record of a backward-vs-forward disagreement on the metadata of an edge
+    sharing the same ``(source_id, target_id, type)`` key, caught during graph
+    merge (OQ3). The first-seen (backward) edge is kept; this records the
+    conflict rather than resolving it silently.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    source_id: str = Field(
+        ..., description="node_id of the citing paper on the conflicting edge."
+    )
+    target_id: str = Field(
+        ..., description="node_id of the cited paper on the conflicting edge."
+    )
+    type: str = Field(..., description="Edge type at the conflicting key.")
+    detail: str = Field(
+        ...,
+        description="Which fields differed between the backward and forward "
+                    "views of this edge.",
+    )
+
+
+class PipelineResult(BaseModel):
+    """Terminal output bundle of ``run_arxiv_pipeline`` — the merged citation
+    graph, every per-stage result, the input parameters, and structured
+    provenance. This is the input contract for Node 8 (registry persistence):
+    it must survive ``model_dump()`` → ``model_validate()`` (with Node 8
+    re-supplying the embedded ``CycleCleanResult.input_node_ids`` witness from
+    the loaded node list) and answer "what produced this graph?" from the
+    result alone. Frozen — a value object, not mutable working state.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    # --- Primary surface — the merged graph ---
+    nodes: list[PaperRecord] = Field(
+        ..., description="Fully enriched node set (seeds ∪ backward ∪ forward)."
+    )
+    edges: list[CitationEdge] = Field(
+        ...,
+        description="All edges (cites + co_citation), post-cycle-cleaning.",
+    )
+    seeds: list[str] = Field(
+        ..., description="Successfully resolved seed node_ids."
+    )
+
+    # --- Per-stage results — audit and replay ---
+    cycle_clean: CycleCleanResult = Field(
+        ..., description="Node 4.5 cycle-cleaning result and audit log."
+    )
+    co_citation_edges: list[CitationEdge] = Field(
+        ...,
+        description="Co-citation subset of `edges`, called out for direct query.",
+    )
+    co_citation_warnings: list[str] = Field(
+        default_factory=list,
+        description="Node5Result.warnings (data-quality warnings from "
+                    "co-citation input validation).",
+    )
+    depth_metrics: dict[str, DepthMetrics] = Field(
+        ..., description="Node 6 depth metrics, keyed by node_id."
+    )
+    pagerank: dict[str, float] = Field(
+        ..., description="Node 6 PageRank, keyed by node_id."
+    )
+    communities: CommunityResult = Field(
+        ..., description="Node 7 community partition."
+    )
+
+    # --- Provenance — node-native failure records, surfaced first-class ---
+    parameters: PipelineParameters = Field(
+        ..., description="The exact PipelineParameters instance passed in."
+    )
+    seed_failures: list[SeedResolutionFailure] = Field(
+        default_factory=list,
+        description="Node 0 per-seed resolution failures.",
+    )
+    backward_failed_batches: list[FailedBatch] = Field(
+        default_factory=list,
+        description="Node 3 batch-level fetch failures (not seed-attributable "
+                    "by design).",
+    )
+    forward_failed_seeds: list[FailedSeed] = Field(
+        default_factory=list,
+        description="Node 4 per-seed forward-traversal call failures.",
+    )
+    truncated_seeds: list[TruncatedSeed] = Field(
+        default_factory=list,
+        description="Node 4 per-seed citer-count truncation events (IDG-020 "
+                    "surface).",
+    )
+    data_integrity_warnings: list[EdgeMetadataMismatch] = Field(
+        default_factory=list,
+        description="Backward-vs-forward edge-metadata mismatches caught during "
+                    "graph merge (OQ3).",
     )
 
 

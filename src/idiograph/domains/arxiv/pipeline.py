@@ -22,6 +22,7 @@ from idiograph.domains.arxiv.models import (
     CycleCleanResult,
     CycleLog,
     DepthMetrics,
+    EdgeMetadataMismatch,
     FailedBatch,
     FailedSeed,
     ForwardSort,
@@ -29,6 +30,9 @@ from idiograph.domains.arxiv.models import (
     Node4Result,
     Node5Result,
     PaperRecord,
+    PipelineParameters,
+    PipelineResult,
+    SeedResolutionFailure,
     SuppressedEdge,
     TruncatedSeed,
     make_node_id,
@@ -1151,6 +1155,286 @@ def _run_leiden(
         community_count=len(set(assignments.values())),
         validation_flags=[],
     )
+
+
+# ── Pipeline Orchestrator ───────────────────────────────────────────────────
+
+
+class PipelineError(Exception):
+    """Defensive-guard error for ``run_arxiv_pipeline``.
+
+    Raised only for the should-not-happen case where ``fetch_seeds`` returns an
+    empty ``resolved`` list *without* raising — a Node 0 contract violation.
+    Normal total failure (every seed fails resolution) is ``fetch_seeds``' own
+    ``ValueError``, which the orchestrator lets propagate unwrapped; it is not
+    wrapped in ``PipelineError``.
+    """
+
+
+def assemble_graph(
+    seeds: list[PaperRecord],
+    backward: Node3Result,
+    forward: Node4Result,
+) -> tuple[list[PaperRecord], list[CitationEdge], list[EdgeMetadataMismatch]]:
+    """Reconcile seeds, Node 3, and Node 4 into one node set and one cites edge set.
+
+    Pure function. Does **not** do cross-seed dedup — Nodes 3 and 4 already did
+    that internally (the global top-N cap is applied across the cross-seed union
+    inside each node). Its only job is the backward ∪ forward ∪ seed union, where
+    a node or edge can legitimately appear in more than one of the three sources.
+
+    Bucket-then-reduce: one ``model_copy`` per unique node, hash-based dedup, no
+    O(N²) existence checks. Mirrors ``clean_cycles``' ``edge_by_pair`` lookup.
+
+    Returns ``(unified_nodes, unified_cites, mismatches)``. ``mismatches`` records
+    each ``(source_id, target_id, type)`` edge whose backward and forward views
+    disagree on metadata; the first-seen (backward) edge is kept (OQ3).
+    """
+    node_buckets: dict[str, tuple[PaperRecord, set[str]]] = {}
+    edge_buckets: dict[tuple[str, str, str], CitationEdge] = {}
+    mismatches: list[EdgeMetadataMismatch] = []
+
+    def _add_node(rec: PaperRecord) -> None:
+        existing = node_buckets.get(rec.node_id)
+        if existing is None:
+            # First-seen record wins; seed its root_ids set.
+            node_buckets[rec.node_id] = (rec, set(rec.root_ids))
+        else:
+            # Union this source's root_ids into the accumulating set. This is
+            # the only cross-source union the orchestrator performs.
+            existing[1].update(rec.root_ids)
+
+    # Seeds are the roots of the graph (root_ids == [node_id]).
+    for seed in seeds:
+        _add_node(seed)
+    for paper in backward.papers:
+        _add_node(paper)
+    for paper in forward.papers:
+        _add_node(paper)
+
+    def _add_edge(edge: CitationEdge) -> None:
+        key = (edge.source_id, edge.target_id, edge.type)
+        existing = edge_buckets.get(key)
+        if existing is None:
+            edge_buckets[key] = edge
+            return
+        if (
+            existing.citing_paper_year != edge.citing_paper_year
+            or existing.strength != edge.strength
+        ):
+            mismatches.append(
+                EdgeMetadataMismatch(
+                    source_id=edge.source_id,
+                    target_id=edge.target_id,
+                    type=edge.type,
+                    detail=(
+                        f"citing_paper_year {existing.citing_paper_year!r} vs "
+                        f"{edge.citing_paper_year!r}; strength "
+                        f"{existing.strength!r} vs {edge.strength!r}"
+                    ),
+                )
+            )
+        # First-seen (backward before forward) is kept regardless.
+
+    for edge in backward.edges:
+        _add_edge(edge)
+    for edge in forward.edges:
+        _add_edge(edge)
+
+    unified_nodes = [
+        rec.model_copy(update={"root_ids": sorted(roots)})
+        for rec, roots in node_buckets.values()
+    ]
+    unified_cites = list(edge_buckets.values())
+    return unified_nodes, unified_cites, mismatches
+
+
+async def run_arxiv_pipeline(
+    seeds: list[dict],
+    parameters: PipelineParameters,
+    *,
+    client: httpx.AsyncClient,
+    api_key: str,
+) -> PipelineResult:
+    """Compose the per-stage pipeline into one end-to-end run.
+
+    ``seeds`` is a list of seed identifier dicts (``{"arxiv_id": ...}`` /
+    ``{"doi": ...}``) — the exact shape Node 0's ``fetch_seeds`` accepts; shape
+    classification is Node 0's job. ``client`` and ``api_key`` are owned at the
+    true top of the call graph and threaded to every async stage (IDG-022); the
+    orchestrator constructs neither.
+
+    The orchestrator performs no domain computation — it delegates every domain
+    operation to an existing per-stage function and is responsible only for
+    composition: graph merge, dataflow, failure-provenance aggregation,
+    end-of-pipeline enrichment, and result assembly.
+
+    Input validation: ``seeds == []`` raises ``ValueError`` here, before any
+    work (a pre-check, not a reliance on ``fetch_seeds``' own empty-input
+    guard — see Halt conditions in the spec).
+
+    Halts (raises, no partial result) when ``seeds`` is empty, when every seed
+    fails Node 0 resolution (``fetch_seeds``' ``ValueError`` propagates), or when
+    any whole-graph stage (Node 4.5/5/6/7) raises. Otherwise records provenance
+    on the result and proceeds — partial Node 0/3/4 failures and empty
+    backward/forward results still produce a valid (possibly seeds-only) graph.
+    """
+    if not seeds:
+        raise ValueError("seeds must be non-empty")
+
+    _log.info("Pipeline: starting run with %d seeds", len(seeds))
+
+    # 1. Resolve seeds (single batch call). fetch_seeds raises ValueError on
+    #    empty input OR when every seed fails — that is the "no roots" halt; let
+    #    it propagate.
+    resolved, raw_failures = await fetch_seeds(seeds, client, api_key)
+    if not resolved:
+        # Defensive guard: a Node 0 contract violation, not normal total
+        # failure (that path raises ValueError above).
+        _log.error("Pipeline: fetch_seeds returned no resolved seeds without raising")
+        raise PipelineError("no seeds resolved")
+    seed_failures = [
+        SeedResolutionFailure(seed=f["seed"], reason=f["reason"])
+        for f in raw_failures
+    ]
+    if seed_failures:
+        _log.warning(
+            "Pipeline: Node 0 failed to resolve %d seed(s)", len(seed_failures)
+        )
+
+    # 2. Traversal (one batch call each, over the full resolved-seed list).
+    #    Failures are read off the results, never caught per seed.
+    _log.info("Pipeline: starting backward traversal")
+    n3 = await backward_traverse(
+        resolved,
+        api_key,
+        n_backward=parameters.backward.n_backward,
+        lambda_decay=parameters.backward.lambda_decay,
+        client=client,
+    )
+    _log.info("Pipeline: backward traversal complete")
+    if n3.failed_batches:
+        _log.warning(
+            "Pipeline: Node 3 recorded %d failed batch(es)", len(n3.failed_batches)
+        )
+
+    _log.info("Pipeline: starting forward traversal")
+    n4 = await forward_traverse(
+        resolved,
+        api_key,
+        n_forward=parameters.forward.n_forward,
+        alpha=parameters.forward.alpha,
+        beta=parameters.forward.beta,
+        lambda_decay=parameters.forward.lambda_decay,
+        client=client,
+        sort=parameters.forward.sort,
+    )
+    _log.info("Pipeline: forward traversal complete")
+    if n4.failed_seeds or n4.truncated_seeds:
+        _log.warning(
+            "Pipeline: Node 4 recorded %d failed seed(s), %d truncated",
+            len(n4.failed_seeds),
+            len(n4.truncated_seeds),
+        )
+
+    # 3. Graph merge.
+    _log.info("Pipeline: starting graph merge")
+    unified_nodes, unified_cites, mismatches = assemble_graph(resolved, n3, n4)
+    _log.info(
+        "Pipeline: graph merge complete — %d nodes, %d cites edges, %d mismatch(es)",
+        len(unified_nodes),
+        len(unified_cites),
+        len(mismatches),
+    )
+
+    # 4. Whole-graph stages (exceptions propagate; orchestrator does not catch).
+    _log.info("Pipeline: starting cycle cleaning")
+    cycle = clean_cycles(unified_nodes, unified_cites)
+    # all_cites (cleaned + suppressed) -> co-citation + communities: co-occurrence
+    # and clustering keep real-but-suppressed citations. depth + pagerank ->
+    # cleaned_edges only (they need the acyclic graph). The split is deliberate.
+    all_cites = cycle.cleaned_edges + [
+        s.original for s in cycle.cycle_log.suppressed_edges
+    ]
+    _log.info("Pipeline: cycle cleaning complete")
+
+    _log.info("Pipeline: starting co-citation")
+    co = compute_co_citations(
+        unified_nodes,
+        all_cites,
+        min_strength=parameters.co_citation.min_strength,
+        max_edges=parameters.co_citation.max_edges,
+    )
+    _log.info("Pipeline: co-citation complete")
+
+    _log.info("Pipeline: starting depth metrics")
+    depth = compute_depth_metrics(unified_nodes, cycle.cleaned_edges)
+    _log.info("Pipeline: depth metrics complete")
+
+    _log.info("Pipeline: starting pagerank")
+    prank = compute_pagerank(
+        unified_nodes, cycle.cleaned_edges, damping=parameters.pagerank.damping
+    )
+    _log.info("Pipeline: pagerank complete")
+
+    _log.info("Pipeline: starting community detection")
+    communities = detect_communities(
+        unified_nodes,
+        all_cites,
+        infomap_seed=parameters.communities.infomap_seed,
+        infomap_trials=parameters.communities.infomap_trials,
+        infomap_teleportation=parameters.communities.infomap_teleportation,
+        leiden_seed=parameters.communities.leiden_seed,
+        community_count_min=parameters.communities.community_count_min,
+        community_count_max=parameters.communities.community_count_max,
+    )
+    _log.info("Pipeline: community detection complete")
+
+    # 5. End-of-pipeline enrichment (immutable write path — Node 6 owns the
+    #    canonical hop_depth_per_root / traversal_direction).
+    enriched_nodes = [
+        node.model_copy(
+            update={
+                "traversal_direction": depth[node.node_id].traversal_direction,
+                "hop_depth_per_root": depth[node.node_id].hop_depth_per_root,
+                "pagerank": prank[node.node_id],
+                "community_id": communities.community_assignments[node.node_id],
+            }
+        )
+        for node in unified_nodes
+    ]
+
+    # 6. Merged edge view. Suppressed originals are NOT in `edges` — they live in
+    #    cycle.cycle_log.suppressed_edges for audit.
+    merged_edges = cycle.cleaned_edges + co.edges
+
+    # 7. Construct and return.
+    result = PipelineResult(
+        nodes=enriched_nodes,
+        edges=merged_edges,
+        seeds=[s.node_id for s in resolved],
+        cycle_clean=cycle,
+        co_citation_edges=co.edges,
+        co_citation_warnings=co.warnings,
+        depth_metrics=depth,
+        pagerank=prank,
+        communities=communities,
+        parameters=parameters,
+        seed_failures=seed_failures,
+        backward_failed_batches=n3.failed_batches,
+        forward_failed_seeds=n4.failed_seeds,
+        truncated_seeds=n4.truncated_seeds,
+        data_integrity_warnings=mismatches,
+    )
+    _log.info(
+        "Pipeline: complete — %d nodes, %d edges, %d failure records",
+        len(result.nodes),
+        len(result.edges),
+        len(result.seed_failures)
+        + len(result.backward_failed_batches)
+        + len(result.forward_failed_seeds),
+    )
+    return result
 
 
 ARXIV_PIPELINE: Graph = Graph(
