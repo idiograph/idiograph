@@ -31,6 +31,8 @@ reload subtlety; it is not generalized to any other field.
 
 import hashlib
 import json
+import os
+import tempfile
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -92,28 +94,29 @@ class PipelineRegistry:
         address.
 
         Stores the faithful ``model_dump(mode="json")`` payload — including the
-        explicit-outputs duplication, which is the audit record. Verifies, by
-        construction, that the address recomputed from the persisted payload
-        equals the address the file is named by.
+        explicit-outputs duplication, which is the audit record. The write is
+        atomic: the JSON goes to a uniquely-named temp file in ``self.root``,
+        then :func:`os.replace` atomically swaps it into place, so no reader
+        ever observes a partial ``<address>.json``. The content address is
+        verified on the read path (:meth:`read`), not here.
         """
         self.root.mkdir(parents=True, exist_ok=True)
         address = address_of(result)
         payload = result.model_dump(mode="json")
 
-        # Store-side agreement check: the key recomputed from the persisted
-        # payload must equal the stored address (IDG-029 soundness).
-        persisted_address = content_address(
-            payload["seeds"], result.parameters
-        )
-        if persisted_address != address:
-            raise ValueError(
-                f"content address disagreement: result addresses to "
-                f"{address!r} but its persisted payload addresses to "
-                f"{persisted_address!r}"
-            )
-
         text = json.dumps(payload, sort_keys=True, ensure_ascii=False)
-        self.path_for(address).write_text(text, encoding="utf-8")
+        target = self.path_for(address)
+        # Temp file in the SAME directory as the target so os.replace is a true
+        # atomic rename (single-writer contract; this just closes the
+        # torn-write window, not a concurrent-writer lock).
+        fd, tmp_name = tempfile.mkstemp(dir=self.root, suffix=".json.tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as tmp:
+                tmp.write(text)
+            os.replace(tmp_name, target)
+        except BaseException:
+            Path(tmp_name).unlink(missing_ok=True)
+            raise
         return address
 
     def read(self, address: str) -> PipelineResult:
