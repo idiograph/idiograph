@@ -1249,44 +1249,42 @@ def assemble_graph(
     return unified_nodes, unified_cites, mismatches
 
 
-async def run_arxiv_pipeline(
+async def resolve_seeds(
     seeds: list[dict],
-    parameters: PipelineParameters,
     *,
     client: httpx.AsyncClient,
     api_key: str,
-) -> PipelineResult:
-    """Compose the per-stage pipeline into one end-to-end run.
+) -> tuple[list[PaperRecord], list[SeedResolutionFailure]]:
+    """Node 0 resolution phase, extracted so the uncached orchestrator and the
+    read-through cache share ONE resolution per invocation.
 
     ``seeds`` is a list of seed identifier dicts (``{"arxiv_id": ...}`` /
-    ``{"doi": ...}``) — the exact shape Node 0's ``fetch_seeds`` accepts; shape
-    classification is Node 0's job. ``client`` and ``api_key`` are owned at the
-    true top of the call graph and threaded to every async stage (IDG-022); the
-    orchestrator constructs neither.
+    ``{"doi": ...}``) — the exact shape ``fetch_seeds`` accepts. Returns
+    ``(resolved, seed_failures)``: the resolved ``PaperRecord`` list that feeds
+    BOTH the content-address key and traversal, and the typed per-seed
+    resolution failures.
 
-    The orchestrator performs no domain computation — it delegates every domain
-    operation to an existing per-stage function and is responsible only for
-    composition: graph merge, dataflow, failure-provenance aggregation,
-    end-of-pipeline enrichment, and result assembly.
+    Resolution runs on every pipeline call, hit or miss — the cache short-circuits
+    TRAVERSAL, never resolution — so this phase is deliberately independent of the
+    cache. ``seed_failures`` is request-derived (a function of the requested seed
+    set, which is not part of the content address); the composition layer
+    re-supplies it onto the result, so this helper returns it separately rather
+    than embedding it.
 
-    Input validation: ``seeds == []`` raises ``ValueError`` here, before any
-    work (a pre-check, not a reliance on ``fetch_seeds``' own empty-input
-    guard — see Halt conditions in the spec).
-
-    Halts (raises, no partial result) when ``seeds`` is empty, when every seed
-    fails Node 0 resolution (``fetch_seeds``' ``ValueError`` propagates), or when
-    any whole-graph stage (Node 4.5/5/6/7) raises. Otherwise records provenance
-    on the result and proceeds — partial Node 0/3/4 failures and empty
-    backward/forward results still produce a valid (possibly seeds-only) graph.
+    Input validation: ``seeds == []`` raises ``ValueError`` here, before any work
+    (a pre-check, not a reliance on ``fetch_seeds``' own empty-input guard — see
+    Halt conditions in the spec). ``fetch_seeds``' own ``ValueError`` on total
+    resolution failure propagates; the empty-resolved-without-raising Node 0
+    contract violation raises ``PipelineError``.
     """
     if not seeds:
         raise ValueError("seeds must be non-empty")
 
     _log.info("Pipeline: starting run with %d seeds", len(seeds))
 
-    # 1. Resolve seeds (single batch call). fetch_seeds raises ValueError on
-    #    empty input OR when every seed fails — that is the "no roots" halt; let
-    #    it propagate.
+    # Resolve seeds (single batch call). fetch_seeds raises ValueError on empty
+    # input OR when every seed fails — that is the "no roots" halt; let it
+    # propagate.
     resolved, raw_failures = await fetch_seeds(seeds, client, api_key)
     if not resolved:
         # Defensive guard: a Node 0 contract violation, not normal total
@@ -1301,7 +1299,36 @@ async def run_arxiv_pipeline(
         _log.warning(
             "Pipeline: Node 0 failed to resolve %d seed(s)", len(seed_failures)
         )
+    return resolved, seed_failures
 
+
+async def run_traversal(
+    resolved: list[PaperRecord],
+    parameters: PipelineParameters,
+    *,
+    client: httpx.AsyncClient,
+    api_key: str,
+) -> PipelineResult:
+    """Traversal + whole-graph assembly over an already-resolved seed set — the
+    pure compute core of the pipeline, extracted so the read-through cache can
+    short-circuit exactly this and nothing before it.
+
+    Takes the resolved seeds (never the request dicts): it performs no Node 0
+    resolution and every OpenAlex call it issues is a traversal call, so a cache
+    hit that skips this function issues none. It delegates every domain operation
+    to an existing per-stage function and is responsible only for composition:
+    graph merge, dataflow, failure-provenance aggregation, end-of-pipeline
+    enrichment, and result assembly.
+
+    Returns a complete ``PipelineResult`` EXCEPT the request-derived
+    ``seed_failures``, which it leaves empty for the composition layer
+    (``run_arxiv_pipeline`` or the cache) to re-supply from the current resolve
+    output — so a cache hit provably equals a fresh miss on that field.
+
+    Halts (raises, no partial result) when any whole-graph stage (Node
+    4.5/5/6/7) raises. Otherwise proceeds — partial Node 3/4 failures and empty
+    backward/forward results still produce a valid (possibly seeds-only) graph.
+    """
     # 2. Traversal (one batch call each, over the full resolved-seed list).
     #    Failures are read off the results, never caught per seed.
     _log.info("Pipeline: starting backward traversal")
@@ -1408,7 +1435,10 @@ async def run_arxiv_pipeline(
     #    cycle.cycle_log.suppressed_edges for audit.
     merged_edges = cycle.cleaned_edges + co.edges
 
-    # 7. Construct and return.
+    # 7. Construct and return. ``seed_failures`` is request-derived (a function
+    #    of the requested seed set, not the resolved set that keys the cache);
+    #    the composition layer re-supplies it from the current resolve output,
+    #    so it is left empty here (see run_arxiv_pipeline / cache re-supply).
     result = PipelineResult(
         nodes=enriched_nodes,
         edges=merged_edges,
@@ -1420,12 +1450,57 @@ async def run_arxiv_pipeline(
         pagerank=prank,
         communities=communities,
         parameters=parameters,
-        seed_failures=seed_failures,
+        seed_failures=[],
         backward_failed_batches=n3.failed_batches,
         forward_failed_seeds=n4.failed_seeds,
         truncated_seeds=n4.truncated_seeds,
         data_integrity_warnings=mismatches,
     )
+    _log.info(
+        "Pipeline: traversal complete — %d nodes, %d edges",
+        len(result.nodes),
+        len(result.edges),
+    )
+    return result
+
+
+async def run_arxiv_pipeline(
+    seeds: list[dict],
+    parameters: PipelineParameters,
+    *,
+    client: httpx.AsyncClient,
+    api_key: str,
+) -> PipelineResult:
+    """Compose the per-stage pipeline into one end-to-end run (UNCACHED).
+
+    ``seeds`` is a list of seed identifier dicts (``{"arxiv_id": ...}`` /
+    ``{"doi": ...}``) — the exact shape Node 0's ``fetch_seeds`` accepts; shape
+    classification is Node 0's job. ``client`` and ``api_key`` are owned at the
+    true top of the call graph and threaded to every async stage (IDG-022); the
+    orchestrator constructs neither.
+
+    Body is the composition of the two extracted halves: :func:`resolve_seeds`
+    (the Node 0 phase, which also raises the empty-input, total-failure, and
+    contract-violation halts) then :func:`run_traversal` (the traversal + assembly
+    core). The single request-derived field, ``seed_failures``, is re-supplied
+    from the resolve output onto the traversal result — the same re-supply the
+    read-through cache applies on a hit, so this orchestrator and a cache hit
+    produce byte-identical results. This function is deliberately cache-unaware;
+    the caching decision layer lives above it in ``cache.py``.
+
+    Halts (raises, no partial result) when ``seeds`` is empty, when every seed
+    fails Node 0 resolution, or when any whole-graph stage (Node 4.5/5/6/7)
+    raises. Otherwise records provenance on the result and proceeds — partial
+    Node 0/3/4 failures and empty backward/forward results still produce a valid
+    (possibly seeds-only) graph.
+    """
+    resolved, seed_failures = await resolve_seeds(
+        seeds, client=client, api_key=api_key
+    )
+    result = await run_traversal(
+        resolved, parameters, client=client, api_key=api_key
+    )
+    result = result.model_copy(update={"seed_failures": seed_failures})
     _log.info(
         "Pipeline: complete — %d nodes, %d edges, %d failure records",
         len(result.nodes),
