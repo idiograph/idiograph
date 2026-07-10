@@ -749,6 +749,58 @@ def test_node4_failed_seed_not_in_truncated_seeds():
     assert truncated_ids == set()
 
 
+def test_node4_cap_is_order_invariant_at_score_tie():
+    """Two citing papers that tie exactly on Node 4 score, straddling the cap,
+    must resolve the same way regardless of resolved-seed list order.
+
+    The pre-fix score-only sort broke ties by ``merged`` insertion order,
+    which tracks the ``for seed in seeds`` walk — so permuting the seed list
+    (and each seed's citer order) flipped which tied paper survived the cap.
+    The ``node_id`` secondary key makes truncation a pure function of the seed
+    *set*. With beta=0 the score is alpha·velocity, so A (arxiv:a.1) and B
+    (arxiv:b.1) tie exactly (same cited_by_count and year); the cap keeps H
+    plus exactly one of them, and node_id ordering makes that A every time.
+    """
+    def _citer(oa: str, arxiv: str, cited: int) -> dict:
+        return _work(oa, arxiv_id=arxiv, cited_by_count=cited, year=2022)
+
+    h = _citer("W_H", "h.1", 100)  # outscores; always survives the cap
+    a = _citer("W_A", "a.1", 10)  # ties b exactly
+    b = _citer("W_B", "b.1", 10)
+
+    s1 = _seed_record("arxiv:s1.1", "W_S1")
+    s2 = _seed_record("arxiv:s2.1", "W_S2")
+
+    # Run 1: seeds [S1, S2]; S1 cited by [H, A], S2 by [B] -> insertion H, A, B.
+    r1 = _run_forward(
+        _CitesClient({"W_S1": [h, a], "W_S2": [b]}),
+        seeds=[s1, s2],
+        api_key="k",
+        n_forward=2,
+        alpha=1.0,
+        beta=0.0,
+        lambda_decay=0.05,
+        sort="cited_by_count:desc",
+        current_year=2026,
+    )
+    # Run 2: seeds [S2, S1]; S1 citers permuted to [A, H] -> insertion B, A, H.
+    r2 = _run_forward(
+        _CitesClient({"W_S1": [a, h], "W_S2": [b]}),
+        seeds=[s2, s1],
+        api_key="k",
+        n_forward=2,
+        alpha=1.0,
+        beta=0.0,
+        lambda_decay=0.05,
+        sort="cited_by_count:desc",
+        current_year=2026,
+    )
+
+    assert [p.node_id for p in r1.papers] == [p.node_id for p in r2.papers]
+    # Non-tied high scorer stays first; the node_id tiebreak picks A over B.
+    assert [p.node_id for p in r1.papers] == ["arxiv:h.1", "arxiv:a.1"]
+
+
 def test_node4_deterministic_same_input():
     """Identical inputs produce identical Node4Result. Sort is the
     determinism mechanism — the same cited_by_count:desc sort yields the

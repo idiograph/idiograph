@@ -663,6 +663,55 @@ def test_node3_edge_citing_paper_year_set():
     assert d1_to_d2.citing_paper_year == 2015
 
 
+def test_node3_cap_is_order_invariant_at_score_tie():
+    """Two non-seed papers that tie exactly on Node 3 score, straddling the
+    cap, must resolve the same way regardless of resolved-seed list order.
+
+    The pre-fix score-only sort broke ties by ``merged`` insertion order,
+    which tracks the ``for seed in seeds`` walk — so permuting the seed list
+    (and each seed's refs) flipped which tied paper survived the cap. The
+    ``node_id`` secondary key makes truncation a pure function of the seed
+    *set*. A (arxiv:a.1) and B (arxiv:b.1) tie; the cap keeps H plus exactly
+    one of them, and node_id ordering makes that A in every seed order.
+    """
+    # H outscores by citation count and always survives; A and B tie exactly
+    # (same cited_by_count and year -> identical _node3_score at hop_depth=1).
+    def _works(s1_refs: list[str]) -> dict:
+        return {
+            "S1": _work("S1", arxiv_id="s1.1", referenced_works=s1_refs),
+            "S2": _work("S2", arxiv_id="s2.1", referenced_works=["B"]),
+            "H": _work("H", arxiv_id="h.1", cited_by_count=100, year=2015),
+            "A": _work("A", arxiv_id="a.1", cited_by_count=10, year=2015),
+            "B": _work("B", arxiv_id="b.1", cited_by_count=10, year=2015),
+        }
+
+    s1 = _seed_record("arxiv:s1.1", "S1")
+    s2 = _seed_record("arxiv:s2.1", "S2")
+
+    # Run 1: seeds [S1, S2], S1 refs [H, A] -> insertion H, A, B.
+    r1 = _run(
+        _BatchClient(_works(["H", "A"])),
+        seeds=[s1, s2],
+        api_key="k",
+        n_backward=2,
+        lambda_decay=0.05,
+        sleep_ms=0,
+    )
+    # Run 2: seeds [S2, S1], S1 refs [A, H] -> insertion B, A, H (both permuted).
+    r2 = _run(
+        _BatchClient(_works(["A", "H"])),
+        seeds=[s2, s1],
+        api_key="k",
+        n_backward=2,
+        lambda_decay=0.05,
+        sleep_ms=0,
+    )
+
+    assert [p.node_id for p in r1.papers] == [p.node_id for p in r2.papers]
+    # Non-tied high scorer stays first; the node_id tiebreak picks A over B.
+    assert [p.node_id for p in r1.papers] == ["arxiv:h.1", "arxiv:a.1"]
+
+
 def test_node3_deterministic_same_input():
     """Identical inputs produce identical Node3Result."""
     works = {

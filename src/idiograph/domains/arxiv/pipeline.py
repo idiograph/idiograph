@@ -408,8 +408,7 @@ async def backward_traverse(
     current_year = date.today().year
     scored = sorted(
         merged.values(),
-        key=lambda r: _node3_score(r, lambda_decay, current_year),
-        reverse=True,
+        key=lambda r: (-_node3_score(r, lambda_decay, current_year), r.node_id),
     )
     papers = scored[:n_backward]
 
@@ -612,7 +611,7 @@ async def forward_traverse(
             lambda_decay,
         )
 
-    scored = sorted(merged.values(), key=_score, reverse=True)
+    scored = sorted(merged.values(), key=lambda r: (-_score(r), r.node_id))
     papers = scored[:n_forward]
 
     paper_ids = {p.node_id for p in papers}
