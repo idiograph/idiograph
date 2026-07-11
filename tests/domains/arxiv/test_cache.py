@@ -11,6 +11,7 @@ the cache composition is exercised end-to-end against a real on-disk registry.
 """
 
 import asyncio
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -23,6 +24,7 @@ from idiograph.domains.arxiv.models import (
     CitationEdge,
     CoCitationParameters,
     ForwardParameters,
+    LLMConfig,
     Node3Result,
     Node4Result,
     PaperRecord,
@@ -35,8 +37,63 @@ from idiograph.domains.arxiv.registry import (
     address_of,
     content_address,
 )
+from idiograph.domains.arxiv.relationship_annotation import prompt_template_hash
 
 _CLIENT = object()  # sentinel — every network stage is mocked, so it is unused.
+
+
+# ── Fake Anthropic client (mirrors tests/…/test_pipeline_node55.py) ───────────
+#
+# Node 5.5 draws against ``.messages.create`` only; the suite stubs it so no
+# live API call is made. Scripts one valid payload, replayed for every draw.
+
+
+class _FakeBlock:
+    def __init__(self, text: str) -> None:
+        self.type = "text"
+        self.text = text
+
+
+class _FakeResponse:
+    def __init__(self, text: str) -> None:
+        self.content = [_FakeBlock(text)]
+
+
+class _FakeMessages:
+    def __init__(self, payload: str) -> None:
+        self._payload = payload
+        self.calls: list[dict] = []
+
+    async def create(self, *, model, max_tokens, temperature, messages):
+        self.calls.append({"model": model, "messages": messages})
+        return _FakeResponse(self._payload)
+
+
+class _FakeAnthropic:
+    """Minimal stand-in for ``AsyncAnthropic`` — only ``.messages.create``."""
+
+    def __init__(self, payload: str) -> None:
+        self.messages = _FakeMessages(payload)
+
+    @property
+    def call_count(self) -> int:
+        return len(self.messages.calls)
+
+
+def _valid_payload(
+    label: str = "downstream_application", confidence: float = 0.8
+) -> str:
+    return json.dumps(
+        {
+            "relationship_type": label,
+            "semantic_confidence": confidence,
+            "reasoning": "because",
+        }
+    )
+
+
+def _llm_config(model_id: str = "claude-haiku-4-5-20251001") -> LLMConfig:
+    return LLMConfig(model_id=model_id, prompt_template_hash=prompt_template_hash())
 
 
 # ── Helpers (mirroring the orchestrator/registry idiom) ──────────────────────
@@ -110,6 +167,8 @@ def _cached_run(
     registry: PipelineRegistry,
     parameters: PipelineParameters,
     seeds: list[dict] | None = None,
+    *,
+    anthropic_client: object | None = None,
 ) -> PipelineResult:
     return asyncio.run(
         cached_run_arxiv_pipeline(
@@ -118,6 +177,7 @@ def _cached_run(
             client=_CLIENT,
             api_key="k",
             registry=registry,
+            anthropic_client=anthropic_client,
         )
     )
 
@@ -287,3 +347,85 @@ def test_hit_equals_miss_equals_uncached(
     # The re-supplied request-derived provenance survived the round-trip.
     assert hit.seed_failures == uncached.seed_failures
     assert len(hit.seed_failures) == 1
+
+
+# ── Record-replay contract for the threaded Anthropic client (Node 5.5) ──────
+
+
+def _llm_params() -> PipelineParameters:
+    """The LLM-configured params variant — Node 5.5 runs on a miss."""
+    p = _params()
+    return p.model_copy(update={"llm": _llm_config()})
+
+
+def test_llm_miss_draws_and_persists_then_hit_replays_without_client(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both halves of the record-replay contract through the PRODUCTION cached
+    entry point with ``parameters.llm`` set:
+
+    (1) MISS with a stubbed Anthropic client → traversal runs Node 5.5, the LLM
+        is drawn against, non-seed nodes carry relationship annotations, and the
+        result persists to the registry.
+    (2) HIT with ``anthropic_client=None`` → the stored PipelineResult replays,
+        no draw is made, and NO ValueError is raised (the client is genuinely
+        optional on replay — the record-replay claim).
+    """
+    s = _seed("S")
+    n3, n4 = _small_graph()  # non-seed B1 (backward) + F1 (forward), both titled
+    _install_stages(monkeypatch, [s], [], n3, n4)
+    params = _llm_params()
+    reg = PipelineRegistry(tmp_path)
+
+    # (1) MISS — client REQUIRED (Node 5.5 draws). B1 and F1 each classify.
+    client = _FakeAnthropic(_valid_payload("downstream_application", 0.8))
+    missed = _cached_run(reg, params, anthropic_client=client)
+
+    assert client.call_count == 2  # one draw per non-seed classifiable paper
+    annotated = {
+        n.node_id: n.relationship_type
+        for n in missed.nodes
+        if n.node_id != "S"
+    }
+    assert annotated == {"B1": "downstream_application", "F1": "downstream_application"}
+    # The seed itself is never classified.
+    (seed_node,) = [n for n in missed.nodes if n.node_id == "S"]
+    assert seed_node.relationship_type is None
+    # Persisted at the llm-keyed address.
+    address = content_address([s.node_id], params)
+    assert reg.path_for(address).exists()
+
+    # (2) HIT — same seeds + params, NO client. Must replay, must not draw, must
+    # not raise the run_traversal client-required guard.
+    backward = pipeline.backward_traverse
+    forward = pipeline.forward_traverse
+    backward.reset_mock()
+    forward.reset_mock()
+    hit = _cached_run(reg, params, anthropic_client=None)
+
+    backward.assert_not_called()  # traversal skipped → no draw possible
+    forward.assert_not_called()
+    # The stored annotations replay verbatim (nodes are a keyed field).
+    assert hit.model_dump() == missed.model_dump()
+    replayed = {
+        n.node_id: n.relationship_type for n in hit.nodes if n.node_id != "S"
+    }
+    assert replayed == {
+        "B1": "downstream_application",
+        "F1": "downstream_application",
+    }
+
+
+def test_llm_miss_without_client_raises_valueerror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A MISS with ``parameters.llm`` set and ``anthropic_client=None`` hits the
+    run_traversal draw-site guard — the guard fires only where a draw is actually
+    attempted, never hoisted above the hit/miss branch."""
+    s = _seed("S")
+    n3, n4 = _small_graph()
+    _install_stages(monkeypatch, [s], [], n3, n4)
+    reg = PipelineRegistry(tmp_path)
+
+    with pytest.raises(ValueError, match="anthropic_client"):
+        _cached_run(reg, _llm_params(), anthropic_client=None)
