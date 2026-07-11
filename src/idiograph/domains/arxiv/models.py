@@ -6,7 +6,32 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    model_serializer,
+    model_validator,
+)
+
+
+RelationshipType = Literal[
+    "methodological_precursor",
+    "theoretical_foundation",
+    "cross_domain_source",
+    "downstream_application",
+    "empirical_validation",
+    "concurrent_work",
+    "adjacent_work",
+    "unclear",
+]
+"""Closed vocabulary for Node 5.5 semantic relationship annotation (IDG-034).
+
+Shared alias reused by the typed-form model (``RelationshipAnnotation`` in
+``relationship_annotation.py``) and any future renderer legend. ``None`` on a
+``PaperRecord`` means *not classified* (a seed, or an LLM-free run); ``"unclear"``
+means *classified as indeterminate*. These are distinct states.
+"""
 
 
 class DepthMetrics(BaseModel):
@@ -122,9 +147,11 @@ class PaperRecord(BaseModel):
         description="Assigned by Node 6 — categorical position relative to the "
                     "seed set. See AMD-019.",
     )
-    relationship_type: str | None = Field(
+    relationship_type: RelationshipType | None = Field(
         default=None,
-        description="Semantic relationship to seed. Assigned by Node 5.5 — closed vocabulary.",
+        description="Semantic relationship to the seed set. Assigned by Node 5.5 "
+                    "— closed vocabulary (IDG-034). None = not classified (seed or "
+                    "LLM-free run); 'unclear' = classified as indeterminate.",
     )
     semantic_confidence: float | None = Field(
         default=None,
@@ -506,6 +533,37 @@ class CommunitiesParameters(BaseModel):
     )
 
 
+class LLMConfig(BaseModel):
+    """Node 5.5 model-configuration axis of the content address (IDG-032).
+
+    This object IS the record-replay boundary's configuration: every decoding
+    parameter that affects output participates in ``content_address`` via the
+    nested ``model_dump``. ``prompt_template_hash`` is the sha256 of the module
+    ``PROMPT_TEMPLATE`` constant — *derived, never hand-entered* — so editing the
+    prompt moves the address automatically (no version integer to forget). Add a
+    decoding param here only if it affects output; each one that does MUST be
+    here. Frozen — an immutable config input.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    model_id: str = Field(
+        ..., description="Anthropic model id, e.g. 'claude-haiku-4-5-20251001'."
+    )
+    prompt_template_hash: str = Field(
+        ...,
+        description="sha256 of the module PROMPT_TEMPLATE constant. Derived via "
+                    "relationship_annotation.prompt_template_hash(), never "
+                    "hand-entered.",
+    )
+    temperature: float = Field(
+        0.0, description="Decoding temperature (affects output → in the address)."
+    )
+    max_tokens: int = Field(
+        512, description="Max output tokens (affects output → in the address)."
+    )
+
+
 class PipelineParameters(BaseModel):
     """Per-stage configuration for ``run_arxiv_pipeline``, as nested model
     objects. ``backward`` and ``forward`` are required; the rest default to the
@@ -532,6 +590,32 @@ class PipelineParameters(BaseModel):
         default_factory=CommunitiesParameters,
         description="Node 7 community-detection parameters.",
     )
+    llm: LLMConfig | None = Field(
+        default=None,
+        description="Node 5.5 semantic-annotation config. Deliberately NOT a "
+                    "default_factory (unlike the sibling per-stage params): a real "
+                    "default would place non-null config into every run's "
+                    "model_dump and change content_address for every existing "
+                    "LLM-free run, violating IDG-032. None = LLM-free run (Node "
+                    "5.5 skipped, address unchanged).",
+    )
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        """Omit ``llm`` from the dump when it is None so an LLM-free run's
+        ``content_address`` is byte-identical to the pre-``llm``-field baseline
+        (IDG-032 "LLMConfig=None → address-unchanged"; spec build-verification
+        item 2, outcome (ii)).
+
+        Narrow by design: a blanket ``exclude_none`` would also drop
+        ``co_citation.max_edges`` (legitimately None) and re-baseline every
+        existing address. A real ``llm`` config is always serialized in full —
+        only the null case is dropped, so no LLM-run provenance is lost.
+        """
+        data = handler(self)
+        if self.llm is None:
+            data.pop("llm", None)
+        return data
 
 
 class SeedResolutionFailure(BaseModel):
