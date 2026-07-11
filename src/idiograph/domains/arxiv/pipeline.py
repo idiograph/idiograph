@@ -12,6 +12,7 @@ from typing import Literal
 
 import httpx
 import networkx as nx
+from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
 
 from idiograph.core.logging_config import get_logger
@@ -37,6 +38,7 @@ from idiograph.domains.arxiv.models import (
     TruncatedSeed,
     make_node_id,
 )
+from idiograph.domains.arxiv.relationship_annotation import annotate_relationships
 
 load_dotenv()
 
@@ -1307,6 +1309,7 @@ async def run_traversal(
     *,
     client: httpx.AsyncClient,
     api_key: str,
+    anthropic_client: AsyncAnthropic | None = None,
 ) -> PipelineResult:
     """Traversal + whole-graph assembly over an already-resolved seed set — the
     pure compute core of the pipeline, extracted so the read-through cache can
@@ -1393,6 +1396,30 @@ async def run_traversal(
     )
     _log.info("Pipeline: co-citation complete")
 
+    # --- Node 5.5 insertion (spec-node5.5-semantic-relationship) ---
+    # Build-time, miss-gated (this function runs only on a cache MISS): classify
+    # each non-seed paper's relationship to the seed set. LLM-free runs
+    # (parameters.llm is None) skip it entirely — a pure no-op, address unchanged.
+    # relationship_type is a leaf; the downstream stages below do not read it, so
+    # reassigning unified_nodes to the annotated copies is safe.
+    if parameters.llm is not None:
+        if anthropic_client is None:
+            raise ValueError(
+                "run_traversal: parameters.llm is set but anthropic_client is "
+                "None — Node 5.5 requires an injected AsyncAnthropic client "
+                "(IDG-024 keyword-only injection)."
+            )
+        ann = await annotate_relationships(
+            unified_nodes,
+            resolved,
+            parameters.llm,
+            anthropic_client=anthropic_client,
+        )
+        unified_nodes = ann.nodes
+    else:
+        _log.debug("Node 5.5: skipped (llm config None)")
+    # --- end Node 5.5 ---
+
     _log.info("Pipeline: starting depth metrics")
     depth = compute_depth_metrics(unified_nodes, cycle.cleaned_edges)
     _log.info("Pipeline: depth metrics complete")
@@ -1469,6 +1496,7 @@ async def run_arxiv_pipeline(
     *,
     client: httpx.AsyncClient,
     api_key: str,
+    anthropic_client: AsyncAnthropic | None = None,
 ) -> PipelineResult:
     """Compose the per-stage pipeline into one end-to-end run (UNCACHED).
 
@@ -1497,7 +1525,11 @@ async def run_arxiv_pipeline(
         seeds, client=client, api_key=api_key
     )
     result = await run_traversal(
-        resolved, parameters, client=client, api_key=api_key
+        resolved,
+        parameters,
+        client=client,
+        api_key=api_key,
+        anthropic_client=anthropic_client,
     )
     result = result.model_copy(update={"seed_failures": seed_failures})
     _log.info(
