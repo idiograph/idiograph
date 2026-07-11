@@ -70,6 +70,7 @@ lists without re-running traversal, which a hit exists to avoid.
 """
 
 import httpx
+from anthropic import AsyncAnthropic
 
 from idiograph.core.logging_config import get_logger
 from idiograph.domains.arxiv.models import (
@@ -114,6 +115,7 @@ async def cached_run_arxiv_pipeline(
     client: httpx.AsyncClient,
     api_key: str,
     registry: PipelineRegistry,
+    anthropic_client: AsyncAnthropic | None = None,
 ) -> PipelineResult:
     """Read-through cache over ``run_arxiv_pipeline``'s traversal core.
 
@@ -133,6 +135,15 @@ async def cached_run_arxiv_pipeline(
     ``run_arxiv_pipeline`` itself is cache-unaware; this wrapper is the explicit
     decision layer that owns whether to compute. ``registry`` is injected (the
     caller owns its lifecycle), matching the client/api_key injection convention.
+
+    ``anthropic_client`` is threaded through to :func:`run_traversal` on the MISS
+    path only — it is what Node 5.5 draws against when ``parameters.llm`` is set
+    (IDG-024 keyword-only injection; defaults None, guarded in ``run_traversal``
+    exactly where a draw is attempted). A HIT never calls traversal and so never
+    draws, so replay requires no client: a hit with ``parameters.llm`` set and
+    ``anthropic_client=None`` succeeds and replays the stored ``PipelineResult``.
+    This wrapper mirrors ``run_arxiv_pipeline``'s forwarding — it adds no guard of
+    its own, since the sole draw site is inside ``run_traversal``.
     """
     resolved, seed_failures = await resolve_seeds(
         seeds, client=client, api_key=api_key
@@ -148,7 +159,11 @@ async def cached_run_arxiv_pipeline(
 
     _log.info("Cache MISS for %s — running traversal", address)
     result = await run_traversal(
-        resolved, parameters, client=client, api_key=api_key
+        resolved,
+        parameters,
+        client=client,
+        api_key=api_key,
+        anthropic_client=anthropic_client,
     )
     result = _resupply_request_derived(result, resolved, seed_failures)
     registry.write(result)
