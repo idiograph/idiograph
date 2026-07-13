@@ -117,7 +117,9 @@ def _seed_filter(seed: dict) -> str | None:
     if "arxiv_id" in seed and seed["arxiv_id"]:
         return f"ids.arxiv:https://arxiv.org/abs/{seed['arxiv_id']}"
     if "doi" in seed and seed["doi"]:
-        return f"ids.doi:{seed['doi']}"
+        # OpenAlex rejects `ids.doi:` with HTTP 400; `doi:` accepts both the bare
+        # DOI and the https://doi.org/… prefixed form.
+        return f"doi:{seed['doi']}"
     return None
 
 

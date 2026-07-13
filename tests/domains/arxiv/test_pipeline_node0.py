@@ -79,6 +79,37 @@ def test_single_doi_seed_resolves():
     assert resolved[0].root_ids == ["doi:https://doi.org/10.1/x"]
 
 
+def test_doi_seed_emits_doi_filter_on_the_wire():
+    """DOI seeds must filter on ``doi:``.
+
+    OpenAlex rejects ``ids.doi:`` with HTTP 400 ("ids.doi is not a valid field").
+    Asserting the emitted ``filter=`` expression — not the parsed response — is
+    what makes this a regression test: a filter the API rejects is otherwise
+    indistinguishable from one it accepts under a mocked transport.
+    """
+    work = _work(openalex_id="W200", arxiv_id=None, doi="https://doi.org/10.1/x")
+    client = _make_client([_ok_response({"results": [work]})])
+    asyncio.run(fetch_seeds([{"doi": "10.1/x"}], client, api_key="k", sleep_ms=0))
+
+    params = client.get.call_args.kwargs["params"]
+    assert params["filter"] == "doi:10.1/x"
+    assert not params["filter"].startswith("ids.doi:")
+
+
+def test_doi_seed_url_form_emits_doi_filter_on_the_wire():
+    """The https://doi.org/… form is accepted upstream too — pass it through as-is."""
+    work = _work(openalex_id="W200", arxiv_id=None, doi="https://doi.org/10.1/x")
+    client = _make_client([_ok_response({"results": [work]})])
+    asyncio.run(
+        fetch_seeds(
+            [{"doi": "https://doi.org/10.1/x"}], client, api_key="k", sleep_ms=0
+        )
+    )
+
+    params = client.get.call_args.kwargs["params"]
+    assert params["filter"] == "doi:https://doi.org/10.1/x"
+
+
 def test_single_seed_not_found_raises():
     client = _make_client([_ok_response({"results": []})])
     with pytest.raises(ValueError):
