@@ -137,6 +137,17 @@ def prompt_template_hash(template: str = PROMPT_TEMPLATE) -> str:
     return hashlib.sha256(template.encode("utf-8")).hexdigest()
 
 
+# ── Parse contract (its sha256 is PipelineParameters.parse_contract_hash) ────
+#
+# The draw-parse rule is declared in ``models.PARSE_CONTRACT`` and hashed into the
+# content address there (IDG-032); it lives in ``models`` only because this module
+# imports ``models`` and the reverse import would be circular. Change the rule
+# below → amend that constant, or a pre-change ``unclear`` and a post-change real
+# label collide at the same address.
+
+_FENCE = "```"
+
+
 # ── Provenance (IDG-016) ─────────────────────────────────────────────────────
 
 _ABSTRACT_ABSENT = "(no abstract provided)"
@@ -378,15 +389,58 @@ async def annotate_relationships(
     return RelationshipAnnotationResult(nodes=annotated, provenance=provenance)
 
 
+def _strip_code_fence(raw: str) -> str:
+    """Unwrap a draw that is *exactly* one fenced block; otherwise pass it through.
+
+    The prompt says "no code fences" and the model mostly complies — but a fenced
+    draw is a formatting slip, not a bad judgement, and routing it to
+    ``model_output_invalid`` throws away an otherwise-valid annotation.
+
+    Narrow by construction, and deliberately NOT a "find the JSON somewhere in the
+    text" scrubber: the draw must OPEN with a fence and CLOSE with one, and the
+    only things removed are the two fence markers and the opening fence's info
+    string (```json / ```). Everything else is returned untouched to fail at
+    ``json.loads`` exactly as it does today — an unterminated fence, a fence with
+    prose on its opening line, prose wrapped around a fenced block, a fence buried
+    mid-draw. The set of draws that parse grows by the fenced-but-otherwise-valid
+    case and nothing else.
+
+    (Whitespace-stripping a non-fenced draw is not a widening: ``json.loads``
+    already tolerates surrounding whitespace.)
+    """
+    text = raw.strip()
+    if not text.startswith(_FENCE):
+        return text
+
+    inner = text[len(_FENCE) :]
+    if not inner.endswith(_FENCE):
+        return text  # unterminated fence — not a fenced block
+    inner = inner[: -len(_FENCE)]
+
+    info, newline, body = inner.partition("\n")
+    if not newline:
+        return inner.strip()  # single-line ```{...}```: no info string to shed
+    if len(info.split()) > 1:
+        return text  # prose on the opening line — not a bare info string
+    return body.strip()
+
+
 def _parse_annotation(raw: str) -> RelationshipAnnotation:
     """Parse and validate a raw model draw into a ``RelationshipAnnotation``.
 
+    Implements ``models.PARSE_CONTRACT`` — whose sha256 rides in the content
+    address as ``PipelineParameters.parse_contract_hash``. Changing what this
+    function accepts changes derived output, so it MUST be declared there too
+    (IDG-032); editing the rule and leaving the contract text alone would let a
+    pre-change and a post-change derivation collide at one address.
+
+    A leading/trailing code fence is unwrapped first (see :func:`_strip_code_fence`).
     ``model_validate_json`` would accept a bare top-level string; we require a
     JSON object, so a non-object draw raises ``ValueError`` → the
     ``model_output_invalid`` path. Enforcement of the label vocabulary and the
     confidence range happens on ``RelationshipAnnotation`` construction.
     """
-    parsed = json.loads(raw)
+    parsed = json.loads(_strip_code_fence(raw))
     if not isinstance(parsed, dict):
         raise ValueError("model output is not a JSON object")
     return RelationshipAnnotation.model_validate(parsed)
