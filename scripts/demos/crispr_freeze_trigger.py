@@ -84,7 +84,7 @@ SEEDS = [
 # Node 5.5 draws once per CLASSIFY paper, so the traversal caps bound both the
 # corpus size and the live-call count. Chosen for a corpus that is small enough
 # to watch run and large enough to be a real graph — not tuned to a target size.
-N_BACKWARD = 8
+N_BACKWARD = 3200
 N_FORWARD = 4
 
 # OpenAlex is slow enough on deep traversal that httpx's 5s default timeout can
