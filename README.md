@@ -154,6 +154,36 @@ uv run pytest tests/ -v
 
 ---
 
+## Replay the frozen CRISPR artifact
+
+The record-replay thesis (IDG-032) has a runnable proof on real data. A first,
+expensive process *froze* the CRISPR validation corpus — full traversal plus live
+LLM annotation, ~$2 and ~50 minutes — into one content-addressed artifact. That
+artifact is committed to this repo (`demo/registry/`), so a fresh clone can replay
+the warm (HIT) leg in **seconds, with no Anthropic spend and no cold freeze**:
+
+```bash
+uv run python scripts/demos/crispr_hit_leg.py
+```
+
+A second process reads the frozen bundle by content address, returns the fully
+LLM-annotated graph, and never enters traversal — the structural proof of replay.
+
+**A HIT is not hermetic (IDG-046).** Seed resolution runs on every call, hit or
+miss, because it *produces* the content address and so can never be skipped. The
+warm leg therefore makes exactly **2 OpenAlex GETs** (one per seed) and **0
+Anthropic calls**. You need a free [OpenAlex API key](https://openalex.org/) in
+`.env` as `OPENALEX_API_KEY`; you do **not** need an Anthropic key. This is not an
+offline replay — it fails outright if OpenAlex is unreachable or the key is invalid.
+
+The warm leg reads the frozen artifact XDG-first: if your own durable registry
+already holds it (you ran the cold freeze), it replays from there; otherwise it
+falls through to the committed `demo/registry/` blob. To reproduce the freeze
+yourself — it only needs to run once, ever — run
+`scripts/demos/crispr_freeze_trigger.py` (this one needs both keys).
+
+---
+
 ## The Thesis Connection
 
 The goal of this system is to make a concrete architectural argument.
