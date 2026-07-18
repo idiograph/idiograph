@@ -50,7 +50,6 @@ import asyncio
 import json
 import os
 import sys
-import tempfile
 from collections import Counter
 from pathlib import Path
 
@@ -68,7 +67,12 @@ from idiograph.domains.arxiv.models import (
     PipelineParameters,
     PipelineResult,
 )
-from idiograph.domains.arxiv.registry import PipelineRegistry, address_of
+from idiograph.domains.arxiv.pipeline import resolve_seeds
+from idiograph.domains.arxiv.registry import (
+    PipelineRegistry,
+    address_of,
+    content_address,
+)
 from idiograph.domains.arxiv.relationship_annotation import prompt_template_hash
 
 _log = get_logger("demos.crispr_freeze_trigger")
@@ -81,9 +85,14 @@ SEEDS = [
     {"doi": "10.1126/science.1231143"},
 ]
 
-# Node 5.5 draws once per CLASSIFY paper, so the traversal caps bound both the
-# corpus size and the live-call count. Chosen for a corpus that is small enough
-# to watch run and large enough to be a real graph — not tuned to a target size.
+# 3200 is NOT a size choice and this run is NOT "small enough to watch" — the
+# freeze takes ~50 minutes. 3200 is the ONE value at which the Node 3 backward
+# cap is a no-op: nothing is truncated and nothing is stranded below the cap, so
+# every retained node stays reachable from a root and Node 6 has no orphan to
+# raise on. It is a workaround for an unfixed defect, not a tuning knob. Below it
+# the cap strands nodes and compute_depth_metrics (pipeline.py:866) raises at
+# pipeline.py:921 — `raise ValueError(f"Node {nid} unreachable from any root")`.
+# Do NOT change the value: it is baked into the frozen artifact's content address.
 N_BACKWARD = 3200
 N_FORWARD = 4
 
@@ -94,9 +103,21 @@ OPENALEX_TIMEOUT_SECONDS = 30.0
 
 _MODEL_ID = "claude-haiku-4-5-20251001"
 
+# Node 5.5 draws serially ~1,100+ times on a cold MISS and the healthy path is
+# otherwise SILENT — so is a hang. Heartbeat every this-many draws (roughly once
+# a minute at the observed ~1 draw/2.5s) so a live run is visibly distinguishable
+# from a stall. Demo-layer only: the heartbeat rides the counting proxy, nothing
+# in src/ is touched.
+_DRAW_PROGRESS_EVERY = 25
+
 
 class _MessagesProxy:
-    """Counts ``messages.create`` calls, then delegates to the real client."""
+    """Counts ``messages.create`` calls, then delegates to the real client.
+
+    Also emits a heartbeat: every draw is serial and the healthy path prints
+    nothing, so without this a 45-minute leg and a hung one look identical from
+    the terminal (the 2026-07-17 operator watched a finished run for 40 minutes).
+    """
 
     def __init__(self, inner: object, owner: "CountingAnthropicClient") -> None:
         self._inner = inner
@@ -104,6 +125,15 @@ class _MessagesProxy:
 
     async def create(self, **kwargs: object) -> object:
         self._owner.calls += 1
+        if (
+            self._owner.calls == 1
+            or self._owner.calls % _DRAW_PROGRESS_EVERY == 0
+        ):
+            print(
+                f"    … Node 5.5: {self._owner.calls} live draws so far "
+                "(healthy — this leg is silent otherwise)",
+                flush=True,
+            )
         return await self._inner.create(**kwargs)
 
 
@@ -183,6 +213,51 @@ def _parameters() -> PipelineParameters:
     )
 
 
+def _durable_registry_root() -> Path:
+    """A registry root OUTSIDE /tmp that survives a reboot (XDG data home).
+
+    /tmp is cleaned on reboot and the frozen artifact cost real money, so the
+    registry must outlive this session and be findable by any later process.
+    Falls back to ``~/.local/share`` when XDG_DATA_HOME is unset — the standard
+    user-data location on this platform.
+
+    This lives HERE, not in :mod:`crispr_hit_leg`, because that module imports
+    from this one (the module of record): the single definition belongs on the
+    side the import direction already points at.
+    """
+    base = os.environ.get("XDG_DATA_HOME", "").strip() or str(
+        Path.home() / ".local" / "share"
+    )
+    return Path(base) / "idiograph" / "pipeline-registry"
+
+
+def _boundary_statement() -> list[str]:
+    """The MEASURED freeze/replay boundary, stated in the demo's own voice.
+
+    Five facts, measured twice: by source read at HEAD 6c5d975 and by live wire
+    count on the 2026-07-17 HIT leg (2 OpenAlex requests observed). Shared with
+    :mod:`crispr_hit_leg` so both scripts state the same boundary and neither can
+    drift into the older, incomplete "no network beyond seed resolution" claim.
+    """
+    return [
+        "  The measured boundary:",
+        "",
+        "    - The frozen and replayed region is Nodes 3 through 7 — the traversal",
+        "      and the LLM draw — served from a content-addressed bundle on a HIT.",
+        "    - Node 0 seed resolution is NOT frozen. It re-runs live against OpenAlex",
+        "      on every call, hit or miss, at one HTTP GET per seed — unconditional",
+        "      by construction, not oversight: resolution PRODUCES the content",
+        "      address, so it cannot be skipped.",
+        "    - A HIT therefore makes one OpenAlex GET per seed and ZERO Anthropic",
+        "      calls.",
+        "    - A HIT is NOT hermetic and cannot run offline: it fails outright if",
+        "      OpenAlex is unreachable or the API key is invalid.",
+        "    - The RECORD is portable across processes. The CORPUS it was drawn from",
+        "      is live-sourced at capture and is NOT portable across time — the same",
+        "      query froze 10 papers on one date and 11 on another, neither wrong.",
+    ]
+
+
 def _preconditions() -> tuple[str, str]:
     """Both keys or nothing — a stubbed LLM or a faked corpus voids the demo."""
     load_dotenv()
@@ -245,10 +320,61 @@ async def _main() -> int:
     anthropic_key, openalex_key = _preconditions()
 
     parameters = _parameters()
-    registry_root = Path(
-        tempfile.mkdtemp(prefix="idiograph-crispr-freeze-trigger-")
-    )
+    registry_root = _durable_registry_root()
     registry = PipelineRegistry(registry_root)
+
+    # ---- Refuse to re-freeze (pre-check) ---------------------------------
+    # Resolve the seeds and compute the content address the honest way — the
+    # exact ``resolve_seeds -> content_address`` sequence the production cache
+    # uses on its own hit branch — and look in the DURABLE registry BEFORE
+    # emitting any MISS-framed output. If the artifact is already frozen, a
+    # second freeze would only re-hit its own record: refuse, spend nothing, and
+    # point the operator at the replay script. This is why item (1) is not a
+    # one-liner — a durable root means a second invocation would otherwise HIT on
+    # leg 1, make zero Anthropic calls, and fail its own MISS assertions. Guarding
+    # here keeps those assertions honest by construction: the freeze only ever
+    # runs against a registry with no artifact at this address.
+    #
+    # Cost: one OpenAlex GET per seed. These GETs belong to the pre-check and are
+    # NOT folded into the per-leg OpenAlex counts printed below (separate client,
+    # separate counter) — the demo's leg totals stay truthful about what they
+    # include.
+    precheck_openalex = RequestCounter()
+    async with httpx.AsyncClient(
+        timeout=OPENALEX_TIMEOUT_SECONDS,
+        event_hooks={"request": [precheck_openalex]},
+    ) as precheck_client:
+        precheck_resolved, _ = await resolve_seeds(
+            SEEDS, client=precheck_client, api_key=openalex_key
+        )
+    address = content_address(
+        [record.node_id for record in precheck_resolved], parameters
+    )
+    if registry.path_for(address).exists():
+        print()
+        print("=" * 72)
+        print("  ALREADY FROZEN — refusing to re-freeze.")
+        print("=" * 72)
+        print()
+        print(f"  registry root : {registry_root}")
+        print(f"  address       : {address}")
+        print(f"  artifact      : {registry.path_for(address)}")
+        print()
+        print("  The CRISPR artifact is already recorded in the durable registry.")
+        print("  Re-running the freeze would resolve, hit its own record, draw no")
+        print("  tokens, and prove nothing new — so this leg does not run. The MISS")
+        print("  assertions below only stay honest against an EMPTY registry, so the")
+        print("  cold path deliberately executes at most once, ever.")
+        print()
+        print("  To watch the replay — seconds, no model — run the WARM path:")
+        print()
+        print("      uv run python scripts/demos/crispr_hit_leg.py")
+        print()
+        print(f"  pre-check cost: {precheck_openalex.count} OpenAlex GET(s), "
+              "0 Anthropic calls, $0.")
+        print("=" * 72)
+        print()
+        return 0
 
     traversal_spy = TraversalSpy()
     openalex_calls = RequestCounter()
@@ -266,7 +392,12 @@ async def _main() -> int:
     print(f"  n_backward  : {N_BACKWARD}      n_forward: {N_FORWARD}")
     print(f"  model       : {_MODEL_ID}")
     print(f"  prompt hash : {parameters.llm.prompt_template_hash[:16]}…  (derived)")
-    print(f"  registry    : {registry_root}  (fresh — first leg MUST miss)")
+    print(f"  registry    : {registry_root}")
+    print("                (durable; pre-check confirmed no artifact at this "
+          "address — first leg MUST miss)")
+    print(f"  pre-check   : {precheck_openalex.count} OpenAlex GET(s) to confirm no "
+          "prior freeze")
+    print("                (not folded into the per-leg counts below)")
     print()
 
     # Install the traversal counter on the symbol the cache actually calls. This
@@ -326,11 +457,10 @@ async def _main() -> int:
             )
 
             hit_traversals = traversal_spy.entries - hit_traversal_before
-            hit_anthropic = 0  # no client was supplied — a draw was impossible
             hit_openalex = openalex_calls.count - hit_openalex_before
 
             print(f"  traversal entered : {hit_traversals}")
-            print(f"  Anthropic calls   : {hit_anthropic}  (no client supplied)")
+            print("  Anthropic calls   : 0  (structural — no client exists to draw)")
             print(f"  OpenAlex requests : {hit_openalex}  (resolution only — "
                   "resolution runs on every call, hit or miss)")
             print()
@@ -373,11 +503,6 @@ async def _main() -> int:
             f"got {miss_anthropic}",
         ),
         (
-            "HIT made 0 Anthropic calls",
-            hit_anthropic == 0,
-            f"got {hit_anthropic}",
-        ),
-        (
             "MISS ran traversal exactly once",
             miss_traversals == 1,
             f"got {miss_traversals}",
@@ -418,14 +543,19 @@ async def _main() -> int:
     print()
     print("  The derivation was recorded once, against a content address that")
     print("  includes the model id, the prompt content, and the decoding params.")
-    print("  Replaying it needed no model, no traversal, and no network beyond")
-    print("  seed resolution — and returned the same bytes.")
+    print("  The HIT leg returned the same bytes with no model and no traversal.")
+    print()
+    for line in _boundary_statement():
+        print(line)
     print()
     print("  The answer came from a nondeterministic model.")
     print("  The infrastructure around it did not.")
     print("=" * 72)
     print()
     print(f"  Frozen artifact: {registry_root / (miss_address + '.json')}")
+    print()
+    print("  Recorded once. Replay it with the warm path — seconds, no model:")
+    print("      uv run python scripts/demos/crispr_hit_leg.py")
     print()
     return 0
 

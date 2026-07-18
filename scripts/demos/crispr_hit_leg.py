@@ -7,20 +7,23 @@
 """HIT leg — cross-process replay of the frozen CRISPR artifact (IDG-032).
 
 The companion :mod:`crispr_freeze_trigger` demo proves record-replay in ONE
-process: it runs a MISS then a HIT against a registry it just created in /tmp.
-This script proves the strictly stronger claim the MISS leg left unproven — that
-a SECOND, independent process can replay a FIRST process's artifact out of a
-DIFFERENT, durable directory:
+process: it runs a MISS then a HIT against one durable registry it owns. This
+script proves the strictly stronger claim the MISS leg left unproven — that a
+SECOND, independent process can replay a FIRST process's artifact out of the
+same DURABLE registry, addressed only by content:
 
-1. FREEZE happened earlier (09:40–10:33 today, another process). It persisted
-   exactly one ``PipelineResult`` — the first this project ever wrote — via live
-   Anthropic + OpenAlex calls, at ~$2 and ~53 minutes. This script does NOT
+1. FREEZE happened in an earlier process, via live Anthropic + OpenAlex calls at
+   ~$2 and ~50 minutes. It persisted exactly one ``PipelineResult`` into the
+   durable registry root under its address-derived filename. This script does NOT
    reproduce it and could not do so for free.
 
-2. This process stands up a DURABLE registry root outside /tmp, places that
-   existing artifact into it under its address-derived filename (a COPY; the
-   original is never touched), and calls the production ``cached_run_arxiv_pipeline``
-   against it with the SAME ``PipelineParameters`` and ``anthropic_client=None``.
+2. This process opens that same DURABLE registry root (XDG data home, outside
+   /tmp so it survives a reboot), computes the content address the freeze would
+   produce, and calls the production ``cached_run_arxiv_pipeline`` against it with
+   the SAME ``PipelineParameters`` and ``anthropic_client=None``. It never writes
+   to the registry — a HIT reads; only a MISS would write, and a MISS here is a
+   reported finding, never a silent re-freeze. There is no file to shuttle: the
+   artifact already sits at its address in the durable root.
 
 The parameters and seeds are IMPORTED from :mod:`crispr_freeze_trigger` — the
 module that produced the artifact — never re-typed. Any drift of one float or one
@@ -54,11 +57,8 @@ Run it::
 
 import asyncio
 import os
-import shutil
 import sys
 from collections import Counter
-from hashlib import sha256
-from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv
@@ -66,12 +66,16 @@ from dotenv import load_dotenv
 # Import the STANDARD and — per its own docstring — the thing to reuse. Deriving
 # the parameters and seeds from the module that produced the artifact is the
 # whole experiment: a re-typed literal that hashes differently fails as a MISS.
+# The durable-root helper and the measured-boundary text also live there (the
+# module of record) so this script cannot drift from them.
 # crispr_freeze_trigger guards _main() behind __main__, so importing it is inert.
 from crispr_freeze_trigger import (  # noqa: E402  (scripts/demos is on sys.path[0])
     OPENALEX_TIMEOUT_SECONDS,
     SEEDS,
     RequestCounter,
     TraversalSpy,
+    _boundary_statement,
+    _durable_registry_root,
     _parameters,
 )
 
@@ -88,31 +92,10 @@ from idiograph.domains.arxiv.registry import (
 
 _log = get_logger("demos.crispr_hit_leg")
 
-# The one artifact this project has ever persisted (FREEZE leg, 10:33 today).
-# Read-only to this script: we COPY out of it and never write into its directory.
-ARTIFACT = Path(
-    "/tmp/idiograph-crispr-freeze-trigger-ui5it4i7/"
-    "4e368a767b8778a9b5487abc449c6dbdf37815da60783110eead60ee1d9b7200.json"
-)
-EXPECTED_ADDRESS = ARTIFACT.stem
-
 # The re-supplied (request-derived) fields — see cache._resupply_request_derived.
 # A field-level diff between the on-disk bundle and the returned result should
 # name only these; anything else is a finding.
 _RESUPPLIED_FIELDS = {"seeds", "seed_failures"}
-
-
-def _durable_registry_root() -> Path:
-    """A registry root OUTSIDE /tmp that survives a reboot (XDG data home).
-
-    /tmp is cleaned on reboot and the artifact cost real money; the registry must
-    outlive this session. Falls back to ``~/.local/share`` when XDG_DATA_HOME is
-    unset — the standard user-data location on this platform.
-    """
-    base = os.environ.get("XDG_DATA_HOME", "").strip() or str(
-        Path.home() / ".local" / "share"
-    )
-    return Path(base) / "idiograph" / "pipeline-registry"
 
 
 def _openalex_key() -> str:
@@ -129,27 +112,6 @@ def _openalex_key() -> str:
             "still needs the OpenAlex key. It needs NO Anthropic key."
         )
     return key
-
-
-def _hash_file(path: Path) -> str:
-    """sha256 of a file, read in chunks (the artifact is ~9 MB)."""
-    h = sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def _place_artifact(registry: PipelineRegistry) -> Path:
-    """Copy the existing artifact into the durable registry under its
-    address-derived filename (``root/<address>.json``), leaving the original
-    untouched. A renamed/arbitrary-path copy would be preserved but unreadable —
-    ``PipelineRegistry.path_for`` makes the filename the key.
-    """
-    registry.root.mkdir(parents=True, exist_ok=True)
-    target = registry.path_for(EXPECTED_ADDRESS)
-    shutil.copyfile(ARTIFACT, target)  # COPY out; original is never modified.
-    return target
 
 
 def _field_diff(
@@ -176,8 +138,9 @@ def _field_diff(
 
 
 async def _diagnose_miss(openalex_key: str) -> str:
-    """A miss means the placed file's name != the computed address. Recompute the
-    address the honest way — resolve, then content_address — for the STOP report.
+    """A miss means no on-disk artifact addresses to the live-computed address.
+    Recompute the address the honest way — resolve, then content_address — for the
+    STOP report, so the finding names the address that actually moved.
     """
     async with httpx.AsyncClient(timeout=OPENALEX_TIMEOUT_SECONDS) as http_client:
         resolved, _ = await resolve_seeds(
@@ -204,28 +167,40 @@ async def _main() -> int:
     print(f"                  {SEEDS[1]['doi']}  (Zhang 2013)")
     print(f"  parameters    : imported from crispr_freeze_trigger._parameters()")
     print(f"  prompt hash   : {parameters.llm.prompt_template_hash[:16]}…  (derived)")
-    print(f"  source artifact : {ARTIFACT}")
-    print(f"  durable root    : {registry_root}")
+    print(f"  durable root  : {registry_root}")
     print()
 
-    # ---- Freeze the evidence: artifact hash BEFORE anything ----------------
-    sha_before = _hash_file(ARTIFACT)
-    artifact_bytes = ARTIFACT.stat().st_size
-    print("-" * 72)
-    print("  PLACEMENT  (copy the existing artifact into the durable registry)")
-    print("-" * 72)
-    print(f"  artifact size        : {artifact_bytes} bytes")
-    print(f"  artifact sha256 (pre): {sha_before}")
+    # ---- Fast fail: an empty registry means nothing was ever frozen -------
+    # A stranger cloning the repo has no artifact. Detect that HERE, straight from
+    # disk — no resolve, no pipeline. Otherwise the cache would resolve, run a full
+    # n_backward=3200 traversal (many minutes, pipeline.py:1308–1409), and only
+    # THEN raise the Node 5.5 guard. The whole selling point is "replays in
+    # seconds"; a no-artifact clone must fail in one, not after a MISS traversal.
+    present = (
+        sorted(p.name for p in registry_root.glob("*.json"))
+        if registry_root.exists()
+        else []
+    )
+    if not present:
+        print("-" * 72)
+        print("  NO ARTIFACT — nothing to replay.")
+        print("-" * 72)
+        print(f"  durable root : {registry_root}")
+        print("  The durable registry holds no frozen artifact, so there is nothing")
+        print("  to hit. This script REPLAYS a record; it does not create one, and")
+        print("  it will not enter the pipeline just to discover the record is absent.")
+        print()
+        print("  Record it first with the COLD path — ~$2 and ~50 minutes of live")
+        print("  Anthropic + OpenAlex calls, and it only needs to run ONCE, ever:")
+        print()
+        print("      uv run python scripts/demos/crispr_freeze_trigger.py")
+        print()
+        print("  Then re-run this script; the replay takes seconds.")
+        print("=" * 72)
+        print()
+        return 3
 
-    target = _place_artifact(registry)
-    print(f"  placed under         : {target}")
-    print(f"  registry path_for    : {registry.path_for(EXPECTED_ADDRESS)}")
-
-    # registry.read validates that the placed file addresses to its own filename
-    # — the content-addressed store returning exactly what its key names. A
-    # mismatch here is a FINDING (corrupt/renamed artifact), so let it propagate.
-    stored = registry.read(EXPECTED_ADDRESS)
-    print(f"  registry.read OK     : addresses to {address_of(stored)}")
+    print(f"  registry holds: {present}")
     print()
 
     # ---- HIT leg: same params, NO anthropic client ------------------------
@@ -266,28 +241,39 @@ async def _main() -> int:
     hit_traversals = traversal_spy.entries
     hit_openalex = openalex_calls.count
 
-    # ---- MISS abort path: report addresses and STOP -----------------------
+    # ---- MISS abort path: an artifact is present but the address MOVED -----
+    # We only reach the cached call when the registry is non-empty, so a miss here
+    # is the genuinely interesting case: a record exists, but the live-computed
+    # address does not name it (params drifted, or OpenAlex resolved a seed to a
+    # different id than at capture). Report expected-vs-computed and STOP; never
+    # re-freeze — that would cost $2 and destroy the evidence.
     if guard_raised or hit_traversals > 0:
         computed = await _diagnose_miss(openalex_key)
         print(f"  traversal entered : {hit_traversals}")
         print()
         print("=" * 72)
-        print("  MISS — STOPPING. The call did not hit the frozen artifact.")
+        print("  MISS — STOPPING. The call did not hit any frozen artifact.")
         print("=" * 72)
-        print(f"  expected address : {EXPECTED_ADDRESS}")
         print(f"  computed address : {computed}")
+        print(f"  registry holds   : {present}")
         print(f"  guard raised     : {guard_raised}"
               + (f" ({guard_error})" if guard_raised else ""))
         print()
-        print("  Either the parameters drifted or OpenAlex resolved a seed to a")
-        print("  different id since 10:33. Both are FINDINGS for the design seat.")
-        print("  Not retrying, not regenerating — that would cost $2 and destroy")
-        print("  the evidence. The artifact was NOT modified.")
+        print("  An artifact IS present but the live address does not name it — the")
+        print("  address moved. Either the parameters drifted or OpenAlex resolved a")
+        print("  seed to a different id than at capture. Both are FINDINGS for the")
+        print("  design seat. Not retrying, not regenerating — that would cost $2 and")
+        print("  destroy the evidence. The artifact was NOT modified.")
         print("=" * 72)
-        sha_after = _hash_file(ARTIFACT)
-        print(f"  artifact sha256 (post): {sha_after}")
-        print(f"  artifact unchanged    : {sha_before == sha_after}")
+        print()
         return 2
+
+    # ---- HIT confirmed: read the on-disk bundle it replayed ---------------
+    hit_address = address_of(hit)
+    # registry.read validates that the on-disk file addresses to its own filename
+    # — the content-addressed store returning exactly what its key names. A
+    # mismatch here is a FINDING (corrupt/renamed artifact), so let it propagate.
+    stored = registry.read(hit_address)
 
     print(f"  traversal entered : {hit_traversals}")
     print(f"  Anthropic calls   : 0  (structural — no client exists to draw)")
@@ -296,21 +282,19 @@ async def _main() -> int:
     print()
 
     # ---- EVIDENCE ---------------------------------------------------------
-    hit_address = address_of(hit)
     differing_fields, resupplied_equal = _field_diff(stored, hit)
     labels = Counter(n.relationship_type or "null" for n in hit.nodes)
     non_seed_labeled = sum(
         1 for n in hit.nodes if n.relationship_type is not None
     )
-    sha_after = _hash_file(ARTIFACT)
 
     print("=" * 72)
     print("  EVIDENCE")
     print("=" * 72)
     print()
-    print(f"  computed address (HIT)   : {hit_address}")
-    print(f"  expected address         : {EXPECTED_ADDRESS}")
-    print(f"  artifact filename stem   : {ARTIFACT.stem}")
+    print(f"  content address (HIT)    : {hit_address}")
+    print(f"  registry file            : {registry.path_for(hit_address).name}")
+    print(f"  on-disk bundle addresses : {address_of(stored)}")
     print()
     print(f"  returned nodes           : {len(hit.nodes)} "
           f"({non_seed_labeled} carry a replayed relationship_type)")
@@ -327,9 +311,6 @@ async def _main() -> int:
     print(f"    seed_failures (return) : {[f.model_dump() for f in hit.seed_failures]}")
     print(f"    seed_failures equal    : {resupplied_equal['seed_failures']}")
     print()
-    print(f"  artifact sha256 (pre)    : {sha_before}")
-    print(f"  artifact sha256 (post)   : {sha_after}")
-    print()
 
     checks: list[tuple[str, bool, str]] = [
         (
@@ -338,9 +319,9 @@ async def _main() -> int:
             f"got {hit_traversals}",
         ),
         (
-            "computed address == expected == artifact filename stem",
-            hit_address == EXPECTED_ADDRESS == ARTIFACT.stem,
-            f"{hit_address} vs {EXPECTED_ADDRESS} vs {ARTIFACT.stem}",
+            "returned result's content address names a file already on disk",
+            f"{hit_address}.json" in present,
+            f"{hit_address}.json not in {present}",
         ),
         (
             "returned nodes carry replayed relationship_type (never derived here)",
@@ -371,13 +352,8 @@ async def _main() -> int:
         ),
         (
             "registry holds the artifact under its address-named file",
-            registry.path_for(EXPECTED_ADDRESS).exists(),
+            registry.path_for(hit_address).exists(),
             "address-named file missing",
-        ),
-        (
-            "artifact sha256 unchanged (before == after)",
-            sha_before == sha_after,
-            f"{sha_before} != {sha_after}",
         ),
     ]
 
@@ -402,10 +378,13 @@ async def _main() -> int:
     print("  first process's LLM-annotated graph by content address: no traversal,")
     print("  no model, no Anthropic client — only seed resolution touched the")
     print("  network. The frozen artifact was read, not rewritten.")
+    print()
+    for line in _boundary_statement():
+        print(line)
     print("=" * 72)
     print()
     print(f"  Durable registry root: {registry_root}")
-    print(f"  Frozen artifact      : {registry.path_for(EXPECTED_ADDRESS)}")
+    print(f"  Frozen artifact      : {registry.path_for(hit_address)}")
     print()
     return 0
 
