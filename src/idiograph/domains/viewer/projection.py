@@ -22,7 +22,9 @@ Layout — bipolar depth bands (see ASSUMPTIONS in the run summary):
   rather than collapsing to a min:
     - ``lean = dB - dA``  → horizontal column. ``lean > 0`` is nearer root A
       (left); ``lean < 0`` nearer root B (right); ``lean == 0`` is *equidistant
-      from both seeds* — the shared foundation, which forms the central column.
+      from both seeds* — the central column. (Equidistance is a spatial fact,
+      not the shared foundation: the foundation is the directed cited-by-both
+      subset, ``is_cited_by_both`` — see §4b.)
     - ``depth = dA + dB`` → vertical band. Seeds sit in the shallowest band at the
       top; the deep shared lineage sinks to the bottom.
 * Within a ``(band, lean)`` cell, nodes are ordered by ``node_id`` and packed into
@@ -208,6 +210,24 @@ def project_depth_provenance(result: PipelineResult) -> dict:
             y = y_top + (r + 0.5) / rows * h
             positions[node.node_id] = (_round(x), _round(y))
 
+    # --- 4b. Directed shared foundation: papers BOTH roots directly cite -----
+    # A `cites` edge is a directed declaration — source_id cites target_id (see
+    # the FROZEN spec: cites is a fact, co_citation an inference). The "shared
+    # intellectual foundation" is therefore the DIRECTED set {X : root_a cites X
+    # AND root_b cites X}, not undirected equidistance (lean == 0). On the frozen
+    # CRISPR artifact this is the depth-1 backward intersection (~11 papers) — a
+    # findable subset sitting inside the shallow top of the equidistant column.
+    cited_by_a: set[str] = set()
+    cited_by_b: set[str] = set()
+    for edge in result.edges:
+        if edge.type != "cites":
+            continue
+        if edge.source_id == root_a:
+            cited_by_a.add(edge.target_id)
+        if edge.source_id == root_b:
+            cited_by_b.add(edge.target_id)
+    cited_by_both = cited_by_a & cited_by_b
+
     # --- 5. Emit node records ------------------------------------------------
     dir_counts: Counter[str] = Counter()
     out_nodes = []
@@ -235,8 +255,12 @@ def project_depth_provenance(result: PipelineResult) -> dict:
                 "x": x,
                 "y": y,
                 "is_seed": direction == "seed",
-                # Equidistant from both seeds → shared foundation (central column).
-                "is_shared": lean == 0,
+                # Spatial fact only: equidistant (undirected) from both seeds →
+                # the central column. NOT the shared foundation (see below).
+                "is_equidistant": lean == 0,
+                # The shared foundation: a paper BOTH roots directly cite. This
+                # is the directed, thesis-referent set — a subset of the column.
+                "is_cited_by_both": node.node_id in cited_by_both,
                 # Node-4 citation-lag caveat applies to forward-facing signal.
                 "lag_caveat": direction in ("forward", "mixed"),
             }
@@ -304,7 +328,9 @@ def project_depth_provenance(result: PipelineResult) -> dict:
             "label": "local relative measure (shared citers within traversal)",
         },
         "traversal_direction_counts": dict(sorted(dir_counts.items())),
-        "shared_foundation_count": sum(1 for n in out_nodes if n["is_shared"]),
+        "shared_foundation_count": sum(
+            1 for n in out_nodes if n["is_cited_by_both"]
+        ),
         "lag_caveat_count": sum(1 for n in out_nodes if n["lag_caveat"]),
         "depth_bands": ordered_bands,
         "lean_range": [lean_min, lean_max],

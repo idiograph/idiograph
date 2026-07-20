@@ -23,6 +23,9 @@
   const CITES = getVar("--cites");
   const CO_CITATION = getVar("--co-citation");
   const NODE_DEFAULT = "#6a6a7a";
+  // Ring for the directed shared-foundation nodes (cited by BOTH roots) so the
+  // ~dozen marks are findable inside the equidistant column.
+  const FOUNDATION_RING = getVar("--ink");
 
   const canvas = document.getElementById("graph");
   const ctx = canvas.getContext("2d");
@@ -72,12 +75,20 @@
     ctx.lineWidth = 0;
     for (const n of nodes) {
       if (n.is_seed) { seeds.push(n); continue; }
-      const r = (n.is_shared ? 2.6 : 2.1) / k;
+      // Directed shared foundation (cited by both roots): enlarged + ringed.
+      const foundation = n.is_cited_by_both;
+      const r = (foundation ? 3.6 : 2.1) / k;
       ctx.beginPath();
       ctx.fillStyle = DIR_COLOR[n.traversal_direction] || NODE_DEFAULT;
       ctx.globalAlpha = 0.9;
       ctx.arc(sx(n.x), sy(n.y), r, 0, 2 * Math.PI);
       ctx.fill();
+      if (foundation) {
+        ctx.globalAlpha = 1;
+        ctx.lineWidth = 1.4 / k;
+        ctx.strokeStyle = FOUNDATION_RING;
+        ctx.stroke();
+      }
     }
     // Seeds: larger, gold, ringed — visually distinct from every other node.
     for (const n of seeds) {
@@ -184,7 +195,7 @@
       '<div class="tt-meta tt-dir">' +
       (n.is_seed ? "★ seed · " : "") +
       esc(n.traversal_direction || "?") +
-      (n.is_shared ? " · shared foundation" : "") +
+      (n.is_cited_by_both ? " · shared foundation (cited by both roots)" : "") +
       "</div>" +
       '<div class="tt-meta">hop depth to seeds: ' + esc(depths) +
       " · pagerank " + (n.pagerank != null ? n.pagerank.toFixed(5) : "—") +
@@ -252,8 +263,12 @@
         '<div class="caveat">Vertical = combined hop depth from both seeds ' +
           "(seeds at top). Horizontal = seed lean: <b>left</b> nearer " +
           esc(clip(seeds[0] && seeds[0].title, 22)) + ", <b>right</b> nearer " +
-          esc(clip(seeds[1] && seeds[1].title, 22)) + ", <b>centre</b> equidistant " +
-          "— the shared foundation. Deterministic; not force-directed.</div>",
+          esc(clip(seeds[1] && seeds[1].title, 22)) + ", <b>centre</b> equidistant. " +
+          "The <b>shared foundation</b> (ringed marks) is the directed subset " +
+          "within that column — the " +
+          (meta.shared_foundation_count || 0).toLocaleString() +
+          " papers <b>both</b> seeds directly cite. Deterministic; not " +
+          "force-directed.</div>",
       ].join("")),
 
       section("Provenance & caveats", [

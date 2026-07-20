@@ -128,8 +128,8 @@ def test_node_records_carry_contract_fields():
         for field in (
             "node_id", "arxiv_id", "doi", "title", "year", "citation_count",
             "authors", "community_id", "pagerank", "hop_depth_per_root",
-            "traversal_direction", "x", "y", "is_seed", "is_shared",
-            "lag_caveat",
+            "traversal_direction", "x", "y", "is_seed", "is_equidistant",
+            "is_cited_by_both", "lag_caveat",
         ):
             assert field in n, f"missing {field}"
         assert 0.0 <= n["x"] <= 1.0 and 0.0 <= n["y"] <= 1.0
@@ -180,11 +180,82 @@ def test_layout_seeds_at_top_and_lean_columns():
     assert pos["arxiv:leanA"][0] < pos["arxiv:shared"][0] < pos["arxiv:leanB"][0]
 
 
-def test_shared_foundation_flag_matches_equidistance():
-    proj = project_depth_provenance(_toy_result())
-    shared = {n["node_id"] for n in proj["nodes"] if n["is_shared"]}
-    assert "arxiv:shared" in shared
-    assert "arxiv:leanA" not in shared
+def _foundation_result() -> PipelineResult:
+    """Result exercising the DIRECTED shared foundation (cited by both roots).
+
+    A `cites` edge is a directed declaration: source_id cites target_id. The
+    shared foundation is {X : root_a cites X AND root_b cites X}. This scenario
+    isolates that set from undirected equidistance (lean == 0):
+
+    * ``arxiv:both``  — equidistant AND cited by both roots  → flagged
+    * ``arxiv:onlyA`` — cited by root A only                 → NOT flagged
+    * ``arxiv:equi``  — equidistant but cited by neither      → NOT flagged
+    """
+    nodes = [
+        _rec(ROOT_A, 0, 1, "seed"),
+        _rec(ROOT_B, 1, 0, "seed"),
+        _rec("arxiv:both", 1, 1, "mixed"),    # equidistant, cited by both
+        _rec("arxiv:onlyA", 1, 2, "backward"),  # cited by A only
+        _rec("arxiv:equi", 1, 1, "mixed"),    # equidistant, cited by neither
+    ]
+    node_ids = [n.node_id for n in nodes]
+    cites = [
+        CitationEdge(source_id=ROOT_A, target_id="arxiv:both", type="cites"),
+        CitationEdge(source_id=ROOT_B, target_id="arxiv:both", type="cites"),
+        CitationEdge(source_id=ROOT_A, target_id="arxiv:onlyA", type="cites"),
+    ]
+    cycle_log = CycleLog(
+        suppressed_edges=[], cycles_detected_count=0, iterations=0
+    )
+    cycle_clean = CycleCleanResult(
+        cleaned_edges=cites,
+        cycle_log=cycle_log,
+        input_node_ids=frozenset(node_ids),
+    )
+    depth_metrics = {
+        n.node_id: DepthMetrics(
+            hop_depth_per_root=n.hop_depth_per_root,
+            traversal_direction=n.traversal_direction,
+        )
+        for n in nodes
+    }
+    return PipelineResult(
+        nodes=nodes,
+        edges=cites,
+        seeds=[ROOT_B, ROOT_A],
+        cycle_clean=cycle_clean,
+        co_citation_edges=[],
+        depth_metrics=depth_metrics,
+        pagerank={n.node_id: n.pagerank for n in nodes},
+        communities=CommunityResult(
+            community_assignments={n.node_id: "c0" for n in nodes},
+            algorithm_used="infomap",
+            community_count=1,
+        ),
+        parameters=PipelineParameters(
+            backward=BackwardParameters(n_backward=10, lambda_decay=0.1),
+            forward=ForwardParameters(
+                n_forward=10, lambda_decay=0.1, alpha=1.0, beta=0.0,
+                sort="cited_by_count:desc",
+            ),
+        ),
+    )
+
+
+def test_shared_foundation_is_directed_cited_by_both():
+    """The foundation flag is the directed cited-by-both set, not equidistance."""
+    proj = project_depth_provenance(_foundation_result())
+    by_id = {n["node_id"]: n for n in proj["nodes"]}
+    # Cited by BOTH roots → flagged as the shared foundation.
+    assert by_id["arxiv:both"]["is_cited_by_both"] is True
+    # Cited by only ONE root → not the foundation.
+    assert by_id["arxiv:onlyA"]["is_cited_by_both"] is False
+    # Equidistant (lean == 0) but cited by neither → NOT flagged: equidistance
+    # is a spatial fact, distinct from the directed foundation.
+    assert by_id["arxiv:equi"]["is_equidistant"] is True
+    assert by_id["arxiv:equi"]["is_cited_by_both"] is False
+    # The count keys off the directed set.
+    assert proj["meta"]["shared_foundation_count"] == 1
 
 
 def test_lag_caveat_flags_forward_and_mixed():
