@@ -1,0 +1,164 @@
+/* Idiograph depth/provenance viewer — dark, muted, low-contrast.
+   Colour is reserved strictly for signal: traversal direction, edge type,
+   and seed emphasis. The base is a cool desaturated dark (never black,
+   never warm-dark), so any hue reads as meaning, not decoration. */
+
+:root {
+  --bg: #16161c;
+  --bg-stage: #131319;
+  --panel: #1e1e26;
+  --panel-edge: #2e2e3a;
+  --ink: #cfd0dc;
+  --ink-dim: #8b8c9c;
+  --ink-faint: #62636f;
+
+  /* Signal — traversal_direction */
+  --seed: #f4c33b;      /* seeds: the two roots */
+  --backward: #6ea8e6;  /* foundation / lineage the seed cites */
+  --forward: #52b98a;   /* emerging work citing the seed */
+  --mixed: #b98bd8;     /* reachable both ways across the two roots */
+
+  /* Signal — edge type */
+  --cites: #7f95b0;         /* a declaration: solid */
+  --co-citation: #6f6a8a;   /* an inference: dashed, dimmer */
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  height: 100vh;
+}
+
+/* ── Panel ─────────────────────────────────────────────────────────────── */
+#panel {
+  background: var(--panel);
+  border-right: 1px solid var(--panel-edge);
+  padding: 20px 20px 32px;
+  overflow-y: auto;
+}
+#panel-title {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  margin: 0 0 4px;
+  color: var(--ink);
+}
+#panel-body { color: var(--ink-dim); }
+
+.section { margin-top: 22px; }
+.section > h2 {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin: 0 0 9px;
+}
+
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 0;
+}
+.stat-row .k { color: var(--ink-dim); }
+.stat-row .v { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+.legend-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 4px 0;
+}
+.legend-row .label { color: var(--ink-dim); }
+.legend-row .label b { color: var(--ink); font-weight: 600; }
+.swatch {
+  width: 13px; height: 13px; border-radius: 50%;
+  flex: 0 0 auto;
+}
+.swatch.seed { background: var(--seed); box-shadow: 0 0 0 2px rgba(244,195,59,0.28); }
+.swatch.backward { background: var(--backward); }
+.swatch.forward { background: var(--forward); }
+.swatch.mixed { background: var(--mixed); }
+
+.edge-key { width: 26px; height: 0; flex: 0 0 auto; }
+.edge-key.cites {
+  border-top: 2px solid var(--cites);
+}
+.edge-key.co-citation {
+  border-top: 2px dashed var(--co-citation);
+  opacity: 0.85;
+}
+
+.caveat {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-dim);
+  border-left: 2px solid var(--panel-edge);
+  padding: 2px 0 2px 11px;
+  margin: 9px 0;
+}
+.caveat b { color: var(--ink); font-weight: 600; }
+.caveat.lag { border-left-color: var(--forward); }
+.caveat.local { border-left-color: var(--co-citation); }
+.caveat.cycle { border-left-color: var(--seed); }
+
+/* toggle */
+.toggle {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 0; cursor: pointer; color: var(--ink-dim);
+  user-select: none;
+}
+.toggle input { accent-color: var(--backward); }
+
+/* ── Stage ─────────────────────────────────────────────────────────────── */
+#stage {
+  position: relative;
+  background: var(--bg-stage);
+  overflow: hidden;
+}
+#graph { display: block; width: 100%; height: 100%; }
+
+#hint {
+  position: absolute;
+  left: 14px; bottom: 12px;
+  font-size: 11px;
+  color: var(--ink-faint);
+  pointer-events: none;
+}
+
+#tooltip {
+  position: absolute;
+  max-width: 320px;
+  background: rgba(20,20,26,0.97);
+  border: 1px solid var(--panel-edge);
+  border-radius: 5px;
+  padding: 10px 12px;
+  pointer-events: none;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink);
+  box-shadow: 0 8px 26px rgba(0,0,0,0.5);
+  z-index: 5;
+}
+#tooltip .tt-title { font-weight: 600; margin-bottom: 4px; }
+#tooltip .tt-meta { color: var(--ink-dim); }
+#tooltip .tt-dir { text-transform: capitalize; }
+#tooltip .tt-lag {
+  margin-top: 7px; padding-top: 7px;
+  border-top: 1px solid var(--panel-edge);
+  color: var(--forward);
+  font-size: 11px;
+}
