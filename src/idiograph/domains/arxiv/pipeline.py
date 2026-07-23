@@ -14,6 +14,7 @@ import httpx
 import networkx as nx
 from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
+from pydantic import BaseModel
 
 from idiograph.core.logging_config import get_logger
 from idiograph.core.models import Graph, Node, Edge
@@ -30,6 +31,7 @@ from idiograph.domains.arxiv.models import (
     Node3Result,
     Node4Result,
     Node5Result,
+    PageRankParameters,
     PaperRecord,
     PipelineParameters,
     PipelineResult,
@@ -951,38 +953,81 @@ def compute_depth_metrics(
     return result
 
 
-def compute_pagerank(
-    nodes: list[PaperRecord],
-    cleaned_edges: list[CitationEdge],
-    damping: float = 0.85,
-) -> dict[str, float]:
-    """Compute PageRank for every node in the cleaned citation graph.
+class _PageRankInputs(BaseModel):
+    """Declared input contract for the ``ComputePagerank`` handler.
 
-    Returns ``{node_id: pagerank}``. Every input node receives a value,
-    including isolates. Output values sum to 1.0 within NetworkX
-    convergence tolerance. ``damping`` is passed through to
-    ``nx.pagerank`` as ``alpha``; out-of-range values raise via NetworkX.
-    Pure function — no I/O, no mutation of inputs.
+    Mirrors the positional inputs of the former ``compute_pagerank`` stage: the
+    assembled node set and the cleaned (acyclic) citation edges. Validation is
+    performed inside the handler body, per the node-handler convention.
     """
+
+    nodes: list[PaperRecord]
+    cleaned_edges: list[CitationEdge]
+
+
+def _gather_pagerank_inputs(inputs: dict) -> dict[str, object]:
+    """Collect the handler's declared inputs from the upstream payloads the
+    executor passes as ``{source_node_id: output}`` (``core/executor.py:74``).
+
+    The first upstream to supply a declared key wins; keys the handler does not
+    declare are ignored. A caller invoking the handler directly shapes ``inputs``
+    the same way — a single upstream entry carrying ``nodes`` and
+    ``cleaned_edges`` — so the executor-driven and direct paths share one
+    contract.
+    """
+    gathered: dict[str, object] = {}
+    for payload in inputs.values():
+        if not isinstance(payload, dict):
+            continue
+        for key in ("nodes", "cleaned_edges"):
+            if key in payload and key not in gathered:
+                gathered[key] = payload[key]
+    return gathered
+
+
+async def compute_pagerank(params: dict, inputs: dict) -> dict:
+    """Executor node handler (type ``ComputePagerank``) — PageRank over the
+    cleaned citation graph.
+
+    Contract (``core/executor.py:98`` handler convention):
+      ``params``  — ``{"damping": float}``, validated as ``PageRankParameters``;
+                    an absent ``damping`` falls back to the frozen Node 6 default.
+                    Config keeps its home in ``PipelineParameters.pagerank``;
+                    ``run_traversal`` reads it there and marshals it in.
+      ``inputs``  — upstream payloads ``{source_id: {"nodes": [...],
+                    "cleaned_edges": [...]}}``; the declared inputs are gathered
+                    across them and validated as ``_PageRankInputs``.
+      returns     — ``{"pagerank": {node_id: pagerank}}``.
+
+    Every input node receives a value, including isolates. Output values sum to
+    1.0 within NetworkX convergence tolerance. ``damping`` is passed to
+    ``nx.pagerank`` as ``alpha``; out-of-range values raise via NetworkX. Pure —
+    no I/O, no mutation of inputs.
+    """
+    config = PageRankParameters.model_validate(params)
+    data = _PageRankInputs.model_validate(_gather_pagerank_inputs(inputs))
+    nodes = data.nodes
+    cleaned_edges = data.cleaned_edges
+
     if not nodes:
-        return {}
+        return {"pagerank": {}}
 
     _log.info(
         "Node 6 pagerank: %d nodes, %d edges, alpha=%s",
         len(nodes),
         len(cleaned_edges),
-        damping,
+        config.damping,
     )
 
     G: nx.DiGraph = nx.DiGraph()
     G.add_nodes_from(n.node_id for n in nodes)
     G.add_edges_from((e.source_id, e.target_id) for e in cleaned_edges)
 
-    pr = nx.pagerank(G, alpha=damping)
+    pr = nx.pagerank(G, alpha=config.damping)
 
     _log.info("Node 6 pagerank complete")
 
-    return dict(pr)
+    return {"pagerank": dict(pr)}
 
 
 # ── Node 7 — Community Detection ────────────────────────────────────────────
@@ -1427,9 +1472,21 @@ async def run_traversal(
     _log.info("Pipeline: depth metrics complete")
 
     _log.info("Pipeline: starting pagerank")
-    prank = compute_pagerank(
-        unified_nodes, cycle.cleaned_edges, damping=parameters.pagerank.damping
-    )
+    # Node 6 pagerank now conforms to the executor's node-handler convention
+    # (params/inputs -> mapping). Marshal this call site into that contract: the
+    # damping config keeps its home in PipelineParameters and is read here; the
+    # graph data is passed as a single upstream payload, matching the shape the
+    # executor builds. The returned mapping is unwrapped so `prank` stays the
+    # `{node_id: pagerank}` dict the rest of this function consumes unchanged.
+    prank = (
+        await compute_pagerank(
+            {"damping": parameters.pagerank.damping},
+            {"traversal": {
+                "nodes": unified_nodes,
+                "cleaned_edges": cycle.cleaned_edges,
+            }},
+        )
+    )["pagerank"]
     _log.info("Pipeline: pagerank complete")
 
     _log.info("Pipeline: starting community detection")

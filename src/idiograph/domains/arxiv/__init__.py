@@ -23,8 +23,12 @@ from idiograph.domains.arxiv.handlers import (
 # at once via this shortcut.
 def register_all() -> None:
     """Register all known handlers with the executor. Test convenience only."""
-    register_handler("FetchAbstract", fetch_abstract)
-    register_handler("LLMCall",       llm_call)
-    register_handler("Evaluator",     evaluator)
-    register_handler("LLMSummarize",  llm_summarize)
-    register_handler("Discard",       discard)
+    # compute_pagerank lives in pipeline.py; imported inside the function to
+    # avoid a module-load import cycle (pipeline imports this package's models).
+    from idiograph.domains.arxiv.pipeline import compute_pagerank
+    register_handler("FetchAbstract",  fetch_abstract)
+    register_handler("LLMCall",        llm_call)
+    register_handler("Evaluator",      evaluator)
+    register_handler("LLMSummarize",   llm_summarize)
+    register_handler("Discard",        discard)
+    register_handler("ComputePagerank", compute_pagerank)
