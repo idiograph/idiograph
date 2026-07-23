@@ -283,12 +283,16 @@ def test_deterministic_output() -> None:
 
 def test_pagerank_networkx_agreement() -> None:
     """Output matches nx.pagerank(G, alpha=damping) on hand-constructed fixture."""
+    import asyncio
     import networkx as nx
 
     nodes = [_rec("A"), _rec("B"), _rec("C"), _rec("D")]
     edges = [_edge("A", "B"), _edge("B", "C"), _edge("C", "D"), _edge("D", "A")]
 
-    result = compute_pagerank(nodes, edges, damping=0.85)
+    result = asyncio.run(compute_pagerank(
+        {"damping": 0.85},
+        {"upstream": {"nodes": nodes, "cleaned_edges": edges}},
+    ))["pagerank"]
 
     G = nx.DiGraph()
     G.add_nodes_from(["A", "B", "C", "D"])
@@ -301,6 +305,8 @@ def test_pagerank_networkx_agreement() -> None:
 
 def test_pagerank_sums_to_one() -> None:
     """Sum of output values is 1.0 within tolerance."""
+    import asyncio
+
     nodes = [_rec(x) for x in ("A", "B", "C", "D", "E")]
     edges = [
         _edge("A", "B"),
@@ -310,68 +316,97 @@ def test_pagerank_sums_to_one() -> None:
         _edge("E", "A"),
     ]
 
-    result = compute_pagerank(nodes, edges)
+    result = asyncio.run(compute_pagerank(
+        {},
+        {"upstream": {"nodes": nodes, "cleaned_edges": edges}},
+    ))["pagerank"]
 
     assert sum(result.values()) == pytest.approx(1.0)
 
 
 def test_pagerank_every_node_assigned() -> None:
     """Every node_id in nodes appears in output, including isolates."""
+    import asyncio
+
     # C is an isolate — no edges touch it. Must still appear in output.
     nodes = [_rec("A"), _rec("B"), _rec("C")]
     edges = [_edge("A", "B")]
 
-    result = compute_pagerank(nodes, edges)
+    result = asyncio.run(compute_pagerank(
+        {},
+        {"upstream": {"nodes": nodes, "cleaned_edges": edges}},
+    ))["pagerank"]
 
     assert set(result.keys()) == {"A", "B", "C"}
 
 
 def test_pagerank_damping_respected() -> None:
     """Different damping values produce different results on same graph."""
+    import asyncio
+
     nodes = [_rec(x) for x in ("A", "B", "C")]
     edges = [_edge("A", "B"), _edge("B", "C")]
 
-    r_low = compute_pagerank(nodes, edges, damping=0.5)
-    r_high = compute_pagerank(nodes, edges, damping=0.95)
+    inputs = {"upstream": {"nodes": nodes, "cleaned_edges": edges}}
+    r_low = asyncio.run(compute_pagerank({"damping": 0.5}, inputs))["pagerank"]
+    r_high = asyncio.run(compute_pagerank({"damping": 0.95}, inputs))["pagerank"]
 
     assert r_low != r_high
 
 
 def test_pagerank_deterministic() -> None:
     """Same input produces identical output across repeat calls."""
+    import asyncio
+
     nodes = [_rec(x) for x in ("A", "B", "C", "D")]
     edges = [_edge("A", "B"), _edge("B", "C"), _edge("C", "D"), _edge("D", "A")]
 
-    r1 = compute_pagerank(nodes, edges)
-    r2 = compute_pagerank(nodes, edges)
+    inputs = {"upstream": {"nodes": nodes, "cleaned_edges": edges}}
+    r1 = asyncio.run(compute_pagerank({}, inputs))["pagerank"]
+    r2 = asyncio.run(compute_pagerank({}, inputs))["pagerank"]
 
     assert r1 == r2
 
 
 def test_pagerank_empty_nodes_returns_empty() -> None:
     """nodes=[] returns {}."""
-    assert compute_pagerank([], []) == {}
+    import asyncio
+
+    result = asyncio.run(compute_pagerank(
+        {},
+        {"upstream": {"nodes": [], "cleaned_edges": []}},
+    ))["pagerank"]
+    assert result == {}
 
 
 def test_pagerank_empty_edges_uniform() -> None:
     """No edges: each of N nodes gets value 1/N."""
+    import asyncio
+
     nodes = [_rec(x) for x in ("A", "B", "C", "D")]
 
-    result = compute_pagerank(nodes, [])
+    result = asyncio.run(compute_pagerank(
+        {},
+        {"upstream": {"nodes": nodes, "cleaned_edges": []}},
+    ))["pagerank"]
 
     for v in result.values():
         assert v == pytest.approx(0.25)
 
 
 def test_pagerank_input_not_mutated() -> None:
-    """Original input lists unchanged after call."""
+    """Original inputs unchanged after call — restated against the `inputs`
+    payload the handler actually receives under the node-handler contract."""
+    import asyncio
+
     nodes = [_rec(x) for x in ("A", "B", "C")]
     edges = [_edge("A", "B"), _edge("B", "C")]
 
     nodes_snapshot = [n.model_copy(deep=True) for n in nodes]
     edges_snapshot = [e.model_copy(deep=True) for e in edges]
 
-    compute_pagerank(nodes, edges)
+    inputs = {"upstream": {"nodes": nodes, "cleaned_edges": edges}}
+    asyncio.run(compute_pagerank({}, inputs))
 
     assert len(nodes) == 3
     assert len(edges) == 2

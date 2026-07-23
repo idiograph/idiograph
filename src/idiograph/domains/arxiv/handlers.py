@@ -89,8 +89,13 @@ async def discard(params: dict, inputs: dict) -> dict:
 def register_arxiv_handlers() -> None:
     """Explicit per-domain handler registration for the arXiv pipeline."""
     from idiograph.core.executor import register_handler
-    register_handler("FetchAbstract", fetch_abstract)
-    register_handler("LLMCall",       llm_call)
-    register_handler("Evaluator",     evaluator)
-    register_handler("LLMSummarize",  llm_summarize)
-    register_handler("Discard",       discard)
+    # compute_pagerank lives in pipeline.py (it is a traversal stage, not a
+    # client-building handler); imported here to keep registration explicit at
+    # the domain boot site and to avoid a module-load import cycle.
+    from idiograph.domains.arxiv.pipeline import compute_pagerank
+    register_handler("FetchAbstract",  fetch_abstract)
+    register_handler("LLMCall",        llm_call)
+    register_handler("Evaluator",      evaluator)
+    register_handler("LLMSummarize",   llm_summarize)
+    register_handler("Discard",        discard)
+    register_handler("ComputePagerank", compute_pagerank)
