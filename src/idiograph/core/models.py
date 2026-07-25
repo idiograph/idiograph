@@ -29,11 +29,11 @@ class Node(BaseModel):
     )
     input_ports: list[PortDeclaration] | None = Field(
         default=None,
-        description="Declared input ports for this node. None means ports are not yet typed. Empty list means the node accepts no inputs."
+        description="Declared input ports for this node. Declaring them BINDS the node: the executor builds its inputs solely from port-declared incoming edges, keyed by to_port. None leaves the node in the legacy regime, where it receives every upstream payload keyed by source node id. Empty list is a declaration — the node is bound and accepts no inputs."
     )
     output_ports: list[PortDeclaration] | None = Field(
         default=None,
-        description="Declared output ports for this node. None means ports are not yet typed. Empty list means the node produces no outputs."
+        description="Declared output ports for this node. Each name is a key the handler emits in its returned dict; declaring them lets a bound consumer read from_port off this node and lets validation check dataflow without reading handler source. None means undeclared. Empty list means the node produces no outputs."
     )
 
 class Edge(BaseModel):
@@ -45,11 +45,11 @@ class Edge(BaseModel):
     )
     from_port: str | None = Field(
         default=None,
-        description="Named output port on the source node this edge originates from. None means untyped connection."
+        description="Declared output port on the source node this edge reads. Must name an entry in the source's output_ports. Set together with to_port or not at all — declaring exactly one is a validation error."
     )
     to_port: str | None = Field(
         default=None,
-        description="Named input port on the target node this edge connects to. None means untyped connection."
+        description="Declared input port on the target node this edge feeds. Must name an entry in the target's input_ports. The executor binds inputs[to_port] = upstream_output[from_port]; a missing from_port key at runtime is an explicit error, never a silent skip."
     )
 
 

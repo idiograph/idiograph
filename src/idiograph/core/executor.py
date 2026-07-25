@@ -6,11 +6,21 @@
 
 from typing import Callable, Any
 
-from idiograph.core.models import Graph, Node
+from idiograph.core.models import Edge, Graph, Node
 from idiograph.core.query import topological_sort, find_cycles
 from idiograph.core.logging_config import get_logger
 
 _log = get_logger("executor")
+
+
+class PortBindingError(RuntimeError):
+    """A port-declared edge could not be bound at execution time.
+
+    Raised when the upstream node did not emit the `from_port` key the edge
+    reads. Binding is explicit: a missing port is an error, never a silent skip
+    and never a fallback to the legacy whole-payload gather.
+    """
+
 
 # ── Handler Registry ─────────────────────────────────────────────────────────
 
@@ -67,15 +77,71 @@ async def execute_graph(graph: Graph) -> dict[str, Any]:
             _update_node_status(node, "FAILED")
             continue
 
-        # Collect inputs from all upstream nodes — edge type gates execution, not data flow
-        inputs: dict[str, Any] = {}
-        for edge in upstream_edges:
-            upstream_output = results.get(edge.source, {})
-            inputs[edge.source] = upstream_output
+        try:
+            inputs = _collect_inputs(node, upstream_edges, results)
+        except PortBindingError as exc:
+            _log.error("Node '%s' input binding failed: %s", node_id, exc)
+            _update_node_status(node, "FAILED")
+            results[node_id] = {
+                "status": "FAILED",
+                "node_id": node_id,
+                "error": str(exc),
+            }
+            continue
 
         results[node_id] = await _execute_node(node, inputs)
 
     return results
+
+
+def _is_bound(node: Node) -> bool:
+    """Whether `node` is on the bound side of the migration fence.
+
+    The fence is a one-way ratchet: a node that declares `input_ports` gets its
+    `inputs` built solely from port-declared incoming edges. A node that
+    declares nothing stays in the legacy regime. An empty list is a
+    declaration — the node is bound and accepts no inputs.
+    """
+    return node.input_ports is not None
+
+
+def _collect_inputs(
+    node: Node,
+    upstream_edges: list[Edge],
+    results: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the `inputs` mapping a handler receives.
+
+    Legacy nodes get every upstream payload keyed by source node id — edge type
+    gates execution, not data flow, so CONTROL edges carry data here as they
+    always have.
+
+    Bound nodes get `inputs[to_port] = upstream_output[from_port]` for each
+    port-declared incoming edge, and nothing else: keying by `to_port` is what
+    makes two edges from one source into distinct ports expressible. Edges that
+    declare no ports contribute no data to a bound node — `validate_integrity`
+    reports them as dataflow errors rather than the executor guessing.
+    """
+    if not _is_bound(node):
+        inputs: dict[str, Any] = {}
+        for edge in upstream_edges:
+            upstream_output = results.get(edge.source, {})
+            inputs[edge.source] = upstream_output
+        return inputs
+
+    inputs = {}
+    for edge in upstream_edges:
+        if edge.from_port is None or edge.to_port is None:
+            continue
+        upstream_output = results.get(edge.source, {})
+        if edge.from_port not in upstream_output:
+            raise PortBindingError(
+                f"Node '{node.id}': upstream '{edge.source}' did not emit "
+                f"declared output port '{edge.from_port}' "
+                f"(bound to input port '{edge.to_port}')."
+            )
+        inputs[edge.to_port] = upstream_output[edge.from_port]
+    return inputs
 
 
 async def _execute_node(node: Node, inputs: dict[str, Any]) -> dict[str, Any]:
