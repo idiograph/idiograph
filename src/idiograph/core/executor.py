@@ -22,6 +22,15 @@ class PortBindingError(RuntimeError):
     """
 
 
+class UnregisteredNodeTypeError(RuntimeError):
+    """A node's `type` has no handler in `HANDLERS`.
+
+    A registry miss is detectable without running anything — the graph names a
+    type nothing was registered for — so it halts execution rather than being
+    recorded as one node's failure. Propagates out of `execute_graph`.
+    """
+
+
 # ── Handler Registry ─────────────────────────────────────────────────────────
 
 HANDLERS: dict[str, Callable] = {}
@@ -41,6 +50,14 @@ async def execute_graph(graph: Graph) -> dict[str, Any]:
     Returns a results dict keyed by node ID.
     Each value is either the handler's output dict, or an error dict.
     Nodes whose upstream dependencies failed are skipped.
+
+    Where a defect surfaces decides how it is reported. A defect detectable
+    BEFORE any handler runs RAISES: a cycle makes the order undefined, and a
+    node type with no registered handler names work that does not exist —
+    neither is a result the graph can carry. Anything that requires having run
+    a handler becomes graph state instead: a raising handler, or an input
+    binding that only fails once the upstream payload exists, becomes
+    `{"status": "FAILED", ...}` and cascades to SKIPPED downstream.
     """
     cycles = find_cycles(graph)
     if cycles:
@@ -149,13 +166,12 @@ async def _execute_node(node: Node, inputs: dict[str, Any]) -> dict[str, Any]:
     handler = HANDLERS.get(node.type)
 
     if handler is None:
-        _log.error("No handler registered for node type '%s'.", node.type)
-        _update_node_status(node, "FAILED")
-        return {
-            "status": "FAILED",
-            "node_id": node.id,
-            "error": f"No handler registered for node type '{node.type}'",
-        }
+        # Outside the handler try/except below, and deliberately: this
+        # propagates out of execute_graph rather than becoming a FAILED result.
+        raise UnregisteredNodeTypeError(
+            f"Node '{node.id}': no handler registered for node type "
+            f"'{node.type}'."
+        )
 
     _log.info("Executing node '%s' (type: %s).", node.id, node.type)
     _update_node_status(node, "RUNNING")
