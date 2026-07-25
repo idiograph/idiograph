@@ -60,9 +60,99 @@ def find_cycles(graph: Graph) -> list[list[str]]:
 
 # ── Integrity ────────────────────────────────────────────────────────────────
 
+def _dataflow_errors(graph: Graph) -> list[str]:
+    """
+    Check that every port-declared edge names ports its endpoints actually declare.
+
+    This is what makes a graph self-sufficient: dataflow is verifiable from the
+    declarations alone, without reading handler source.
+
+    The migration fence is a one-way ratchet. A node that declares `input_ports`
+    is BOUND — the executor builds its inputs solely from port-declared incoming
+    edges — so every incoming edge must carry ports, and every upstream feeding
+    it must declare the output port being read. Nodes that declare nothing stay
+    in the legacy regime and are not checked here.
+
+    A bound input port also takes exactly one incoming edge. Two edges binding
+    the same `to_port` have no declared precedence between them, so the graph
+    does not say which value the port carries — a defect in the wiring, reported
+    here rather than silently resolved at run time.
+
+    Ports are untyped: `port_type` and `Graph.type_registry` are not consulted.
+    """
+    node_map = {node.id: node for node in graph.nodes}
+    errors: list[str] = []
+    # (target id, to_port) → the `source.from_port` of every edge claiming it.
+    port_claims: dict[tuple[str, str], list[str]] = {}
+
+    for edge in graph.edges:
+        source = node_map.get(edge.source)
+        target = node_map.get(edge.target)
+        if source is None or target is None:
+            continue  # already reported by the referential check
+
+        label = f"Edge {edge.source} → {edge.target}"
+        has_from = edge.from_port is not None
+        has_to = edge.to_port is not None
+
+        if has_from != has_to:
+            present, absent = ("from_port", "to_port") if has_from else ("to_port", "from_port")
+            errors.append(
+                f"{label}: declares {present} but not {absent} — an edge is either "
+                f"fully port-declared or not port-declared at all."
+            )
+            continue
+
+        target_bound = target.input_ports is not None
+
+        if not has_from:
+            if target_bound:
+                errors.append(
+                    f"{label}: target '{edge.target}' declares input_ports, so every "
+                    f"incoming edge must declare from_port and to_port."
+                )
+            continue
+
+        if target_bound:
+            declared_inputs = {p.name for p in target.input_ports}
+            if edge.to_port not in declared_inputs:
+                errors.append(
+                    f"{label}: to_port '{edge.to_port}' is not a declared input port "
+                    f"of '{edge.target}' (declared: {sorted(declared_inputs)})."
+                )
+            else:
+                claim = f"{edge.source}.{edge.from_port}"
+                port_claims.setdefault((edge.target, edge.to_port), []).append(claim)
+
+        if source.output_ports is None:
+            if target_bound:
+                errors.append(
+                    f"{label}: source '{edge.source}' declares no output_ports, but "
+                    f"'{edge.target}' is bound and reads from_port '{edge.from_port}'."
+                )
+        else:
+            declared_outputs = {p.name for p in source.output_ports}
+            if edge.from_port not in declared_outputs:
+                errors.append(
+                    f"{label}: from_port '{edge.from_port}' is not a declared output "
+                    f"port of '{edge.source}' (declared: {sorted(declared_outputs)})."
+                )
+
+    for (target_id, to_port), claims in port_claims.items():
+        if len(claims) > 1:
+            errors.append(
+                f"Node '{target_id}': input port '{to_port}' is bound by "
+                f"{len(claims)} edges (competing: {sorted(claims)}) — a bound "
+                f"input port takes exactly one incoming edge."
+            )
+
+    return errors
+
+
 def validate_integrity(graph: Graph) -> dict:
     """
-    Check that every edge references node IDs that actually exist in the graph.
+    Check referential integrity (every edge references node IDs that exist) and
+    dataflow integrity (every port-declared edge names ports its endpoints declare).
     Returns a dict with 'valid' (bool) and 'errors' (list of problem descriptions).
     """
     from idiograph.core.logging_config import get_logger
@@ -76,6 +166,8 @@ def validate_integrity(graph: Graph) -> dict:
             errors.append(f"Edge {edge.source} → {edge.target}: source '{edge.source}' does not exist.")
         if edge.target not in node_ids:
             errors.append(f"Edge {edge.source} → {edge.target}: target '{edge.target}' does not exist.")
+
+    errors.extend(_dataflow_errors(graph))
 
     if errors:
         _log.warning("Integrity check failed for '%s': %d error(s).", graph.name, len(errors))
