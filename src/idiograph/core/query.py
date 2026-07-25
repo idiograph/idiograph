@@ -73,10 +73,17 @@ def _dataflow_errors(graph: Graph) -> list[str]:
     it must declare the output port being read. Nodes that declare nothing stay
     in the legacy regime and are not checked here.
 
+    A bound input port also takes exactly one incoming edge. Two edges binding
+    the same `to_port` have no declared precedence between them, so the graph
+    does not say which value the port carries — a defect in the wiring, reported
+    here rather than silently resolved at run time.
+
     Ports are untyped: `port_type` and `Graph.type_registry` are not consulted.
     """
     node_map = {node.id: node for node in graph.nodes}
     errors: list[str] = []
+    # (target id, to_port) → the `source.from_port` of every edge claiming it.
+    port_claims: dict[tuple[str, str], list[str]] = {}
 
     for edge in graph.edges:
         source = node_map.get(edge.source)
@@ -113,6 +120,9 @@ def _dataflow_errors(graph: Graph) -> list[str]:
                     f"{label}: to_port '{edge.to_port}' is not a declared input port "
                     f"of '{edge.target}' (declared: {sorted(declared_inputs)})."
                 )
+            else:
+                claim = f"{edge.source}.{edge.from_port}"
+                port_claims.setdefault((edge.target, edge.to_port), []).append(claim)
 
         if source.output_ports is None:
             if target_bound:
@@ -127,6 +137,14 @@ def _dataflow_errors(graph: Graph) -> list[str]:
                     f"{label}: from_port '{edge.from_port}' is not a declared output "
                     f"port of '{edge.source}' (declared: {sorted(declared_outputs)})."
                 )
+
+    for (target_id, to_port), claims in port_claims.items():
+        if len(claims) > 1:
+            errors.append(
+                f"Node '{target_id}': input port '{to_port}' is bound by "
+                f"{len(claims)} edges (competing: {sorted(claims)}) — a bound "
+                f"input port takes exactly one incoming edge."
+            )
 
     return errors
 

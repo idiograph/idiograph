@@ -239,16 +239,19 @@ def test_two_upstreams_disjoint_ports_via_execute_graph() -> None:
     assert results["pr"]["pagerank"] == direct["pagerank"]
 
 
-def test_two_edges_into_one_port_resolve_by_edge_order() -> None:
-    """Two upstreams both bound to the SAME input port ``nodes``.
+def test_two_edges_into_one_port_is_rejected_by_validation() -> None:
+    """Two upstreams both bound to the SAME input port ``nodes`` is INVALID.
 
-    This DOCUMENTS current behavior rather than endorsing it. Binding settled the
-    old first-wins-over-``inputs.values()`` indeterminacy for distinct ports, but
-    two edges competing for one port is still not a shape the declarations
-    resolve: the executor assigns in edge order, so the LAST such edge wins.
-    Unlike before, that is at least deterministic and readable off the graph —
-    but a graph that wires it is arguably malformed, and whether validation
-    should reject it is an open question this test deliberately leaves open.
+    Binding settled the old first-wins-over-``inputs.values()`` indeterminacy by
+    keying inputs on ``to_port`` — which made this collision deterministic
+    (assignment follows edge order, so the last such edge wins) and, in the same
+    stroke, made it indefensible: edge-list order is not a thing the graph
+    declares, so the winner is not readable off the declarations. The open
+    question this test used to carry is closed. ``validate_integrity`` rejects
+    the shape outright.
+
+    The executor is deliberately unchanged: this is statically detectable, so it
+    is validation's job, and an unvalidated graph still runs last-assign.
     """
     nodes_a = [_rec("A"), _rec("B")]
     nodes_x = [_rec("X"), _rec("Y")]
@@ -278,14 +281,19 @@ def test_two_edges_into_one_port_resolve_by_edge_order() -> None:
                  from_port="cleaned_edges", to_port="cleaned_edges"),
             Edge(source="pa", target="pr", type="DATA",
                  from_port="nodes", to_port="nodes"),
-            # Declared last — wins the `nodes` port.
+            # Second claimant on `nodes` — the collision validation now rejects.
             Edge(source="px", target="pr", type="DATA",
                  from_port="nodes", to_port="nodes"),
         ],
     )
 
-    results = asyncio.run(execute_graph(graph))
+    result = validate_integrity(graph)
 
-    assert results["pr"]["status"] == "SUCCESS"
-    # Exactly one upstream's node set is reflected — never a merge of both.
-    assert set(results["pr"]["pagerank"]) == {"X", "Y"}
+    assert result["valid"] is False
+    collisions = [e for e in result["errors"] if "takes exactly one incoming edge" in e]
+    assert len(collisions) == 1
+    assert "input port 'nodes'" in collisions[0]
+    assert "pa.nodes" in collisions[0]
+    assert "px.nodes" in collisions[0]
+    # The `cleaned_edges` port, claimed once, is not implicated.
+    assert "cleaned_edges" not in collisions[0]

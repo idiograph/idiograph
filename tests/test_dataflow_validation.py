@@ -111,6 +111,66 @@ class TestRatchetEnforcement:
         )
         assert len(_errors(graph)) == 1
 
+    def test_two_edges_binding_one_port_is_an_error(self):
+        """A bound input port takes exactly one edge. Two claiming it leaves the
+        port's value decided by edge-list order — which the graph does not
+        declare — so the shape is rejected rather than resolved."""
+        graph = _graph(
+            [
+                _declared_source(["alpha"]),
+                Node(id="s2", type="Source", params={},
+                     output_ports=[_port("beta")]),
+                _bound_target(["left"]),
+            ],
+            [
+                Edge(source="s", target="t", type="DATA",
+                     from_port="alpha", to_port="left"),
+                Edge(source="s2", target="t", type="DATA",
+                     from_port="beta", to_port="left"),
+            ],
+        )
+        errors = _errors(graph)
+        assert len(errors) == 1
+        assert "input port 'left' is bound by 2 edges" in errors[0]
+        assert "s.alpha" in errors[0]
+        assert "s2.beta" in errors[0]
+
+    def test_two_edges_from_one_source_binding_one_port_is_an_error(self):
+        """The collision is counted per edge, not per source: one upstream
+        feeding two of its outputs into a single port is the same defect."""
+        graph = _graph(
+            [_declared_source(["alpha", "beta"]), _bound_target(["left"])],
+            [
+                Edge(source="s", target="t", type="DATA",
+                     from_port="alpha", to_port="left"),
+                Edge(source="s", target="t", type="DATA",
+                     from_port="beta", to_port="left"),
+            ],
+        )
+        errors = _errors(graph)
+        assert len(errors) == 1
+        assert "input port 'left' is bound by 2 edges" in errors[0]
+
+    def test_collisions_on_two_ports_report_once_each(self):
+        """One error per colliding (target, port) pair — not per edge."""
+        graph = _graph(
+            [_declared_source(["alpha", "beta"]), _bound_target(["left", "right"])],
+            [
+                Edge(source="s", target="t", type="DATA",
+                     from_port="alpha", to_port="left"),
+                Edge(source="s", target="t", type="DATA",
+                     from_port="beta", to_port="left"),
+                Edge(source="s", target="t", type="DATA",
+                     from_port="alpha", to_port="right"),
+                Edge(source="s", target="t", type="DATA",
+                     from_port="beta", to_port="right"),
+            ],
+        )
+        errors = _errors(graph)
+        assert len(errors) == 2
+        assert sum("'left'" in e for e in errors) == 1
+        assert sum("'right'" in e for e in errors) == 1
+
     def test_undeclared_upstream_feeding_bound_node_is_an_error(self):
         """Declaring outputs is data, not code: the upstream handler already
         emits the key, so a bound consumer may demand the declaration."""
@@ -189,6 +249,26 @@ class TestLegacyGraphsStayValid:
             [_declared_source(["alpha"]), Node(id="t", type="Sink", params={})],
             [Edge(source="s", target="t", type="DATA",
                   from_port="alpha", to_port="left")],
+        )
+        assert _errors(graph) == []
+
+    def test_two_edges_binding_one_port_on_legacy_target_is_not_an_error(self):
+        """The port-collision check turns on the TARGET's declaration too. A
+        legacy consumer keys its inputs by source node id, so the `to_port`
+        names on these edges are inert and collide with nothing."""
+        graph = _graph(
+            [
+                _declared_source(["alpha"]),
+                Node(id="s2", type="Source", params={},
+                     output_ports=[_port("beta")]),
+                Node(id="t", type="Sink", params={}),
+            ],
+            [
+                Edge(source="s", target="t", type="DATA",
+                     from_port="alpha", to_port="left"),
+                Edge(source="s2", target="t", type="DATA",
+                     from_port="beta", to_port="left"),
+            ],
         )
         assert _errors(graph) == []
 
