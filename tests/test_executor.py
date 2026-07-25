@@ -6,7 +6,12 @@
 
 import pytest
 from idiograph.core.models import Node, Edge, Graph
-from idiograph.core.executor import execute_graph, register_handler, HANDLERS
+from idiograph.core.executor import (
+    HANDLERS,
+    UnregisteredNodeTypeError,
+    execute_graph,
+    register_handler,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -64,12 +69,44 @@ class TestHandlerRegistry:
         register_handler("MyType", my_handler)
         assert "MyType" in HANDLERS
 
-    def test_missing_handler_returns_failed_status(self, linear_graph):
-        # No handlers registered — all nodes should fail
+    def test_missing_handler_raises(self, linear_graph):
+        """A registry miss is detectable before any handler runs, so it raises
+        rather than becoming a FAILED result — the same side of the line as a
+        cycle. The message names the node and the unregistered type."""
         import asyncio
-        results = asyncio.run(execute_graph(linear_graph))
-        assert results["a"]["status"] == "FAILED"
-        assert "No handler registered" in results["a"]["error"]
+        with pytest.raises(UnregisteredNodeTypeError) as excinfo:
+            asyncio.run(execute_graph(linear_graph))
+
+        message = str(excinfo.value)
+        assert "'a'" in message
+        assert "StubFetch" in message
+
+    def test_missing_handler_error_escapes_execute_graph(self, linear_graph):
+        """The no-handler branch sits outside the handler try/except: nothing
+        converts it into `{"status": "FAILED"}`, and no partial results dict is
+        returned in its place."""
+        import asyncio
+
+        async def stub(params, inputs):
+            return {}
+
+        # 'a' and 'c' are registered; 'b' is not, so the raise happens midway
+        # through the run rather than on the first node.
+        register_handler("StubFetch", stub)
+        register_handler("StubOutput", stub)
+
+        with pytest.raises(UnregisteredNodeTypeError):
+            asyncio.run(execute_graph(linear_graph))
+
+    def test_missing_handler_leaves_node_status_untouched(self, linear_graph):
+        """Node status is graph state, and graph state is the ran-a-handler
+        side of the line. A type that was never dispatched is not marked
+        FAILED."""
+        import asyncio
+        with pytest.raises(UnregisteredNodeTypeError):
+            asyncio.run(execute_graph(linear_graph))
+
+        assert {n.id: n.status for n in linear_graph.nodes}["a"] == "PENDING"
 
 
 class TestLinearExecution:

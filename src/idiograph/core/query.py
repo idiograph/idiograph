@@ -73,10 +73,12 @@ def _dataflow_errors(graph: Graph) -> list[str]:
     it must declare the output port being read. Nodes that declare nothing stay
     in the legacy regime and are not checked here.
 
-    A bound input port also takes exactly one incoming edge. Two edges binding
-    the same `to_port` have no declared precedence between them, so the graph
-    does not say which value the port carries — a defect in the wiring, reported
-    here rather than silently resolved at run time.
+    A bound input port takes exactly one incoming edge — floor and ceiling. Two
+    edges binding the same `to_port` have no declared precedence between them,
+    so the graph does not say which value the port carries. A declared port that
+    no edge binds is never fed at all: every declared input port is required,
+    because declaring it is what says the handler reads it. Both are defects in
+    the wiring, reported here rather than silently resolved at run time.
 
     Ports are untyped: `port_type` and `Graph.type_registry` are not consulted.
     """
@@ -84,11 +86,17 @@ def _dataflow_errors(graph: Graph) -> list[str]:
     errors: list[str] = []
     # (target id, to_port) → the `source.from_port` of every edge claiming it.
     port_claims: dict[tuple[str, str], list[str]] = {}
+    # Targets with an already-reported defect on an incoming edge. Such a node
+    # is not additionally told its ports are unfed: a malformed or dangling edge
+    # says nothing about which port it meant to feed, so the unfed report would
+    # be a consequence of the reported defect rather than a second defect.
+    faulted_targets: set[str] = set()
 
     for edge in graph.edges:
         source = node_map.get(edge.source)
         target = node_map.get(edge.target)
         if source is None or target is None:
+            faulted_targets.add(edge.target)
             continue  # already reported by the referential check
 
         label = f"Edge {edge.source} → {edge.target}"
@@ -101,6 +109,7 @@ def _dataflow_errors(graph: Graph) -> list[str]:
                 f"{label}: declares {present} but not {absent} — an edge is either "
                 f"fully port-declared or not port-declared at all."
             )
+            faulted_targets.add(edge.target)
             continue
 
         target_bound = target.input_ports is not None
@@ -111,6 +120,7 @@ def _dataflow_errors(graph: Graph) -> list[str]:
                     f"{label}: target '{edge.target}' declares input_ports, so every "
                     f"incoming edge must declare from_port and to_port."
                 )
+                faulted_targets.add(edge.target)
             continue
 
         if target_bound:
@@ -120,6 +130,7 @@ def _dataflow_errors(graph: Graph) -> list[str]:
                     f"{label}: to_port '{edge.to_port}' is not a declared input port "
                     f"of '{edge.target}' (declared: {sorted(declared_inputs)})."
                 )
+                faulted_targets.add(edge.target)
             else:
                 claim = f"{edge.source}.{edge.from_port}"
                 port_claims.setdefault((edge.target, edge.to_port), []).append(claim)
@@ -130,6 +141,7 @@ def _dataflow_errors(graph: Graph) -> list[str]:
                     f"{label}: source '{edge.source}' declares no output_ports, but "
                     f"'{edge.target}' is bound and reads from_port '{edge.from_port}'."
                 )
+                faulted_targets.add(edge.target)
         else:
             declared_outputs = {p.name for p in source.output_ports}
             if edge.from_port not in declared_outputs:
@@ -137,6 +149,7 @@ def _dataflow_errors(graph: Graph) -> list[str]:
                     f"{label}: from_port '{edge.from_port}' is not a declared output "
                     f"port of '{edge.source}' (declared: {sorted(declared_outputs)})."
                 )
+                faulted_targets.add(edge.target)
 
     for (target_id, to_port), claims in port_claims.items():
         if len(claims) > 1:
@@ -145,6 +158,21 @@ def _dataflow_errors(graph: Graph) -> list[str]:
                 f"{len(claims)} edges (competing: {sorted(claims)}) — a bound "
                 f"input port takes exactly one incoming edge."
             )
+
+    # The floor, the complement of `port_claims`: a declared input port no edge
+    # binds. This needs a pass over NODES — the edge loop above cannot see a
+    # port that has no edge. An empty `input_ports` declares "accepts no
+    # inputs" and is trivially satisfied; legacy nodes stay out of the regime.
+    for node in graph.nodes:
+        if node.input_ports is None or node.id in faulted_targets:
+            continue
+        for port in node.input_ports:
+            if (node.id, port.name) not in port_claims:
+                errors.append(
+                    f"Node '{node.id}': input port '{port.name}' is bound by no "
+                    f"incoming edge — every declared input port of a bound node "
+                    f"must be fed."
+                )
 
     return errors
 

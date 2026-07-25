@@ -216,6 +216,164 @@ class TestPortNameChecks:
         assert len(_errors(graph)) == 2
 
 
+class TestUnfedPorts:
+    """The floor. The collision check says a bound input port takes at most one
+    incoming edge; this says it takes at least one. Every declared input port is
+    required — declaring it is what says the handler reads it — so there is no
+    optional marker on `PortDeclaration` and none is wanted."""
+
+    def test_unfed_declared_port_is_an_error(self):
+        graph = _graph(
+            [_declared_source(["alpha"]), _bound_target(["left", "right"])],
+            [Edge(source="s", target="t", type="DATA",
+                  from_port="alpha", to_port="left")],
+        )
+        errors = _errors(graph)
+        assert len(errors) == 1
+        assert "input port 'right' is bound by no incoming edge" in errors[0]
+        assert "'t'" in errors[0]
+
+    def test_bound_node_with_no_incoming_edges_at_all_is_an_error(self):
+        """A bound node wired to nothing is not a source — it declared that it
+        reads something, and nothing feeds it."""
+        graph = _graph(
+            [_declared_source(["alpha"]), _bound_target(["left"])],
+            [],
+        )
+        errors = _errors(graph)
+        assert len(errors) == 1
+        assert "input port 'left' is bound by no incoming edge" in errors[0]
+
+    def test_every_unfed_port_reports_once_each(self):
+        graph = _graph(
+            [_declared_source(["alpha"]), _bound_target(["left", "right"])],
+            [],
+        )
+        errors = _errors(graph)
+        assert len(errors) == 2
+        assert sum("'left'" in e for e in errors) == 1
+        assert sum("'right'" in e for e in errors) == 1
+
+    def test_empty_input_ports_is_trivially_satisfied(self):
+        """`input_ports=[]` declares 'accepts no inputs'. It is bound, but has
+        no ports to feed."""
+        graph = _graph(
+            [Node(id="t", type="Sink", params={}, input_ports=[])],
+            [],
+        )
+        assert _errors(graph) == []
+
+    def test_legacy_node_with_no_incoming_edges_is_not_checked(self):
+        """Declaring no `input_ports` keeps a node in the legacy regime, where
+        the dataflow check says nothing about it."""
+        graph = _graph([Node(id="t", type="Sink", params={})], [])
+        assert _errors(graph) == []
+
+    def test_port_fed_by_a_control_edge_counts_as_fed(self):
+        """Claiming is about the port declarations, not the edge type — edge
+        type gates execution, not dataflow."""
+        graph = _graph(
+            [_declared_source(["alpha"]), _bound_target(["left"])],
+            [Edge(source="s", target="t", type="CONTROL",
+                  from_port="alpha", to_port="left")],
+        )
+        assert _errors(graph) == []
+
+    def test_collision_on_one_port_does_not_suppress_an_unfed_other(self):
+        """Over-feeding 'left' says nothing about 'right'. The two are
+        independent defects and both are reported."""
+        graph = _graph(
+            [_declared_source(["alpha", "beta"]), _bound_target(["left", "right"])],
+            [
+                Edge(source="s", target="t", type="DATA",
+                     from_port="alpha", to_port="left"),
+                Edge(source="s", target="t", type="DATA",
+                     from_port="beta", to_port="left"),
+            ],
+        )
+        errors = _errors(graph)
+        assert len(errors) == 2
+        assert sum("is bound by 2 edges" in e for e in errors) == 1
+        assert sum("bound by no incoming edge" in e for e in errors) == 1
+
+
+class TestUnfedSuppression:
+    """The gate is per NODE, not per port: a node whose incoming wiring already
+    has a reported defect is not additionally told its ports are unfed. That
+    would be a consequence of the reported defect, not a second defect."""
+
+    def test_bad_to_port_suppresses_the_unfed_report_for_the_same_node(self):
+        """The edge names a port the target does not declare, so nothing says
+        which port it meant to feed. One error, not two."""
+        graph = _graph(
+            [_declared_source(["alpha"]), _bound_target(["left"])],
+            [Edge(source="s", target="t", type="DATA",
+                  from_port="alpha", to_port="typo")],
+        )
+        errors = _errors(graph)
+        assert len(errors) == 1
+        assert "not a declared input port" in errors[0]
+
+    def test_suppression_is_per_node_not_per_port(self):
+        """One malformed edge silences the unfed report for EVERY port on that
+        node — including ports the malformed edge plainly never addressed."""
+        graph = _graph(
+            [_declared_source(["alpha"]), _bound_target(["left", "right", "mid"])],
+            [Edge(source="s", target="t", type="DATA",
+                  from_port="alpha", to_port="typo")],
+        )
+        errors = _errors(graph)
+        assert len(errors) == 1
+        assert "not a declared input port" in errors[0]
+
+    def test_portless_incoming_edge_suppresses_unfed_reports(self):
+        graph = _graph(
+            [_declared_source(["alpha"]), _bound_target(["left", "right"])],
+            [Edge(source="s", target="t", type="DATA")],
+        )
+        errors = _errors(graph)
+        assert len(errors) == 1
+        assert "declares input_ports" in errors[0]
+
+    def test_half_declared_incoming_edge_suppresses_unfed_reports(self):
+        graph = _graph(
+            [_declared_source(["alpha"]), _bound_target(["left", "right"])],
+            [Edge(source="s", target="t", type="DATA", from_port="alpha")],
+        )
+        errors = _errors(graph)
+        assert len(errors) == 1
+        assert "declares from_port but not to_port" in errors[0]
+
+    def test_dangling_incoming_edge_suppresses_unfed_reports(self):
+        """The referential check already reported this node's wiring as broken;
+        the dataflow check does not pile on."""
+        graph = _graph(
+            [_bound_target(["left", "right"])],
+            [Edge(source="ghost", target="t", type="DATA",
+                  from_port="alpha", to_port="left")],
+        )
+        errors = _errors(graph)
+        assert len(errors) == 1
+        assert "does not exist" in errors[0]
+
+    def test_suppression_does_not_leak_to_a_different_bound_node(self):
+        """The gate is scoped to the node with the reported defect. A second
+        bound node with a genuinely unfed port still reports."""
+        graph = _graph(
+            [
+                _declared_source(["alpha"]),
+                Node(id="t", type="Sink", params={}, input_ports=[_port("left")]),
+                Node(id="u", type="Sink", params={}, input_ports=[_port("solo")]),
+            ],
+            [Edge(source="s", target="t", type="DATA",
+                  from_port="alpha", to_port="typo")],
+        )
+        errors = _errors(graph)
+        assert len(errors) == 2
+        assert sum("not a declared input port" in e for e in errors) == 1
+        assert sum("'u'" in e and "'solo'" in e for e in errors) == 1
+
+
 class TestLegacyGraphsStayValid:
     def test_undeclared_graph_has_no_dataflow_errors(self):
         """A graph with no declarations anywhere is legacy and untouched by the
