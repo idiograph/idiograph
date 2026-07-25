@@ -1228,25 +1228,73 @@ class PipelineError(Exception):
     """
 
 
-def assemble_graph(
-    seeds: list[PaperRecord],
-    backward: Node3Result,
-    forward: Node4Result,
-) -> tuple[list[PaperRecord], list[CitationEdge], list[EdgeMetadataMismatch]]:
-    """Reconcile seeds, Node 3, and Node 4 into one node set and one cites edge set.
+#: Port declarations for the ``AssembleGraph`` node. These are the contract:
+#: a graph wiring this node declares them on the ``Node``, and ``validate_integrity``
+#: checks the edges against them without reading this handler's source.
+ASSEMBLE_GRAPH_INPUT_PORTS: list[PortDeclaration] = [
+    _untyped_port("seeds"),
+    _untyped_port("backward"),
+    _untyped_port("forward"),
+]
 
-    Pure function. Does **not** do cross-seed dedup — Nodes 3 and 4 already did
-    that internally (the global top-N cap is applied across the cross-seed union
+ASSEMBLE_GRAPH_OUTPUT_PORTS: list[PortDeclaration] = [
+    _untyped_port("nodes"),
+    _untyped_port("cites"),
+    _untyped_port("mismatches"),
+]
+
+
+class _AssembleGraphInputs(BaseModel):
+    """Declared input contract for the ``AssembleGraph`` handler.
+
+    One field per declared input port (``ASSEMBLE_GRAPH_INPUT_PORTS``): the
+    resolved seed records, the Node 3 backward result, and the Node 4 forward
+    result. The executor binds each port-declared incoming edge as
+    ``inputs[to_port]``, so the ``inputs`` mapping validates directly against
+    this model.
+    """
+
+    seeds: list[PaperRecord]
+    backward: Node3Result
+    forward: Node4Result
+
+
+async def assemble_graph(params: dict, inputs: dict) -> dict:
+    """Executor node handler (type ``AssembleGraph``) — reconcile seeds, Node 3,
+    and Node 4 into one node set and one cites edge set.
+
+    Contract (``core/executor.py`` handler convention):
+      ``params``  — UNUSED. This stage takes no configuration; nothing is read
+                    off ``params`` and no parameters model exists for it.
+      ``inputs``  — BOUND. The node declares ``ASSEMBLE_GRAPH_INPUT_PORTS``, so
+                    the executor builds ``inputs`` solely from the port-declared
+                    edges into it, keyed by ``to_port``: ``{"seeds": [...],
+                    "backward": Node3Result, "forward": Node4Result}``, validated
+                    as ``_AssembleGraphInputs``. Undeclared keys are ignored. A
+                    caller invoking the handler directly shapes ``inputs`` the
+                    same way, so the direct and executor-driven paths share one
+                    contract.
+      returns     — ``{"nodes": [...], "cites": [...], "mismatches": [...]}`` —
+                    the declared output ports (``ASSEMBLE_GRAPH_OUTPUT_PORTS``),
+                    in the order the pre-binding 3-tuple carried them.
+
+    Pure. Does **not** do cross-seed dedup — Nodes 3 and 4 already did that
+    internally (the global top-N cap is applied across the cross-seed union
     inside each node). Its only job is the backward ∪ forward ∪ seed union, where
     a node or edge can legitimately appear in more than one of the three sources.
 
     Bucket-then-reduce: one ``model_copy`` per unique node, hash-based dedup, no
     O(N²) existence checks. Mirrors ``clean_cycles``' ``edge_by_pair`` lookup.
 
-    Returns ``(unified_nodes, unified_cites, mismatches)``. ``mismatches`` records
-    each ``(source_id, target_id, type)`` edge whose backward and forward views
-    disagree on metadata; the first-seen (backward) edge is kept (OQ3).
+    ``mismatches`` records each ``(source_id, target_id, type)`` edge whose
+    backward and forward views disagree on metadata; the first-seen (backward)
+    edge is kept (OQ3).
     """
+    data = _AssembleGraphInputs.model_validate(inputs)
+    seeds = data.seeds
+    backward = data.backward
+    forward = data.forward
+
     node_buckets: dict[str, tuple[PaperRecord, set[str]]] = {}
     edge_buckets: dict[tuple[str, str, str], CitationEdge] = {}
     mismatches: list[EdgeMetadataMismatch] = []
@@ -1303,7 +1351,11 @@ def assemble_graph(
         for rec, roots in node_buckets.values()
     ]
     unified_cites = list(edge_buckets.values())
-    return unified_nodes, unified_cites, mismatches
+    return {
+        "nodes": unified_nodes,
+        "cites": unified_cites,
+        "mismatches": mismatches,
+    }
 
 
 async def resolve_seeds(
@@ -1424,7 +1476,20 @@ async def run_traversal(
 
     # 3. Graph merge.
     _log.info("Pipeline: starting graph merge")
-    unified_nodes, unified_cites, mismatches = assemble_graph(resolved, n3, n4)
+    # The merge stage is BOUND: it declares ASSEMBLE_GRAPH_INPUT_PORTS, so the
+    # executor builds its `inputs` from the port-declared edges into it, keyed by
+    # `to_port`. Marshal this direct call into that same contract — one key per
+    # declared input port — so the direct and executor-driven paths agree. It
+    # takes no configuration, so `params` is empty. The returned mapping is
+    # unpacked into the three locals the rest of this function consumes
+    # unchanged, in the order the pre-binding 3-tuple carried them.
+    merged = await assemble_graph(
+        {},
+        {"seeds": resolved, "backward": n3, "forward": n4},
+    )
+    unified_nodes = merged["nodes"]
+    unified_cites = merged["cites"]
+    mismatches = merged["mismatches"]
     _log.info(
         "Pipeline: graph merge complete — %d nodes, %d cites edges, %d mismatch(es)",
         len(unified_nodes),
