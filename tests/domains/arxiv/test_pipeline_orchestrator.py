@@ -212,13 +212,30 @@ def test_multi_seed_shared_paper_root_union(
 # ── Graph merge (assemble_graph) ────────────────────────────────────────────
 
 
+def _merge(
+    seeds: list[PaperRecord],
+    n3: Node3Result,
+    n4: Node4Result,
+) -> dict:
+    """Call the bound ``assemble_graph`` handler from a sync test.
+
+    The stage is now an async port-bound handler, so these merge-semantics tests
+    marshal into its declared contract — one key per declared input port, empty
+    ``params`` — and read the declared output ports off the returned mapping.
+    `asyncio.run` is the repo's async-from-sync convention (no async plugin).
+    """
+    return asyncio.run(
+        assemble_graph({}, {"seeds": seeds, "backward": n3, "forward": n4})
+    )
+
+
 def test_seeds_appear_in_nodes() -> None:
     """Every resolved seed appears in unified nodes with itself in root_ids."""
     seeds = [_seed("S1"), _seed("S2")]
     n3 = Node3Result(papers=[], edges=[])
     n4 = Node4Result(papers=[], edges=[])
 
-    nodes, _cites, _mismatches = assemble_graph(seeds, n3, n4)
+    nodes = _merge(seeds, n3, n4)["nodes"]
 
     by_id = {n.node_id: n for n in nodes}
     assert {"S1", "S2"} <= set(by_id)
@@ -234,7 +251,7 @@ def test_merge_dedup_node_backward_and_forward() -> None:
     n3 = Node3Result(papers=[p_back], edges=[_edge("S1", "P")])
     n4 = Node4Result(papers=[p_fwd], edges=[_edge("P", "S2")])
 
-    nodes, _cites, _mismatches = assemble_graph(seeds, n3, n4)
+    nodes = _merge(seeds, n3, n4)["nodes"]
 
     p_nodes = [n for n in nodes if n.node_id == "P"]
     assert len(p_nodes) == 1
@@ -248,7 +265,8 @@ def test_merge_dedup_edge_backward_and_forward() -> None:
     n3 = Node3Result(papers=[p], edges=[_edge("P", "S")])
     n4 = Node4Result(papers=[p], edges=[_edge("P", "S")])
 
-    _nodes, cites, mismatches = assemble_graph(seeds, n3, n4)
+    merged = _merge(seeds, n3, n4)
+    cites, mismatches = merged["cites"], merged["mismatches"]
 
     matching = [
         e for e in cites if (e.source_id, e.target_id, e.type) == ("P", "S", "cites")
@@ -265,7 +283,7 @@ def test_merge_edge_metadata_consistency() -> None:
     n3 = Node3Result(papers=[p], edges=[edge])
     n4 = Node4Result(papers=[p], edges=[_edge("P", "S", citing_paper_year=2020)])
 
-    _nodes, _cites, mismatches = assemble_graph(seeds, n3, n4)
+    mismatches = _merge(seeds, n3, n4)["mismatches"]
 
     assert mismatches == []
 
@@ -281,7 +299,8 @@ def test_merge_edge_metadata_mismatch() -> None:
         papers=[p], edges=[_edge("P", "S", citing_paper_year=2021)]
     )
 
-    _nodes, cites, mismatches = assemble_graph(seeds, n3, n4)
+    merged = _merge(seeds, n3, n4)
+    cites, mismatches = merged["cites"], merged["mismatches"]
 
     kept = next(
         e for e in cites if (e.source_id, e.target_id, e.type) == ("P", "S", "cites")
