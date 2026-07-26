@@ -282,14 +282,20 @@ class TestLegacyRegimeUnchanged:
         assert seen[0]["b"]["v"] == 2  # CONTROL edge still carries data
 
     def test_arxiv_pipeline_summarize_still_receives_payload_over_control_edge(self):
-        """The arXiv demo pipeline is legacy by ruling. Its evaluate -> summarize
-        edge is CONTROL and is summarize's ONLY upstream, so that CONTROL edge
-        must keep carrying data — `llm_summarize` reads title/abstract off
-        `next(iter(inputs.values()))` and would get nothing if binding had
-        changed CONTROL semantics or the legacy gather.
+        """The arXiv demo pipeline is legacy with respect to `input_ports` — the
+        property this test is about. Its nodes DO declare `resources` per
+        IDG-068, but that is the other fence: the resource channel decides what
+        a handler is handed from the run, never how its `inputs` are gathered.
+        The two ratchets turn independently, and this test pins the input one.
 
-        Driven on the real ARXIV_PIPELINE graph with stubbed handlers, so no API
-        key or network is involved.
+        Its evaluate -> summarize edge is CONTROL and is summarize's ONLY
+        upstream, so that CONTROL edge must keep carrying data —
+        `llm_summarize` reads title/abstract off `next(iter(inputs.values()))`
+        and would get nothing if binding had changed CONTROL semantics or the
+        legacy gather.
+
+        Driven on the real ARXIV_PIPELINE graph with stubbed handlers and inert
+        resources, so no API key or network is involved.
         """
         from idiograph.domains.arxiv.pipeline import ARXIV_PIPELINE
 
@@ -305,11 +311,16 @@ class TestLegacyRegimeUnchanged:
 
         seen: dict[str, dict] = {}
 
-        async def fetch(_params, inputs):
+        # fetch/claims/summarize sit on resource-declaring nodes, so the
+        # executor hands them a keyword-only `resources`. They accept and
+        # ignore it — the input gather, not the resource channel, is what this
+        # test measures. `evaluate`'s node declares nothing, so its stub keeps
+        # the bare two-positional legacy signature.
+        async def fetch(_params, inputs, *, resources):
             seen["fetch"] = inputs
             return {"title": "T", "abstract": "A", "paper_id": "p1"}
 
-        async def claims(_params, inputs):
+        async def claims(_params, inputs, *, resources):
             seen["claims"] = inputs
             upstream = next(iter(inputs.values()), {})
             return {"response": "method model result", **upstream}
@@ -319,7 +330,7 @@ class TestLegacyRegimeUnchanged:
             upstream = next(iter(inputs.values()), {})
             return {"score": 1.0, **upstream}
 
-        async def summarize(_params, inputs):
+        async def summarize(_params, inputs, *, resources):
             seen["summarize"] = inputs
             upstream = next(iter(inputs.values()), {})
             return {"summary": f"{upstream['title']}/{upstream['abstract']}"}
@@ -329,7 +340,9 @@ class TestLegacyRegimeUnchanged:
         register_handler("Evaluator", evaluate)
         register_handler("LLMSummarize", summarize)
 
-        results = asyncio.run(execute_graph(graph))
+        results = asyncio.run(execute_graph(
+            graph, resources={"http_client": None, "anthropic_client": None},
+        ))
 
         assert results["summarize"]["status"] == "SUCCESS"
         # The CONTROL edge is the only thing feeding summarize, and it carried
