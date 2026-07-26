@@ -677,6 +677,74 @@ class TestCascadeUnchanged:
         assert results["tail"]["status"] == "SKIPPED"
 
 
+class TestNode55Declarations:
+    """The channel's first real subject — Node 5.5, the pipeline's LLM node.
+
+    The clauses are stated in terms of this node, so pin what it declares.
+    """
+
+    def test_the_predicate_names_the_config_not_the_resource(self):
+        """Clause 1 — the gate reads CONFIG PRESENCE ONLY. `llm` is the frozen
+        LLMConfig in params, which enters the content address; the live client
+        is a resource and never carries the enable/disable decision."""
+        from idiograph.domains.arxiv.relationship_annotation import (
+            ANNOTATE_RELATIONSHIPS_ENABLED_WHEN,
+        )
+
+        assert ANNOTATE_RELATIONSHIPS_ENABLED_WHEN == "llm"
+
+    def test_the_passthrough_maps_nodes_to_nodes(self):
+        """Clause 6 — 5.5 rebinds the node set, so downstream `nodes` consumers
+        bind to its output on the LLM path. Disabled, the same port carries the
+        pre-annotation records forward. `provenance` is unmapped: there was no
+        run to have provenance of."""
+        from idiograph.domains.arxiv.relationship_annotation import (
+            ANNOTATE_RELATIONSHIPS_DISABLED_PASSTHROUGH,
+            ANNOTATE_RELATIONSHIPS_OUTPUT_PORTS,
+        )
+
+        assert ANNOTATE_RELATIONSHIPS_DISABLED_PASSTHROUGH == {"nodes": "nodes"}
+        out_names = {p.name for p in ANNOTATE_RELATIONSHIPS_OUTPUT_PORTS}
+        assert out_names == {"nodes", "provenance"}
+        # Every mapped output port is a declared one.
+        assert set(ANNOTATE_RELATIONSHIPS_DISABLED_PASSTHROUGH) <= out_names
+
+    def test_every_mapped_input_is_a_declared_input_port(self):
+        """The mapping's values name input ports, so the forward is readable
+        off the declaration without opening the handler."""
+        from idiograph.domains.arxiv.relationship_annotation import (
+            ANNOTATE_RELATIONSHIPS_DISABLED_PASSTHROUGH,
+            ANNOTATE_RELATIONSHIPS_INPUT_PORTS,
+        )
+
+        in_names = {p.name for p in ANNOTATE_RELATIONSHIPS_INPUT_PORTS}
+        assert in_names == {"nodes", "resolved"}
+        assert set(ANNOTATE_RELATIONSHIPS_DISABLED_PASSTHROUGH.values()) <= in_names
+
+    def test_dispatching_a_node_the_predicate_would_gate_off_raises(self):
+        """The predicate's other side. The handler REQUIRES a non-null llm: a
+        run with none never reaches it, so arriving with `llm` absent or None
+        means a caller dispatched a node the predicate would have gated off.
+        That is a caller defect and it raises rather than quietly annotating
+        nothing — the silent skip clause 2 forbids."""
+        from pydantic import ValidationError
+
+        from idiograph.domains.arxiv.relationship_annotation import (
+            annotate_relationships,
+        )
+
+        inputs = {"nodes": [], "resolved": []}
+        resources = {"anthropic_client": object()}
+
+        with pytest.raises(ValidationError):
+            asyncio.run(annotate_relationships({}, inputs, resources=resources))
+
+        with pytest.raises(ValidationError):
+            asyncio.run(
+                annotate_relationships({"llm": None}, inputs, resources=resources)
+            )
+
+
 class TestControlEdges:
     def test_config_skip_does_not_gate_a_control_dependent(self):
         """A CONTROL edge out of a disabled node does not gate its target:

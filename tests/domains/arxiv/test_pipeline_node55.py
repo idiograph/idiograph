@@ -30,6 +30,7 @@ from idiograph.domains.arxiv.registry import content_address
 from idiograph.domains.arxiv.relationship_annotation import (
     PROMPT_TEMPLATE,
     RelationshipAnnotation,
+    RelationshipAnnotationResult,
     Route,
     annotate_relationships,
     prompt_template_hash,
@@ -131,14 +132,25 @@ def _annotate(
     client: _FakeClient,
     *,
     config: LLMConfig | None = None,
-):
-    return asyncio.run(
+) -> RelationshipAnnotationResult:
+    """Drive the handler in its executor contract, then reassemble the result.
+
+    Node 5.5 is a converted stage: ``(params, inputs, *, resources)`` in, the
+    declared output ports out. The tests below are about the annotation
+    behaviour, not the marshalling, so this helper shapes the call the way the
+    executor would — one key per declared input port, the client through the
+    resource channel — and recomposes the two ports into the
+    ``RelationshipAnnotationResult`` every assertion already reads.
+    """
+    out = asyncio.run(
         annotate_relationships(
-            unified_nodes,
-            resolved,
-            config or _llm_config(),
-            anthropic_client=client,
+            {"llm": config or _llm_config()},
+            {"nodes": unified_nodes, "resolved": resolved},
+            resources={"anthropic_client": client},
         )
+    )
+    return RelationshipAnnotationResult(
+        nodes=out["nodes"], provenance=out["provenance"]
     )
 
 
