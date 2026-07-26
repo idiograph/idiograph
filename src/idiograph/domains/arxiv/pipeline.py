@@ -1956,17 +1956,23 @@ ARXIV_PIPELINE: Graph = Graph(
             id="fetch",
             type="FetchAbstract",
             params={"paper_id": ""},  # patched at runtime via CLI
+            resources=["http_client"],
         ),
         Node(
             id="claims",
             type="LLMCall",
             params={
                 "system": "You are a precise scientific analyst.",
+                # Output-determining, so declared on the node rather than
+                # hardcoded in the handler.
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 512,
                 "prompt_template": (
                     "List the key concrete claims from this abstract as bullet points.\n\n"
                     "Title: {title}\n\nAbstract: {abstract}"
                 ),
             },
+            resources=["anthropic_client"],
         ),
         Node(
             id="evaluate",
@@ -1981,11 +1987,16 @@ ARXIV_PIPELINE: Graph = Graph(
             type="LLMSummarize",
             params={
                 "system": "You are a technical research communicator.",
+                # Output-determining, so declared on the node rather than
+                # hardcoded in the handler.
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 512,
                 "prompt_template": (
                     "Write a 2-sentence technical summary of this paper for an AI engineer.\n\n"
                     "Title: {title}\n\nAbstract: {abstract}"
                 ),
             },
+            resources=["anthropic_client"],
         ),
     ],
     edges=[

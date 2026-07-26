@@ -35,6 +35,10 @@ class Node(BaseModel):
         default=None,
         description="Declared output ports for this node. Each name is a key the handler emits in its returned dict; declaring them lets a bound consumer read from_port off this node and lets validation check dataflow without reading handler source. None means undeclared. Empty list means the node produces no outputs."
     )
+    resources: list[str] | None = Field(
+        default=None,
+        description="Named run-supplied capabilities this node's handler requires — network clients, credentials, anything the run owns rather than the graph. The twin of input_ports and the same one-way ratchet, differing only in where the value comes from: ports pull from upstream nodes, resources pull from the run. Declaring them means the executor hands the handler a keyword-only resources mapping containing ONLY these names; a name the run did not supply raises UnsuppliedResourceError before any handler executes. None leaves the node in the legacy regime, where its handler is called with two positional arguments. Empty list is a declaration — the node declares and receives an empty mapping. Resource VALUES are supplied at execute time and never enter a content address."
+    )
 
 class Edge(BaseModel):
     source: str = Field(description="ID of the source node.")
