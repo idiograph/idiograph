@@ -1755,10 +1755,29 @@ async def run_traversal(
 
     # --- Node 5.5 insertion (spec-node5.5-semantic-relationship) ---
     # Build-time, miss-gated (this function runs only on a cache MISS): classify
-    # each non-seed paper's relationship to the seed set. LLM-free runs
-    # (parameters.llm is None) skip it entirely — a pure no-op, address unchanged.
+    # each non-seed paper's relationship to the seed set.
+    #
+    # The `parameters.llm is not None` test is the DIRECT-CALL MIRROR of the
+    # node's declared config predicate: the node declares
+    # ANNOTATE_RELATIONSHIPS_ENABLED_WHEN ("llm") and the executor tests the same
+    # param's truthiness before dispatch, so the two paths gate identically. An
+    # LLM-free run skips it entirely here exactly as the executor never
+    # dispatches it there — a pure no-op, address unchanged. Its disabled
+    # passthrough ({"nodes": "nodes"}) is what `unified_nodes` keeping its
+    # pre-annotation binding below already does by hand.
+    #
+    # Node 5.5 is BOUND and DECLARING: it declares
+    # ANNOTATE_RELATIONSHIPS_INPUT_PORTS, so the executor builds its `inputs`
+    # from the port-declared edges into it keyed by `to_port`, and it declares
+    # the anthropic_client resource, which the run supplies. Marshal this direct
+    # call into that same contract — one key per declared input port, the client
+    # through the resource channel — so the direct and executor-driven paths
+    # agree. The llm config keeps its home in PipelineParameters and is read here.
+    #
     # relationship_type is a leaf; the downstream stages below do not read it, so
-    # reassigning unified_nodes to the annotated copies is safe.
+    # reassigning unified_nodes to the annotated copies is safe. Only the `nodes`
+    # port is consumed — the `provenance` port is dropped here, as it always has
+    # been (a known stray: this function does not persist it).
     if parameters.llm is not None:
         if anthropic_client is None:
             raise ValueError(
@@ -1767,12 +1786,11 @@ async def run_traversal(
                 "(IDG-024 keyword-only injection)."
             )
         ann = await annotate_relationships(
-            unified_nodes,
-            resolved,
-            parameters.llm,
-            anthropic_client=anthropic_client,
+            {"llm": parameters.llm},
+            {"nodes": unified_nodes, "resolved": resolved},
+            resources={"anthropic_client": anthropic_client},
         )
-        unified_nodes = ann.nodes
+        unified_nodes = ann["nodes"]
     else:
         _log.debug("Node 5.5: skipped (llm config None)")
     # --- end Node 5.5 ---

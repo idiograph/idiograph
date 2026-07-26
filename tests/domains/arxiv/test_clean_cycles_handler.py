@@ -475,9 +475,12 @@ def test_run_traversal_witness_binds_to_nodes_port(
     monkeypatch.setattr(pipeline, "backward_traverse", AsyncMock(return_value=n3))
     monkeypatch.setattr(pipeline, "forward_traverse", AsyncMock(return_value=n4))
 
-    async def _annotate_dropping_a(nodes, _resolved, llm, *, anthropic_client):
-        return RelationshipAnnotationResult(
-            nodes=[n for n in nodes if n.node_id != "A"],
+    async def _annotate_dropping_a(params, inputs, *, resources):
+        """Stands in for the converted Node 5.5 handler, in its own contract:
+        `(params, inputs, *, resources)` in, the declared output ports out."""
+        llm = params["llm"]
+        result = RelationshipAnnotationResult(
+            nodes=[n for n in inputs["nodes"] if n.node_id != "A"],
             provenance=RelationshipProvenance(
                 model_id=llm.model_id,
                 prompt_template_hash=llm.prompt_template_hash,
@@ -485,6 +488,7 @@ def test_run_traversal_witness_binds_to_nodes_port(
                 max_tokens=llm.max_tokens,
             ),
         )
+        return {"nodes": result.nodes, "provenance": result.provenance}
 
     monkeypatch.setattr(
         pipeline, "annotate_relationships", _annotate_dropping_a

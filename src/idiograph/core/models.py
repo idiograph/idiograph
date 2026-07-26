@@ -39,6 +39,14 @@ class Node(BaseModel):
         default=None,
         description="Named run-supplied capabilities this node's handler requires — network clients, credentials, anything the run owns rather than the graph. The twin of input_ports and the same one-way ratchet, differing only in where the value comes from: ports pull from upstream nodes, resources pull from the run. Declaring them means the executor hands the handler a keyword-only resources mapping containing ONLY these names; a name the run did not supply raises UnsuppliedResourceError before any handler executes. None leaves the node in the legacy regime, where its handler is called with two positional arguments. Empty list is a declaration — the node declares and receives an empty mapping. Resource VALUES are supplied at execute time and never enter a content address."
     )
+    enabled_when: str | None = Field(
+        default=None,
+        description="Names one of this node's own params; the executor tests that param's truthiness before dispatch and does not run the node when it is falsy. A param NAME, deliberately not an expression language — there is no DSL, no operators, no structured predicate object, until a second predicate shape actually appears and demands one. The gate is configuration: it lives in params, so it enters the content address and the address never claims bytes a disabled node did not produce. Truthiness is ordinary Python truthiness of params.get(name): an ABSENT key is None and therefore disabled, and so are 0, '', [], {} and False — the same reading a plain `if node.params[name]` would give, chosen so the field needs no lookup table to predict. Disabled nodes are the third instance of the declare-on-the-node fence, after input_ports and resources. None is the legacy regime — the node always runs, exactly as before this field existed. A disabled node is never dispatched, so it never asks for its declared resources; its Node.status stays PENDING (it never enters the PENDING → RUNNING ladder), and the whole record of the decision lives in the results dict as status SKIPPED with skip_reason 'disabled_by_config'."
+    )
+    disabled_passthrough: dict[str, str] | None = Field(
+        default=None,
+        description="Output-port-to-input-port mapping applied when enabled_when disables this node: for each entry the executor forwards results[out_port] = inputs[in_port], so downstream wiring stays bound and a config-skip does not cascade. This is the disable semantics of every node-graph tool — a disabled comp node passes B through. Inputs not named in the mapping are simply not forwarded. None means the disabled node emits no ports at all: a consumer bound to one then fails with PortBindingError, which is explicit and deliberate, never a silent None. Only consulted when the node is disabled; an enabled node emits whatever its handler returns."
+    )
 
 class Edge(BaseModel):
     source: str = Field(description="ID of the source node.")

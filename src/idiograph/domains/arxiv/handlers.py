@@ -114,6 +114,11 @@ def register_arxiv_handlers() -> None:
         compute_depth_metrics,
         compute_pagerank,
     )
+    # Node 5.5 lives in its own module rather than pipeline.py — it is the one
+    # traversal stage with a model call in it — but registers the same way.
+    from idiograph.domains.arxiv.relationship_annotation import (
+        annotate_relationships,
+    )
     register_handler("FetchAbstract",  fetch_abstract)
     register_handler("LLMCall",        llm_call)
     register_handler("Evaluator",      evaluator)
@@ -124,3 +129,4 @@ def register_arxiv_handlers() -> None:
     register_handler("ComputePagerank", compute_pagerank)
     register_handler("ComputeCoCitations", compute_co_citations)
     register_handler("ComputeDepthMetrics", compute_depth_metrics)
+    register_handler("AnnotateRelationships", annotate_relationships)

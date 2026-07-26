@@ -82,6 +82,14 @@ async def execute_graph(
     having run a handler becomes graph state instead: a raising handler, or an
     input binding that only fails once the upstream payload exists, becomes
     `{"status": "FAILED", ...}` and cascades to SKIPPED downstream.
+
+    A node declaring `enabled_when` is neither: it is not a defect at all. The
+    predicate is read before dispatch, and a node configured off is recorded as
+    `{"status": "SKIPPED", "skip_reason": "disabled_by_config", ...}` while
+    staying in the declared graph — an honest self-portrait rather than an
+    absence. Because it never ran, its `Node.status` stays PENDING, it never
+    asks for its declared resources, and it does NOT cascade: it forwards its
+    `disabled_passthrough` ports and the downstream tail runs on.
     """
     cycles = find_cycles(graph)
     if cycles:
@@ -102,6 +110,13 @@ async def execute_graph(
         skip = False
         for edge in upstream_edges:
             upstream_result = results.get(edge.source, {})
+            if upstream_result.get("skip_reason") == DISABLED_BY_CONFIG:
+                # Config-skip does not cascade. The upstream node is SKIPPED but
+                # it is a declared node that was configured off, not one that
+                # could not run: it forwarded its declared passthrough ports and
+                # this node reads them like any other. Without this exemption the
+                # whole tail dies behind a disabled node.
+                continue
             if upstream_result.get("status") in ("FAILED", "SKIPPED"):
                 if edge.type == "CONTROL":
                     _log.warning(
@@ -133,9 +148,83 @@ async def execute_graph(
             }
             continue
 
+        if _is_disabled_by_config(node):
+            # Before dispatch is ever considered — the node is not run, so it
+            # never asks for its resources and never enters the PENDING →
+            # RUNNING ladder. `Node.status` is therefore left exactly as it was:
+            # a config-disabled node stays PENDING. The whole record of the
+            # decision lives here in the results dict, distinguished from an
+            # upstream-cascade skip by `skip_reason`, so the viewer can render a
+            # declared node that was configured off. Inputs were collected above
+            # because a disabled node must still forward them.
+            _log.info(
+                "Node '%s' disabled by config — param '%s' is falsy.",
+                node_id, node.enabled_when,
+            )
+            results[node_id] = {
+                **_forwarded_ports(node, inputs),
+                "status": "SKIPPED",
+                "node_id": node_id,
+                "skip_reason": DISABLED_BY_CONFIG,
+                "disabled_by": node.enabled_when,
+            }
+            continue
+
         results[node_id] = await _execute_node(node, inputs, supplied)
 
     return results
+
+
+#: The `skip_reason` a config-disabled node's result carries. Contract surface:
+#: the cascade exemption below reads it, and so does the viewer, which renders a
+#: declared node that was configured off rather than a node that failed.
+DISABLED_BY_CONFIG = "disabled_by_config"
+
+
+def _is_disabled_by_config(node: Node) -> bool:
+    """Whether `node`'s declared config predicate gates it off for this run.
+
+    The third instance of the declare-on-the-node fence, after `input_ports`
+    (`_is_bound`) and `resources` (`_declares_resources`), and read the same
+    way: the node declares, the executor obeys. `enabled_when` names one of the
+    node's own params — a NAME, not an expression language — and this returns
+    True when that param is falsy.
+
+    Truthiness is ordinary Python truthiness of `params.get(name)`, so an absent
+    key is None and therefore disabled, alongside 0, '', [], {} and False. The
+    gate is configuration and lives in params, so it enters the content address:
+    a disabled node's address already says the bytes it did not produce are not
+    there.
+
+    `enabled_when is None` is the legacy regime — the node always runs.
+    """
+    if node.enabled_when is None:
+        return False
+    return not node.params.get(node.enabled_when)
+
+
+def _forwarded_ports(node: Node, inputs: dict[str, Any]) -> dict[str, Any]:
+    """Build the ports a disabled node passes through, per `disabled_passthrough`.
+
+    Config-skip does not cascade: a disabled node stays in the declared graph
+    and forwards inputs onto its own output ports, so downstream wiring is
+    untouched and one-edge-per-port still holds. This is the disable semantics
+    of every node-graph tool — a disabled comp node passes B through.
+
+    Absences are silent here and loud downstream, deliberately. A node with no
+    mapping forwards nothing, and a mapping naming an input this run did not
+    bind forwards nothing for that entry; either way the output port is simply
+    not emitted, and a consumer bound to it fails with `PortBindingError` at its
+    own binding step. The error names the real problem — this port was never
+    emitted — rather than a None quietly flowing on.
+    """
+    if node.disabled_passthrough is None:
+        return {}
+    return {
+        out_port: inputs[in_port]
+        for out_port, in_port in node.disabled_passthrough.items()
+        if in_port in inputs
+    }
 
 
 def _declares_resources(node: Node) -> bool:
@@ -164,8 +253,17 @@ def _check_resource_supply(graph: Graph, supplied: Mapping[str, Any]) -> None:
 
     This cannot live in `validate_graph`/`validate_integrity`: those read the
     graph, and supply is a fact about the run.
+
+    The config predicate is evaluated FIRST, here as in the loop. A node
+    configured off is never dispatched, so it never asks for its resource and a
+    run that disables it needs no supply for it. The raise/skip tension
+    dissolves by sequencing rather than by exception: what survives is the case
+    that matters — configured ON with nothing supplied still raises, without a
+    single exemption, because that address claims bytes the run cannot produce.
     """
     for node in graph.nodes:
+        if _is_disabled_by_config(node):
+            continue
         if not _declares_resources(node):
             continue
         missing = [name for name in node.resources if name not in supplied]
