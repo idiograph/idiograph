@@ -1,6 +1,7 @@
 # Copyright 2026 Ryan Smith
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import logging
 
 import pytest
@@ -16,6 +17,16 @@ from idiograph.domains.arxiv.pipeline import (
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
+
+
+def _clean(nodes: list[PaperRecord], edges: list[CitationEdge]) -> dict:
+    """Call the bound ``clean_cycles`` handler from a sync test.
+
+    Marshals into the stage's declared contract — one key per declared input
+    port, empty ``params`` — and returns the declared output ports.
+    `asyncio.run` is the repo's async-from-sync convention (no async plugin).
+    """
+    return asyncio.run(clean_cycles({}, {"nodes": nodes, "cites": edges}))
 
 
 def _rec(node_id: str) -> PaperRecord:
@@ -207,10 +218,14 @@ def test_deterministic_same_input() -> None:
 
 
 def test_suppressed_originals_merge() -> None:
-    """Merge pattern (cleaned + [s.original ...]) produces correct input."""
+    """The `all_cites` port produces correct Node 7 input.
+
+    The cleaned ∪ suppressed-originals merge is no longer reproduced here: it is
+    a declared output port of the cycle-cleaning stage, so this test reads the
+    same edge set the pipeline orchestrator now reads — the full citation
+    topology — off the returned mapping.
+    """
     # Build a small graph with a 2-cycle so clean_cycles suppresses one edge.
-    # Then assemble the Node 7 input the same way the pipeline orchestrator
-    # will: cleaned ∪ suppressed originals — i.e. the full citation topology.
     nodes = [_rec(x) for x in ("A", "B", "C", "D")]
     raw_edges = [
         _edge("A", "B"),
@@ -219,12 +234,11 @@ def test_suppressed_originals_merge() -> None:
         _edge("C", "D"),
     ]
 
-    cycle_result = clean_cycles(nodes, raw_edges)
-    assert cycle_result.cycle_log.suppressed_edges  # precondition: a cycle was suppressed
+    cycle_result = _clean(nodes, raw_edges)
+    # precondition: a cycle was suppressed
+    assert cycle_result["cycle_log"].suppressed_edges
 
-    all_cites = cycle_result.cleaned_edges + [
-        s.original for s in cycle_result.cycle_log.suppressed_edges
-    ]
+    all_cites = cycle_result["all_cites"]
     assert len(all_cites) == len(raw_edges)  # nothing dropped by the merge
 
     result = detect_communities(nodes, all_cites)

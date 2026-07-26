@@ -63,6 +63,19 @@ def _get_api_key() -> str:
     return key
 
 
+def _untyped_port(name: str) -> PortDeclaration:
+    """Declare a port by name alone.
+
+    Ports are untyped at this stage: ``Graph.type_registry`` is unbuilt and
+    nothing validates ``port_type``, so it carries a fixed inert marker rather
+    than implying a contract no one enforces.
+
+    Shared by every port-declaring stage in this module, which is why it lives
+    in the preamble rather than beside any one of them.
+    """
+    return PortDeclaration(name=name, port_type="untyped")
+
+
 def reconstruct_abstract(inverted_index: dict | None) -> str | None:
     """Reconstruct plain-text abstract from OpenAlex's inverted-index format.
 
@@ -638,17 +651,88 @@ async def forward_traverse(
 # ── Node 4.5 — Cycle Cleaning ───────────────────────────────────────────────
 
 
-def clean_cycles(
-    nodes: list[PaperRecord],
-    edges: list[CitationEdge],
-) -> CycleCleanResult:
-    """Detect and resolve cycles in the citation graph via weakest-link suppression.
+#: Port declarations for the ``CleanCycles`` node. These are the contract:
+#: a graph wiring this node declares them on the ``Node``, and ``validate_integrity``
+#: checks the edges against them without reading this handler's source.
+#:
+#: The input port names are deliberately name-identical to ``AssembleGraph``'s
+#: output ports, so a wiring reads ``assemble.nodes -> clean.nodes`` and
+#: ``assemble.cites -> clean.cites``.
+CLEAN_CYCLES_INPUT_PORTS: list[PortDeclaration] = [
+    _untyped_port("nodes"),
+    _untyped_port("cites"),
+]
 
-    Pure function — no I/O, no network, no mutation of inputs. See
+#: ``cleaned_edges`` and ``cycle_log`` are the two ``CycleCleanResult`` payload
+#: fields; ``all_cites`` is the cleaned-plus-suppressed edge view that Node 5 and
+#: Node 7 consume. The witness (``input_node_ids``) is NOT a port — it is
+#: structural metadata reconstructed from the bound node set by each consumer.
+CLEAN_CYCLES_OUTPUT_PORTS: list[PortDeclaration] = [
+    _untyped_port("cleaned_edges"),
+    _untyped_port("cycle_log"),
+    _untyped_port("all_cites"),
+]
+
+
+class _CleanCyclesInputs(BaseModel):
+    """Declared input contract for the ``CleanCycles`` handler.
+
+    One field per declared input port (``CLEAN_CYCLES_INPUT_PORTS``): the
+    assembled node set and the raw (possibly cyclic) citation edges. The
+    executor binds each port-declared incoming edge as ``inputs[to_port]``, so
+    the ``inputs`` mapping validates directly against this model.
+    """
+
+    nodes: list[PaperRecord]
+    cites: list[CitationEdge]
+
+
+async def clean_cycles(params: dict, inputs: dict) -> dict:
+    """Executor node handler (type ``CleanCycles``) — detect and resolve cycles in
+    the citation graph via weakest-link suppression.
+
+    Contract (``core/executor.py`` handler convention):
+      ``params``  — UNUSED. This stage takes no configuration; the weakest-link
+                    tiebreaker is fixed and the iteration cap derives from
+                    ``len(edges)``. Nothing is read off ``params`` and no
+                    parameters model exists for it.
+      ``inputs``  — BOUND. The node declares ``CLEAN_CYCLES_INPUT_PORTS``, so the
+                    executor builds ``inputs`` solely from the port-declared
+                    edges into it, keyed by ``to_port``: ``{"nodes": [...],
+                    "cites": [...]}``, validated as ``_CleanCyclesInputs``.
+                    Undeclared keys are ignored. A caller invoking the handler
+                    directly shapes ``inputs`` the same way, so the direct and
+                    executor-driven paths share one contract.
+      returns     — ``{"cleaned_edges": [...], "cycle_log": CycleLog,
+                    "all_cites": [...]}`` — the declared output ports
+                    (``CLEAN_CYCLES_OUTPUT_PORTS``).
+
+    A ``CycleCleanResult`` is CONSTRUCTED internally before the return mapping is
+    built, so its ``_validate_edge_endpoints`` witness check still fires on every
+    call — it is the pipeline's only orphan check, and Nodes 5-8 trust it and run
+    no defensive checks of their own. The ports are then decomposed off that
+    validated result rather than assembled from bare lists.
+
+    The witness itself is not returned: it is ``exclude=True`` structural
+    metadata, and every consumer that needs a ``CycleCleanResult`` back
+    reconstructs it from the node set it bound to the ``nodes`` port.
+
+    ``all_cites`` is cleaned edges followed by the suppressed originals, in that
+    order. Node 5 (co-citation) and Node 7 (communities) keep real-but-suppressed
+    citations for co-occurrence and clustering, while depth and pagerank take
+    ``cleaned_edges`` alone because they need the acyclic graph. The split is
+    deliberate. Both consumers are seeded but iteration-order-sensitive, so this
+    concatenation order is load-bearing and must not be tidied.
+
+    Pure — no I/O, no network, no mutation of inputs. See
     docs/specs/spec-node4.5-cycle-cleaning.md for the full contract, including
     the ordering of the weakest-link tiebreaker and the handling of missing-node
     citation lookups.
     """
+    data = _CleanCyclesInputs.model_validate(inputs)
+    nodes = data.nodes
+    edges = data.cites
+
     _log.info(
         "Node 4.5: cycle cleaning on %d nodes, %d edges", len(nodes), len(edges)
     )
@@ -748,7 +832,10 @@ def clean_cycles(
         len(affected),
     )
 
-    return CycleCleanResult(
+    # Constructed, not skipped: this is where the witness validator fires. The
+    # ports below are decomposed off the validated result, so no return path
+    # bypasses the pipeline's only orphan check.
+    result = CycleCleanResult(
         cleaned_edges=cleaned_edges,
         cycle_log=CycleLog(
             suppressed_edges=suppressed,
@@ -757,6 +844,15 @@ def clean_cycles(
         ),
         input_node_ids=frozenset(n.node_id for n in nodes),
     )
+
+    return {
+        "cleaned_edges": result.cleaned_edges,
+        "cycle_log": result.cycle_log,
+        # Cleaned edges first, then the suppressed originals appended — order is
+        # load-bearing for the seeded-but-order-sensitive Node 5/7 consumers.
+        "all_cites": result.cleaned_edges
+        + [s.original for s in result.cycle_log.suppressed_edges],
+    }
 
 
 # ── Node 5 — Co-Citation ────────────────────────────────────────────────────
@@ -951,16 +1047,6 @@ def compute_depth_metrics(
     )
 
     return result
-
-
-def _untyped_port(name: str) -> PortDeclaration:
-    """Declare a port by name alone.
-
-    Ports are untyped at this stage: ``Graph.type_registry`` is unbuilt and
-    nothing validates ``port_type``, so it carries a fixed inert marker rather
-    than implying a contract no one enforces.
-    """
-    return PortDeclaration(name=name, port_type="untyped")
 
 
 #: Port declarations for the ``ComputePagerank`` node. These are the contract:
@@ -1499,13 +1585,26 @@ async def run_traversal(
 
     # 4. Whole-graph stages (exceptions propagate; orchestrator does not catch).
     _log.info("Pipeline: starting cycle cleaning")
-    cycle = clean_cycles(unified_nodes, unified_cites)
+    # The cycle-cleaning stage is BOUND: it declares CLEAN_CYCLES_INPUT_PORTS, so
+    # the executor builds its `inputs` from the port-declared edges into it, keyed
+    # by `to_port`. Marshal this direct call into that same contract — one key per
+    # declared input port — so the direct and executor-driven paths agree. It takes
+    # no configuration, so `params` is empty.
+    #
+    # The bound mapping is held in a local because the `nodes` port binding is
+    # also what the result-assembly witness is built from (see step 7). Node 5.5
+    # below rebinds `unified_nodes` to annotated copies, so the witness must come
+    # from what was bound HERE, not from that free variable later.
+    clean_inputs = {"nodes": unified_nodes, "cites": unified_cites}
+    cleaned = await clean_cycles({}, clean_inputs)
     # all_cites (cleaned + suppressed) -> co-citation + communities: co-occurrence
     # and clustering keep real-but-suppressed citations. depth + pagerank ->
     # cleaned_edges only (they need the acyclic graph). The split is deliberate.
-    all_cites = cycle.cleaned_edges + [
-        s.original for s in cycle.cycle_log.suppressed_edges
-    ]
+    # The concatenation itself now lives in the handler and arrives on its own
+    # declared port.
+    cleaned_edges = cleaned["cleaned_edges"]
+    cycle_log = cleaned["cycle_log"]
+    all_cites = cleaned["all_cites"]
     _log.info("Pipeline: cycle cleaning complete")
 
     _log.info("Pipeline: starting co-citation")
@@ -1542,7 +1641,7 @@ async def run_traversal(
     # --- end Node 5.5 ---
 
     _log.info("Pipeline: starting depth metrics")
-    depth = compute_depth_metrics(unified_nodes, cycle.cleaned_edges)
+    depth = compute_depth_metrics(unified_nodes, cleaned_edges)
     _log.info("Pipeline: depth metrics complete")
 
     _log.info("Pipeline: starting pagerank")
@@ -1558,7 +1657,7 @@ async def run_traversal(
             {"damping": parameters.pagerank.damping},
             {
                 "nodes": unified_nodes,
-                "cleaned_edges": cycle.cleaned_edges,
+                "cleaned_edges": cleaned_edges,
             },
         )
     )["pagerank"]
@@ -1592,18 +1691,32 @@ async def run_traversal(
     ]
 
     # 6. Merged edge view. Suppressed originals are NOT in `edges` — they live in
-    #    cycle.cycle_log.suppressed_edges for audit.
-    merged_edges = cycle.cleaned_edges + co.edges
+    #    cycle_log.suppressed_edges for audit.
+    merged_edges = cleaned_edges + co.edges
 
     # 7. Construct and return. ``seed_failures`` is request-derived (a function
     #    of the requested seed set, not the resolved set that keys the cache);
     #    the composition layer re-supplies it from the current resolve output,
     #    so it is left empty here (see run_arxiv_pipeline / cache re-supply).
+    #
+    #    ``cycle_clean`` is reassembled from the ports the bound stage returned.
+    #    The witness is NOT a port (it is exclude=True structural metadata), so
+    #    it is rebuilt here from the node set bound to the `nodes` port — the
+    #    `clean_inputs` binding above, deliberately not the `unified_nodes` free
+    #    variable, which Node 5.5 may since have rebound to annotated copies.
+    #    Re-running the validator on the same edges and the same node set it
+    #    already passed inside the handler is a no-op by construction.
+    cycle_clean = CycleCleanResult(
+        cleaned_edges=cleaned_edges,
+        cycle_log=cycle_log,
+        input_node_ids=frozenset(n.node_id for n in clean_inputs["nodes"]),
+    )
+
     result = PipelineResult(
         nodes=enriched_nodes,
         edges=merged_edges,
         seeds=[s.node_id for s in resolved],
-        cycle_clean=cycle,
+        cycle_clean=cycle_clean,
         co_citation_edges=co.edges,
         co_citation_warnings=co.warnings,
         depth_metrics=depth,
