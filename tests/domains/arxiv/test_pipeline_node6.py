@@ -1,6 +1,8 @@
 # Copyright 2026 Ryan Smith
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
+
 import pytest
 
 from idiograph.domains.arxiv.models import (
@@ -15,6 +17,16 @@ from idiograph.domains.arxiv.pipeline import (
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
+
+
+def _clean(nodes: list[PaperRecord], edges: list[CitationEdge]) -> dict:
+    """Call the bound ``clean_cycles`` handler from a sync test.
+
+    Marshals into the stage's declared contract — one key per declared input
+    port, empty ``params`` — and returns the declared output ports.
+    `asyncio.run` is the repo's async-from-sync convention (no async plugin).
+    """
+    return asyncio.run(clean_cycles({}, {"nodes": nodes, "cites": edges}))
 
 
 def _rec(
@@ -208,11 +220,11 @@ def test_suppressed_cycle_node_normal_values() -> None:
     nodes = [_rec("S"), _rec("A", root_ids=["S"])]
     edges = [_edge("S", "A"), _edge("A", "S")]
 
-    result = clean_cycles(nodes, edges)
+    result = _clean(nodes, edges)
 
-    assert result.cycle_log.affected_node_ids == {"S", "A"}
+    assert result["cycle_log"].affected_node_ids == {"S", "A"}
 
-    metrics = compute_depth_metrics(nodes, result.cleaned_edges)
+    metrics = compute_depth_metrics(nodes, result["cleaned_edges"])
 
     # Both endpoints carry normal, non-empty metrics.
     assert metrics["S"].traversal_direction == "seed"

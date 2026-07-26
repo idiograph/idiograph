@@ -1,6 +1,7 @@
 # Copyright 2026 Ryan Smith
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import logging
 
 import networkx as nx
@@ -17,6 +18,36 @@ from idiograph.domains.arxiv.pipeline import clean_cycles
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
+
+
+def _clean(nodes: list[PaperRecord], edges: list[CitationEdge]) -> dict:
+    """Call the bound ``clean_cycles`` handler from a sync test.
+
+    The stage is now an async port-bound handler, so these cycle-cleaning tests
+    marshal into its declared contract — one key per declared input port, empty
+    ``params`` — and read the declared ports (``cleaned_edges``, ``cycle_log``,
+    ``all_cites``) off the returned mapping. `asyncio.run` is the repo's
+    async-from-sync convention (no async plugin).
+    """
+    return asyncio.run(clean_cycles({}, {"nodes": nodes, "cites": edges}))
+
+
+def _clean_result(
+    nodes: list[PaperRecord], edges: list[CitationEdge]
+) -> CycleCleanResult:
+    """Reassemble a ``CycleCleanResult`` from the handler's declared ports.
+
+    Mirrors what ``run_traversal`` does at result-assembly time: the witness is
+    not a port, so it is rebuilt from the node set bound to the ``nodes`` port.
+    Used by the tests that assert on the model contract rather than on the
+    cleaning semantics.
+    """
+    out = _clean(nodes, edges)
+    return CycleCleanResult(
+        cleaned_edges=out["cleaned_edges"],
+        cycle_log=out["cycle_log"],
+        input_node_ids=frozenset(n.node_id for n in nodes),
+    )
 
 
 def _rec(node_id: str, citation_count: int = 0, hop_depth: int = 1) -> PaperRecord:
@@ -46,13 +77,16 @@ def test_acyclic_passthrough() -> None:
     nodes = [_rec("A", 5), _rec("B", 5), _rec("C", 5)]
     edges = [_edge("A", "B"), _edge("B", "C")]
 
-    result = clean_cycles(nodes, edges)
+    result = _clean(nodes, edges)
 
-    assert isinstance(result, CycleCleanResult)
-    assert _pairs(result.cleaned_edges) == _pairs(edges)
-    assert result.cycle_log.suppressed_edges == []
-    assert result.cycle_log.iterations == 0
-    assert result.cycle_log.cycles_detected_count == 0
+    # The handler returns exactly its declared output ports.
+    assert set(result) == {"cleaned_edges", "cycle_log", "all_cites"}
+    assert _pairs(result["cleaned_edges"]) == _pairs(edges)
+    assert result["cycle_log"].suppressed_edges == []
+    assert result["cycle_log"].iterations == 0
+    assert result["cycle_log"].cycles_detected_count == 0
+    # Nothing suppressed → all_cites is exactly the cleaned set.
+    assert _pairs(result["all_cites"]) == _pairs(edges)
 
 
 def test_two_cycle_simple() -> None:
@@ -61,17 +95,15 @@ def test_two_cycle_simple() -> None:
     nodes = [_rec("A", 10), _rec("B", 10)]
     edges = [_edge("A", "B"), _edge("B", "A")]
 
-    result = clean_cycles(nodes, edges)
+    result = _clean(nodes, edges)
 
-    assert len(result.cycle_log.suppressed_edges) == 1
-    s = result.cycle_log.suppressed_edges[0]
+    assert len(result["cycle_log"].suppressed_edges) == 1
+    s = result["cycle_log"].suppressed_edges[0]
     assert (s.original.source_id, s.original.target_id) == ("A", "B")
     assert set(s.cycle_members) == {"A", "B"}
-    assert len(result.cleaned_edges) == 1
-    assert (result.cleaned_edges[0].source_id, result.cleaned_edges[0].target_id) == (
-        "B",
-        "A",
-    )
+    cleaned = result["cleaned_edges"]
+    assert len(cleaned) == 1
+    assert (cleaned[0].source_id, cleaned[0].target_id) == ("B", "A")
 
 
 def test_three_cycle() -> None:
@@ -79,11 +111,15 @@ def test_three_cycle() -> None:
     nodes = [_rec("A", 10), _rec("B", 10), _rec("C", 10)]
     edges = [_edge("A", "B"), _edge("B", "C"), _edge("C", "A")]
 
-    result = clean_cycles(nodes, edges)
+    result = _clean(nodes, edges)
 
-    assert len(result.cycle_log.suppressed_edges) == 1
-    assert set(result.cycle_log.suppressed_edges[0].cycle_members) == {"A", "B", "C"}
-    assert len(result.cleaned_edges) == 2
+    assert len(result["cycle_log"].suppressed_edges) == 1
+    assert set(result["cycle_log"].suppressed_edges[0].cycle_members) == {
+        "A",
+        "B",
+        "C",
+    }
+    assert len(result["cleaned_edges"]) == 2
 
 
 def test_weakest_link_selected() -> None:
@@ -92,10 +128,10 @@ def test_weakest_link_selected() -> None:
     nodes = [_rec("A", 10), _rec("B", 5), _rec("C", 1)]
     edges = [_edge("A", "B"), _edge("B", "C"), _edge("C", "A")]
 
-    result = clean_cycles(nodes, edges)
+    result = _clean(nodes, edges)
 
-    assert len(result.cycle_log.suppressed_edges) == 1
-    s = result.cycle_log.suppressed_edges[0]
+    assert len(result["cycle_log"].suppressed_edges) == 1
+    s = result["cycle_log"].suppressed_edges[0]
     assert (s.original.source_id, s.original.target_id) == ("B", "C")
     assert s.citation_sum == 6
 
@@ -105,9 +141,9 @@ def test_lex_tiebreaker() -> None:
     nodes = [_rec("A", 5), _rec("B", 5), _rec("C", 5)]
     edges = [_edge("A", "B"), _edge("B", "C"), _edge("C", "A")]
 
-    result = clean_cycles(nodes, edges)
+    result = _clean(nodes, edges)
 
-    s = result.cycle_log.suppressed_edges[0]
+    s = result["cycle_log"].suppressed_edges[0]
     assert (s.original.source_id, s.original.target_id) == ("A", "B")
 
 
@@ -121,17 +157,17 @@ def test_two_disjoint_cycles() -> None:
         _edge("D", "C"),
     ]
 
-    result = clean_cycles(nodes, edges)
+    result = _clean(nodes, edges)
 
-    assert result.cycle_log.iterations == 2
-    assert result.cycle_log.cycles_detected_count == 2
-    assert len(result.cycle_log.suppressed_edges) == 2
-    assert len(result.cleaned_edges) == 2
+    assert result["cycle_log"].iterations == 2
+    assert result["cycle_log"].cycles_detected_count == 2
+    assert len(result["cycle_log"].suppressed_edges) == 2
+    assert len(result["cleaned_edges"]) == 2
 
     G = nx.DiGraph()
     for n in nodes:
         G.add_node(n.node_id)
-    for e in result.cleaned_edges:
+    for e in result["cleaned_edges"]:
         G.add_edge(e.source_id, e.target_id)
     assert nx.is_directed_acyclic_graph(G)
 
@@ -150,16 +186,16 @@ def test_nested_cycles() -> None:
         _edge("C", "B"),
     ]
 
-    result = clean_cycles(nodes, edges)
+    result = _clean(nodes, edges)
 
-    assert result.cycle_log.cycles_detected_count >= len(
-        result.cycle_log.suppressed_edges
+    assert result["cycle_log"].cycles_detected_count >= len(
+        result["cycle_log"].suppressed_edges
     )
 
     G = nx.DiGraph()
     for n in nodes:
         G.add_node(n.node_id)
-    for e in result.cleaned_edges:
+    for e in result["cleaned_edges"]:
         G.add_edge(e.source_id, e.target_id)
     assert nx.is_directed_acyclic_graph(G)
 
@@ -169,13 +205,13 @@ def test_self_loop() -> None:
     nodes = [_rec("A", 5)]
     edges = [_edge("A", "A")]
 
-    result = clean_cycles(nodes, edges)
+    result = _clean(nodes, edges)
 
-    assert len(result.cycle_log.suppressed_edges) == 1
-    s = result.cycle_log.suppressed_edges[0]
+    assert len(result["cycle_log"].suppressed_edges) == 1
+    s = result["cycle_log"].suppressed_edges[0]
     assert s.cycle_members == ["A"]
     assert s.citation_sum == 10
-    assert result.cleaned_edges == []
+    assert result["cleaned_edges"] == []
 
 
 def test_affected_node_ids_property() -> None:
@@ -188,9 +224,9 @@ def test_affected_node_ids_property() -> None:
         _edge("D", "C"),
     ]
 
-    result = clean_cycles(nodes, edges)
+    result = _clean(nodes, edges)
 
-    assert result.cycle_log.affected_node_ids == {"A", "B", "C", "D"}
+    assert result["cycle_log"].affected_node_ids == {"A", "B", "C", "D"}
 
 
 def test_missing_citation_node_raises(caplog: pytest.LogCaptureFixture) -> None:
@@ -203,6 +239,11 @@ def test_missing_citation_node_raises(caplog: pytest.LogCaptureFixture) -> None:
     not in the input node set. See spec-node4.5-cycle-cleaning.md §Contracts
     "Missing node in citation lookup — supersedes the prior graceful-
     degradation contract".
+
+    Load-bearing under the port-decomposed return: the handler constructs a
+    CycleCleanResult internally and decomposes it onto its output ports, so the
+    witness validator still fires. A handler that assembled the ports from bare
+    lists would return successfully here instead of raising.
     """
     # Node "C" is referenced by edges but not in nodes.
     nodes = [_rec("A", 10), _rec("B", 10)]
@@ -210,7 +251,7 @@ def test_missing_citation_node_raises(caplog: pytest.LogCaptureFixture) -> None:
 
     with caplog.at_level(logging.WARNING, logger="idiograph.arxiv.pipeline"):
         with pytest.raises(ValidationError) as exc_info:
-            clean_cycles(nodes, edges)
+            _clean(nodes, edges)
 
     # Citation-count WARNING still fires before the construction-time raise.
     warnings = [r for r in caplog.records if r.levelname == "WARNING"]
@@ -227,9 +268,9 @@ def test_preserves_input_edge_order() -> None:
     nodes = [_rec("A", 10), _rec("B", 10), _rec("C", 10)]
     edges = [_edge("C", "B"), _edge("A", "B"), _edge("B", "A")]
 
-    result = clean_cycles(nodes, edges)
+    result = _clean(nodes, edges)
 
-    assert _pairs(result.cleaned_edges) == [("C", "B"), ("B", "A")]
+    assert _pairs(result["cleaned_edges"]) == [("C", "B"), ("B", "A")]
 
 
 def test_input_not_mutated() -> None:
@@ -240,7 +281,7 @@ def test_input_not_mutated() -> None:
     nodes_snapshot = list(nodes)
     edges_snapshot = list(edges)
 
-    clean_cycles(nodes, edges)
+    _clean(nodes, edges)
 
     assert nodes == nodes_snapshot
     assert edges == edges_snapshot
@@ -251,11 +292,12 @@ def test_input_not_mutated() -> None:
 
 
 def test_validator_passes_on_clean_cycles_output() -> None:
-    """Happy path: results produced by clean_cycles() always satisfy the validator."""
+    """Happy path: ports produced by clean_cycles() always reassemble into a
+    valid CycleCleanResult against the node set bound to the `nodes` port."""
     nodes = [_rec("A", 10), _rec("B", 10), _rec("C", 10)]
     edges = [_edge("A", "B"), _edge("B", "C"), _edge("C", "A")]
 
-    result = clean_cycles(nodes, edges)
+    result = _clean_result(nodes, edges)
 
     assert result.input_node_ids == frozenset({"A", "B", "C"})
     for e in result.cleaned_edges:
@@ -308,7 +350,7 @@ def test_model_dump_omits_witness() -> None:
     nodes = [_rec("A", 5), _rec("B", 5)]
     edges = [_edge("A", "B")]
 
-    result = clean_cycles(nodes, edges)
+    result = _clean_result(nodes, edges)
     dumped = result.model_dump()
 
     assert "input_node_ids" not in dumped
@@ -328,7 +370,7 @@ def test_serialization_round_trip_requires_witness() -> None:
     nodes = [_rec("A", 5), _rec("B", 5)]
     edges = [_edge("A", "B")]
 
-    result = clean_cycles(nodes, edges)
+    result = _clean_result(nodes, edges)
     dumped = result.model_dump()
 
     with pytest.raises(ValidationError) as exc_info:
@@ -336,12 +378,88 @@ def test_serialization_round_trip_requires_witness() -> None:
     assert "input_node_ids" in str(exc_info.value)
 
 
-def test_clean_cycles_populates_witness() -> None:
-    """clean_cycles() builds input_node_ids from its nodes parameter."""
+def test_witness_rebuilt_from_bound_nodes_port() -> None:
+    """The witness is reconstructed from the node set bound to the `nodes` port.
+
+    It is not a declared output port (it is exclude=True structural metadata),
+    so it never appears on the returned mapping; consumers rebuild it from what
+    they bound, which is exactly what `run_traversal` does at result assembly.
+    """
     nodes = [_rec("A", 5), _rec("B", 5), _rec("C", 5), _rec("D", 5)]
     edges = [_edge("A", "B"), _edge("C", "D")]
 
-    result = clean_cycles(nodes, edges)
+    ports = _clean(nodes, edges)
+    assert "input_node_ids" not in ports
+
+    result = _clean_result(nodes, edges)
 
     assert result.input_node_ids == frozenset(n.node_id for n in nodes)
     assert result.input_node_ids == frozenset({"A", "B", "C", "D"})
+
+
+# ── Declared-port contract ──────────────────────────────────────────────────
+
+
+def test_all_cites_is_cleaned_then_suppressed_originals() -> None:
+    """The `all_cites` port is cleaned edges followed by suppressed originals.
+
+    Order is load-bearing: both consumers (Infomap and Leiden inside
+    detect_communities) are seeded but iteration-order-sensitive, so a
+    reordering silently changes community assignments.
+    """
+    # 2-cycle A↔B (equal citations → lex tiebreaker suppresses A→B), plus two
+    # standalone edges so the cleaned prefix is non-trivial.
+    nodes = [_rec("A", 10), _rec("B", 10), _rec("C", 10), _rec("D", 10)]
+    edges = [_edge("A", "B"), _edge("B", "A"), _edge("B", "C"), _edge("C", "D")]
+
+    result = _clean(nodes, edges)
+
+    suppressed = [s.original for s in result["cycle_log"].suppressed_edges]
+    assert suppressed  # precondition: a cycle was actually suppressed
+    assert result["all_cites"] == result["cleaned_edges"] + suppressed
+    # Nothing dropped and nothing duplicated by the split.
+    assert _pairs(result["all_cites"]) == [("B", "A"), ("B", "C"), ("C", "D"), ("A", "B")]
+    assert len(result["all_cites"]) == len(edges)
+
+
+def test_undeclared_input_keys_are_ignored() -> None:
+    """Keys the handler does not declare as input ports are ignored."""
+    nodes = [_rec("A", 5), _rec("B", 5)]
+    edges = [_edge("A", "B")]
+
+    result = asyncio.run(
+        clean_cycles(
+            {},
+            {"nodes": nodes, "cites": edges, "bogus": "not-a-declared-port"},
+        )
+    )
+
+    assert _pairs(result["cleaned_edges"]) == [("A", "B")]
+
+
+def test_params_are_ignored() -> None:
+    """The stage takes no configuration — a populated `params` changes nothing.
+
+    Pins the deliberate absence of a parameters model for this handler: whatever
+    is handed in as `params` is inert, unlike ComputePagerank's `damping`.
+    """
+    nodes = [_rec("A", 10), _rec("B", 10), _rec("C", 10)]
+    edges = [_edge("A", "B"), _edge("B", "C"), _edge("C", "A")]
+    payload = {"nodes": nodes, "cites": edges}
+
+    empty = asyncio.run(clean_cycles({}, payload))
+    populated = asyncio.run(clean_cycles({"damping": 0.5, "bogus": 1}, payload))
+
+    assert populated["cleaned_edges"] == empty["cleaned_edges"]
+    assert populated["cycle_log"] == empty["cycle_log"]
+    assert populated["all_cites"] == empty["all_cites"]
+
+
+def test_missing_declared_input_port_raises() -> None:
+    """An unfed declared input port fails validation rather than defaulting."""
+    nodes = [_rec("A", 5)]
+
+    with pytest.raises(ValidationError) as exc_info:
+        asyncio.run(clean_cycles({}, {"nodes": nodes}))
+
+    assert "cites" in str(exc_info.value)
