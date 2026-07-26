@@ -4,12 +4,14 @@
 # Idiograph — deterministic semantic graph execution for production AI pipelines.
 # https://github.com/idiograph/idiograph
 
+import os
 import json
 import asyncio
 import typer
 from dotenv import load_dotenv
 from idiograph.core import SAMPLE_PIPELINE, summarize, load_graph, load_config, setup_logging
 from idiograph.core.executor import execute_graph
+from idiograph.core.models import Graph
 from idiograph.core.query import (
     get_downstream, get_upstream, topological_sort,
     find_cycles, validate_integrity, summarize_intent,
@@ -72,6 +74,45 @@ def check():
     typer.echo(json.dumps(result, indent=2))
 
 
+async def _execute_live(pipeline: Graph) -> dict:
+    """Build the run's resources, own their lifecycle, execute the pipeline.
+
+    This is the composition root, and the only place in the system that may
+    construct a network client or read process environment. Handlers receive
+    clients; they never build them, so what a handler can reach is exactly what
+    its node declared.
+    """
+    import httpx
+    import anthropic
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise ValueError("ANTHROPIC_API_KEY not set.")
+
+    async with httpx.AsyncClient(timeout=10.0) as http_client:
+        return await execute_graph(
+            pipeline,
+            resources={
+                "http_client": http_client,
+                "anthropic_client": anthropic.AsyncAnthropic(api_key=api_key),
+            },
+        )
+
+
+async def _execute_mock(pipeline: Graph) -> dict:
+    """Execute with inert resource placeholders. Mocks construct nothing.
+
+    The nodes declare, so the executor supplies whichever handlers are
+    registered. `None` is the honest placeholder: present, so the pre-flight
+    supply check passes, and unusable, so a stub that quietly reached for the
+    network would crash rather than succeed.
+    """
+    return await execute_graph(
+        pipeline,
+        resources={"http_client": None, "anthropic_client": None},
+    )
+
+
 @app.command()
 def run(
     paper_id: str = typer.Argument(..., help="arXiv paper ID, e.g. 2401.00001"),
@@ -99,7 +140,9 @@ def run(
     fetch_node = pipeline.get_node("fetch")
     if fetch_node:
         fetch_node.params["paper_id"] = paper_id
-    results = asyncio.run(execute_graph(pipeline))
+    results = asyncio.run(
+        _execute_mock(pipeline) if mock else _execute_live(pipeline)
+    )
     typer.echo(json.dumps(results, indent=2, default=str))
 
 
