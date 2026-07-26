@@ -1031,24 +1031,77 @@ async def compute_co_citations(params: dict, inputs: dict) -> dict:
 # ── Node 6 — Metric Computation ─────────────────────────────────────────────
 
 
-def compute_depth_metrics(
-    nodes: list[PaperRecord],
-    cleaned_edges: list[CitationEdge],
-) -> dict[str, DepthMetrics]:
-    """Compute per-node depth metrics on the cleaned citation graph.
+#: Port declarations for the ``ComputeDepthMetrics`` node. These are the contract:
+#: a graph wiring this node declares them on the ``Node``, and ``validate_integrity``
+#: checks the edges against them without reading this handler's source.
+#:
+#: The input port names are deliberately name-identical to the two upstream
+#: stages' output ports, so a wiring reads ``assemble.nodes -> depth.nodes`` and
+#: ``clean.cleaned_edges -> depth.cleaned_edges`` with no adapter node between
+#: them. The ``cleaned_edges`` name is load-bearing on its own: depth takes the
+#: ACYCLIC view, deliberately NOT ``all_cites``, because a suppressed edge would
+#: shorten hop distances and blur the direction categories. That split is
+#: documented on ``clean_cycles`` and is the same one ``ComputePagerank`` takes.
+COMPUTE_DEPTH_METRICS_INPUT_PORTS: list[PortDeclaration] = [
+    _untyped_port("nodes"),
+    _untyped_port("cleaned_edges"),
+]
 
-    For every input node, returns a ``DepthMetrics`` carrying
+#: The single ``{node_id: DepthMetrics}`` payload, carried under the name
+#: ``PipelineResult`` consumes it by. A bare ``metrics`` would be too generic to
+#: read at a graph edge, where the port name is all a wiring shows.
+COMPUTE_DEPTH_METRICS_OUTPUT_PORTS: list[PortDeclaration] = [
+    _untyped_port("depth_metrics"),
+]
+
+
+class _DepthMetricsInputs(BaseModel):
+    """Declared input contract for the ``ComputeDepthMetrics`` handler.
+
+    One field per declared input port (``COMPUTE_DEPTH_METRICS_INPUT_PORTS``):
+    the assembled node set and the cleaned (acyclic) citation edges. The executor
+    binds each port-declared incoming edge as ``inputs[to_port]``, so the
+    ``inputs`` mapping validates directly against this model.
+    """
+
+    nodes: list[PaperRecord]
+    cleaned_edges: list[CitationEdge]
+
+
+async def compute_depth_metrics(params: dict, inputs: dict) -> dict:
+    """Executor node handler (type ``ComputeDepthMetrics``) — per-node depth
+    metrics on the cleaned citation graph.
+
+    For every input node, emits a ``DepthMetrics`` carrying
     ``hop_depth_per_root`` (BFS distance from each reaching root over the
     undirected view of the graph) and ``traversal_direction`` (categorical
     position relative to the seed set: seed/backward/forward/mixed). See
     docs/specs/spec-node6-metrics.md and AMD-019 for the full contract.
 
+    Contract (``core/executor.py`` handler convention):
+      ``params``  — UNUSED. This stage takes no configuration; the BFS is over
+                    the whole bound graph and the four direction categories are
+                    fixed. Nothing is read off ``params`` and no parameters model
+                    exists for it.
+      ``inputs``  — BOUND. The node declares ``COMPUTE_DEPTH_METRICS_INPUT_PORTS``,
+                    so the executor builds ``inputs`` solely from the
+                    port-declared edges into it, keyed by ``to_port``:
+                    ``{"nodes": [...], "cleaned_edges": [...]}``, validated as
+                    ``_DepthMetricsInputs``. Undeclared keys are ignored. A caller
+                    invoking the handler directly shapes ``inputs`` the same way,
+                    so the direct and executor-driven paths share one contract.
+      returns     — ``{"depth_metrics": {node_id: DepthMetrics}}`` — the declared
+                    output port (``COMPUTE_DEPTH_METRICS_OUTPUT_PORTS``).
+
     Raises ``ValueError`` if no roots are present in ``nodes`` or if any
-    node is unreachable from every root. Pure function — no I/O, no
-    mutation of inputs.
+    node is unreachable from every root. Pure — no I/O, no mutation of inputs.
     """
+    data = _DepthMetricsInputs.model_validate(inputs)
+    nodes = data.nodes
+    cleaned_edges = data.cleaned_edges
+
     if not nodes:
-        return {}
+        return {"depth_metrics": {}}
 
     roots = [n.node_id for n in nodes if n.node_id in n.root_ids]
     if not roots:
@@ -1116,7 +1169,7 @@ def compute_depth_metrics(
         counts["mixed"],
     )
 
-    return result
+    return {"depth_metrics": result}
 
 
 #: Port declarations for the ``ComputePagerank`` node. These are the contract:
@@ -1725,7 +1778,28 @@ async def run_traversal(
     # --- end Node 5.5 ---
 
     _log.info("Pipeline: starting depth metrics")
-    depth = compute_depth_metrics(unified_nodes, cleaned_edges)
+    # Node 6 depth is BOUND: it declares COMPUTE_DEPTH_METRICS_INPUT_PORTS, so the
+    # executor builds its `inputs` from the port-declared edges into it, keyed by
+    # `to_port`. Marshal this direct call into that same contract — one key per
+    # declared input port — so the direct and executor-driven paths agree. It takes
+    # no configuration, so `params` is empty. The returned mapping is unwrapped so
+    # `depth` stays the `{node_id: DepthMetrics}` dict the rest of this function
+    # consumes unchanged.
+    #
+    # `cleaned_edges`, not `all_cites`: depth needs the acyclic view. The `nodes`
+    # port binds whichever `unified_nodes` is in scope HERE — the Node 5.5 block
+    # above may have rebound it to the annotated copies, and depth is a consumer of
+    # that rebinding. The stage order is load-bearing: this call does not move
+    # ahead of 5.5.
+    depth = (
+        await compute_depth_metrics(
+            {},
+            {
+                "nodes": unified_nodes,
+                "cleaned_edges": cleaned_edges,
+            },
+        )
+    )["depth_metrics"]
     _log.info("Pipeline: depth metrics complete")
 
     _log.info("Pipeline: starting pagerank")
