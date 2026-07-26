@@ -47,8 +47,11 @@ from idiograph.domains.arxiv.pipeline import (
     ASSEMBLE_GRAPH_OUTPUT_PORTS,
     CLEAN_CYCLES_INPUT_PORTS,
     CLEAN_CYCLES_OUTPUT_PORTS,
+    COMPUTE_PAGERANK_INPUT_PORTS,
+    COMPUTE_PAGERANK_OUTPUT_PORTS,
     assemble_graph,
     clean_cycles,
+    compute_pagerank,
 )
 
 
@@ -252,6 +255,130 @@ def test_assemble_graph_wires_into_clean_cycles_via_execute_graph() -> None:
     assert results["merge"]["status"] == "SUCCESS"
     assert results["clean"]["status"] == "SUCCESS"
     _assert_matches_direct(results["clean"], direct)
+
+
+def test_three_stage_assemble_clean_pagerank_via_execute_graph() -> None:
+    """assemble -> clean -> pagerank, all three stages, one execute_graph run.
+
+    The two-node test above shows one converted stage feeding the next. This
+    extends that shape to THREE converted stages in one graph, which is what the
+    standing design constraint asked for a demonstration of: the pagerank node
+    takes `nodes` from the merge stage and `cleaned_edges` from the cycle-cleaning
+    stage, over port-declared edges, with no adapter node anywhere. The port names
+    already compose — that composition is the point.
+
+    Non-vacuity is kept in two parts: a cycle is actually suppressed (so the
+    cleaning stage did real work), and pagerank over the CLEANED edges genuinely
+    differs from pagerank over the raw merged edges (so the `cleaned_edges` port
+    is load-bearing in the comparison rather than incidental).
+    """
+    seeds = [_rec("S1", citation_count=10, root_ids=["S1"], hop_depth=0)]
+    # P→S1 and S1→P form a 2-cycle once merged, so the cleaning stage has
+    # something to actually clean; P→Q survives to give the chain real structure.
+    n3 = Node3Result(
+        papers=[_rec("P", citation_count=10, root_ids=["S1"])],
+        edges=[_edge("P", "S1")],
+    )
+    n4 = Node4Result(
+        papers=[_rec("Q", citation_count=10, root_ids=["S1"])],
+        edges=[_edge("S1", "P"), _edge("P", "Q")],
+    )
+    params = {"damping": 0.85}
+
+    merged = asyncio.run(
+        assemble_graph({}, {"seeds": seeds, "backward": n3, "forward": n4})
+    )
+    cleaned = asyncio.run(
+        clean_cycles({}, {"nodes": merged["nodes"], "cites": merged["cites"]})
+    )
+    # Non-vacuity, part 1: cleaning actually suppressed a cycle edge.
+    assert len(cleaned["cycle_log"].suppressed_edges) == 1
+
+    direct = asyncio.run(
+        compute_pagerank(
+            params,
+            {"nodes": merged["nodes"], "cleaned_edges": cleaned["cleaned_edges"]},
+        )
+    )
+    assert direct["pagerank"]
+
+    # Non-vacuity, part 2: the cleaned edge set and the raw merged edge set give
+    # different pagerank, so the equality at the end pins which port was carried.
+    on_raw_cites = asyncio.run(
+        compute_pagerank(
+            params, {"nodes": merged["nodes"], "cleaned_edges": merged["cites"]}
+        )
+    )
+    assert on_raw_cites["pagerank"] != direct["pagerank"]
+
+    async def _provider(_params: dict, _inputs: dict) -> dict:
+        return {"seeds": seeds, "backward": n3, "forward": n4}
+
+    register_handler("CleanTestProvider", _provider)
+    register_handler("AssembleGraph", assemble_graph)
+    register_handler("CleanCycles", clean_cycles)
+    register_handler("ComputePagerank", compute_pagerank)
+
+    graph = Graph(
+        name="assemble-clean-pagerank",
+        version="1.0",
+        nodes=[
+            Node(
+                id="src",
+                type="CleanTestProvider",
+                params={},
+                output_ports=[
+                    _port("seeds"),
+                    _port("backward"),
+                    _port("forward"),
+                ],
+            ),
+            Node(
+                id="merge",
+                type="AssembleGraph",
+                params={},
+                input_ports=ASSEMBLE_GRAPH_INPUT_PORTS,
+                output_ports=ASSEMBLE_GRAPH_OUTPUT_PORTS,
+            ),
+            _clean_node(),
+            Node(
+                id="pr",
+                type="ComputePagerank",
+                params=params,
+                input_ports=COMPUTE_PAGERANK_INPUT_PORTS,
+                output_ports=COMPUTE_PAGERANK_OUTPUT_PORTS,
+            ),
+        ],
+        edges=[
+            Edge(source="src", target="merge", type="DATA",
+                 from_port="seeds", to_port="seeds"),
+            Edge(source="src", target="merge", type="DATA",
+                 from_port="backward", to_port="backward"),
+            Edge(source="src", target="merge", type="DATA",
+                 from_port="forward", to_port="forward"),
+            Edge(source="merge", target="clean", type="DATA",
+                 from_port="nodes", to_port="nodes"),
+            Edge(source="merge", target="clean", type="DATA",
+                 from_port="cites", to_port="cites"),
+            # No adapter on either hop into pagerank: `nodes` comes straight from
+            # the merge stage, `cleaned_edges` from the cycle-cleaning stage.
+            Edge(source="merge", target="pr", type="DATA",
+                 from_port="nodes", to_port="nodes"),
+            Edge(source="clean", target="pr", type="DATA",
+                 from_port="cleaned_edges", to_port="cleaned_edges"),
+        ],
+    )
+
+    assert validate_integrity(graph) == {"valid": True, "errors": []}
+
+    results = asyncio.run(execute_graph(graph))
+
+    assert results["merge"]["status"] == "SUCCESS"
+    assert results["clean"]["status"] == "SUCCESS"
+    assert results["pr"]["status"] == "SUCCESS"
+    # The three-stage chain reproduces the direct-call result exactly.
+    _assert_matches_direct(results["clean"], cleaned)
+    assert results["pr"]["pagerank"] == direct["pagerank"]
 
 
 def test_handler_registered_by_register_arxiv_handlers() -> None:

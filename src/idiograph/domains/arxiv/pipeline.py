@@ -20,6 +20,7 @@ from idiograph.core.logging_config import get_logger
 from idiograph.core.models import Graph, Node, Edge, PortDeclaration
 from idiograph.domains.arxiv.models import (
     CitationEdge,
+    CoCitationParameters,
     CommunityResult,
     CycleCleanResult,
     CycleLog,
@@ -858,28 +859,90 @@ async def clean_cycles(params: dict, inputs: dict) -> dict:
 # ── Node 5 — Co-Citation ────────────────────────────────────────────────────
 
 
-def compute_co_citations(
-    nodes: list[PaperRecord],
-    cites_edges: list[CitationEdge],
-    min_strength: int = 2,
-    max_edges: int | None = None,
-) -> Node5Result:
-    """Compute co-citation edges across the assembled citation graph.
+#: Port declarations for the ``ComputeCoCitations`` node. These are the contract:
+#: a graph wiring this node declares them on the ``Node``, and ``validate_integrity``
+#: checks the edges against them without reading this handler's source.
+#:
+#: The input port names are deliberately name-identical to the two upstream
+#: stages' output ports, so a wiring reads ``assemble.nodes -> co.nodes`` and
+#: ``clean.all_cites -> co.all_cites`` with no adapter node between them. The
+#: ``all_cites`` name is load-bearing on its own: it is the cleaned-plus-suppressed
+#: view, deliberately NOT ``cleaned_edges``, because co-occurrence keeps
+#: real-but-suppressed citations.
+CO_CITATIONS_INPUT_PORTS: list[PortDeclaration] = [
+    _untyped_port("nodes"),
+    _untyped_port("all_cites"),
+]
+
+#: The two ``Node5Result`` payload fields, carried under the names
+#: ``PipelineResult`` consumes them by. The bare model field names (``edges``,
+#: ``warnings``) are too generic to read at a graph edge, where the port name is
+#: all a wiring shows.
+CO_CITATIONS_OUTPUT_PORTS: list[PortDeclaration] = [
+    _untyped_port("co_citation_edges"),
+    _untyped_port("co_citation_warnings"),
+]
+
+
+class _CoCitationInputs(BaseModel):
+    """Declared input contract for the ``ComputeCoCitations`` handler.
+
+    One field per declared input port (``CO_CITATIONS_INPUT_PORTS``): the
+    assembled node set and the cleaned-plus-suppressed citation edge view. The
+    executor binds each port-declared incoming edge as ``inputs[to_port]``, so
+    the ``inputs`` mapping validates directly against this model.
+    """
+
+    nodes: list[PaperRecord]
+    all_cites: list[CitationEdge]
+
+
+async def compute_co_citations(params: dict, inputs: dict) -> dict:
+    """Executor node handler (type ``ComputeCoCitations``) — compute co-citation
+    edges across the assembled citation graph.
 
     Two papers A and B are co-cited whenever any third paper C cites both;
-    the number of shared citers is the edge ``strength``. See
-    docs/specs/spec-node5-co-citation.md for the full contract, including
-    the global cross-root semantics (AMD-017), canonical form, and sort
-    ordering.
+    the number of shared citers is the edge ``strength``.
 
-    Returns a :class:`Node5Result` carrying the co-citation edges and any
-    data-quality warnings. Both endpoints of every edge are checked for
-    unknown-ness unconditionally (Option A, IDG-023), so ``warnings`` lists
-    every distinct unknown ``node_id`` in first-encounter order.
+    Contract (``core/executor.py`` handler convention):
+      ``params``  — ``{"min_strength": int, "max_edges": int | None}``, validated
+                    as ``CoCitationParameters``; absent keys fall back to the
+                    frozen Node 5 defaults. Config keeps its home in
+                    ``PipelineParameters.co_citation``; ``run_traversal`` reads it
+                    there and marshals it in.
+      ``inputs``  — BOUND. The node declares ``CO_CITATIONS_INPUT_PORTS``, so the
+                    executor builds ``inputs`` solely from the port-declared
+                    edges into it, keyed by ``to_port``: ``{"nodes": [...],
+                    "all_cites": [...]}``, validated as ``_CoCitationInputs``.
+                    Undeclared keys are ignored. A caller invoking the handler
+                    directly shapes ``inputs`` the same way, so the direct and
+                    executor-driven paths share one contract.
+      returns     — ``{"co_citation_edges": [...], "co_citation_warnings": [...]}``
+                    — the declared output ports (``CO_CITATIONS_OUTPUT_PORTS``).
 
-    Raises ``ValueError`` on invalid ``min_strength`` (< 1) or ``max_edges``
-    (< 0). Pure function — no I/O, no mutation of inputs.
+    ``CoCitationParameters`` carries no field constraints, so the range checks
+    stay here rather than in the model: ``ValueError`` on ``min_strength`` (< 1)
+    or ``max_edges`` (< 0), applied to the validated config.
+
+    A ``Node5Result`` is CONSTRUCTED internally before the return mapping is
+    built, and the ports are decomposed off that validated result rather than
+    assembled from bare lists.
+
+    Both endpoints of every edge are checked for unknown-ness unconditionally
+    (Option A, IDG-023), so ``co_citation_warnings`` lists every distinct unknown
+    ``node_id`` in first-encounter order. See
+    docs/specs/spec-node5-co-citation.md for the full contract, including the
+    global cross-root semantics (AMD-017), canonical form, and sort ordering.
+
+    Pure — no I/O, no network, no mutation of inputs.
     """
+    config = CoCitationParameters.model_validate(params)
+    data = _CoCitationInputs.model_validate(inputs)
+    nodes = data.nodes
+    cites_edges = data.all_cites
+    min_strength = config.min_strength
+    max_edges = config.max_edges
+
     if min_strength < 1:
         raise ValueError(f"min_strength must be >= 1, got {min_strength}")
     if max_edges is not None and max_edges < 0:
@@ -955,7 +1018,14 @@ def compute_co_citations(
         max_edges,
     )
 
-    return Node5Result(edges=co_edges, warnings=warnings)
+    # Constructed, not skipped: the ports below are decomposed off the validated
+    # result rather than assembled from the bare lists above.
+    result = Node5Result(edges=co_edges, warnings=warnings)
+
+    return {
+        "co_citation_edges": result.edges,
+        "co_citation_warnings": result.warnings,
+    }
 
 
 # ── Node 6 — Metric Computation ─────────────────────────────────────────────
@@ -1608,12 +1678,26 @@ async def run_traversal(
     _log.info("Pipeline: cycle cleaning complete")
 
     _log.info("Pipeline: starting co-citation")
-    co = compute_co_citations(
-        unified_nodes,
-        all_cites,
-        min_strength=parameters.co_citation.min_strength,
-        max_edges=parameters.co_citation.max_edges,
+    # Node 5 co-citation is BOUND: it declares CO_CITATIONS_INPUT_PORTS, so the
+    # executor builds its `inputs` from the port-declared edges into it, keyed by
+    # `to_port`. Marshal this direct call into that same contract — one key per
+    # declared input port — so the direct and executor-driven paths agree. The
+    # min_strength/max_edges config keeps its home in PipelineParameters and is
+    # read here. The returned mapping is unwrapped into the two locals the rest of
+    # this function consumes, under the same names PipelineResult carries them by.
+    #
+    # The `nodes` port binds `unified_nodes` HERE, before the Node 5.5 block below
+    # may rebind that free variable to annotated copies. The stage order is
+    # load-bearing: this call does not move past 5.5.
+    co = await compute_co_citations(
+        {
+            "min_strength": parameters.co_citation.min_strength,
+            "max_edges": parameters.co_citation.max_edges,
+        },
+        {"nodes": unified_nodes, "all_cites": all_cites},
     )
+    co_citation_edges = co["co_citation_edges"]
+    co_citation_warnings = co["co_citation_warnings"]
     _log.info("Pipeline: co-citation complete")
 
     # --- Node 5.5 insertion (spec-node5.5-semantic-relationship) ---
@@ -1692,7 +1776,7 @@ async def run_traversal(
 
     # 6. Merged edge view. Suppressed originals are NOT in `edges` — they live in
     #    cycle_log.suppressed_edges for audit.
-    merged_edges = cleaned_edges + co.edges
+    merged_edges = cleaned_edges + co_citation_edges
 
     # 7. Construct and return. ``seed_failures`` is request-derived (a function
     #    of the requested seed set, not the resolved set that keys the cache);
@@ -1717,8 +1801,8 @@ async def run_traversal(
         edges=merged_edges,
         seeds=[s.node_id for s in resolved],
         cycle_clean=cycle_clean,
-        co_citation_edges=co.edges,
-        co_citation_warnings=co.warnings,
+        co_citation_edges=co_citation_edges,
+        co_citation_warnings=co_citation_warnings,
         depth_metrics=depth,
         pagerank=prank,
         communities=communities,
