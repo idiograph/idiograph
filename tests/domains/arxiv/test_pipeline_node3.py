@@ -114,7 +114,34 @@ class _StageFailingClient:
 
 
 def _run(client, **kwargs) -> Node3Result:
-    return asyncio.run(backward_traverse(client=client, **kwargs))
+    """Drive the ``BackwardTraverse`` handler through its declared contract.
+
+    Node 3 is now a port-declared executor handler: ``(params, inputs, *,
+    resources) -> dict``. This helper is the ONE site in this file that knows
+    that, so every behavioral test below keeps its pre-conversion call shape and
+    every assertion below still reads a ``Node3Result``. The marshalling here is
+    the same one ``run_traversal`` performs — one key per declared param, one key
+    per declared input port, the client and the credential through the resource
+    channel — so these tests exercise the contract the executor would use.
+
+    The ``backward`` port is unwrapped because it carries the whole result; the
+    ``failed_batches`` port is asserted separately, where it is the subject.
+    """
+    out = asyncio.run(
+        backward_traverse(
+            {
+                "n_backward": kwargs["n_backward"],
+                "lambda_decay": kwargs["lambda_decay"],
+                "sleep_ms": kwargs["sleep_ms"],
+            },
+            {"seeds": kwargs["seeds"]},
+            resources={
+                "http_client": client,
+                "openalex_api_key": kwargs["api_key"],
+            },
+        )
+    )
+    return out["backward"]
 
 
 # ── Scoring ────────────────────────────────────────────────────────────────

@@ -272,16 +272,87 @@ async def _fetch_works_by_ids(
     return works, failed_batches
 
 
+#: Production pacing between OpenAlex batch calls in this stage, in
+#: milliseconds. THE ONE HOME for the value: ``_BackwardTraverseParams.sleep_ms``
+#: is required with no default, so the number cannot also hide as a model
+#: fallback, and ``run_traversal`` marshals THIS constant in explicitly rather
+#: than relying on an implicit default — a declared graph should show what the
+#: stage is configured with.
+BACKWARD_SLEEP_MS = 150
+
+#: Port declarations for the ``BackwardTraverse`` node. These are the contract:
+#: a graph wiring this node declares them on the ``Node``, and ``validate_integrity``
+#: checks the edges against them without reading this handler's source.
+#:
+#: EXACTLY ONE input port. ``seeds`` is name-identical to ``AssembleGraph``'s input
+#: port of the same name (``ASSEMBLE_GRAPH_INPUT_PORTS``), so a future wiring feeds
+#: both this stage and the merge from one producer with no renaming.
+BACKWARD_TRAVERSE_INPUT_PORTS: list[PortDeclaration] = [
+    _untyped_port("seeds"),
+]
+
+#: TWO output ports.
+#:
+#: ``backward`` carries the whole ``Node3Result`` — the ``clean_cycles`` construct-
+#: then-return shape. Not decomposed into ``papers``/``edges``: ``AssembleGraph``
+#: already ships an input port literally named ``backward`` whose declared contract
+#: IS a whole ``Node3Result`` (``_AssembleGraphInputs.backward``), so decomposing
+#: here would force reopening a merged handler's input contract only to arrive back
+#: at the same dataflow.
+#:
+#: ``failed_batches`` carries the same list also reachable inside the ``backward``
+#: port's payload. The duplication is DELIBERATE: failure provenance rides a
+#: declared output port rather than being dug out of another port's payload by the
+#: consumer. The port is currently unconsumed, and that is legal —
+#: ``validate_integrity`` checks referential integrity and port-declared edges, never
+#: unconsumed outputs, and ``cycle_log``/``co_citation_warnings``/``mismatches``
+#: already dangle green.
+BACKWARD_TRAVERSE_OUTPUT_PORTS: list[PortDeclaration] = [
+    _untyped_port("backward"),
+    _untyped_port("failed_batches"),
+]
+
+
+class _BackwardTraverseParams(BaseModel):
+    """Declared param contract for the ``BackwardTraverse`` handler.
+
+    The two ``BackwardParameters`` fields, mirrored here with their required-ness
+    intact, PLUS ``sleep_ms``.
+
+    ``sleep_ms`` lives HERE and deliberately NOT on ``BackwardParameters``.
+    That model is nested inside ``PipelineParameters``, which ``content_address``
+    hashes whole, so adding a field to it would re-address every existing cached
+    record for a pacing knob that cannot affect output — the exact hazard the
+    ``llm`` field documents. ``Node.params`` is not read by ``content_address``,
+    so the key is free on this side of the fence.
+
+    Required with no default, like its two siblings: the sole home of the
+    production value is ``BACKWARD_SLEEP_MS``, and a model default would be a
+    second one, silently applying whenever a wiring forgot to state its pacing.
+    """
+
+    n_backward: int
+    lambda_decay: float
+    sleep_ms: int
+
+
+class _BackwardTraverseInputs(BaseModel):
+    """Declared input contract for the ``BackwardTraverse`` handler.
+
+    One field per declared input port (``BACKWARD_TRAVERSE_INPUT_PORTS``): the
+    resolved seed records to traverse back from. The executor binds each
+    port-declared incoming edge as ``inputs[to_port]``, so the ``inputs`` mapping
+    validates directly against this model.
+    """
+
+    seeds: list[PaperRecord]
+
+
 async def backward_traverse(
-    seeds: list[PaperRecord],
-    api_key: str,
-    n_backward: int,
-    lambda_decay: float,
-    sleep_ms: int = 150,
-    *,
-    client: httpx.AsyncClient,
-) -> Node3Result:
-    """Backward traversal from seed nodes up to depth 2.
+    params: dict, inputs: dict, *, resources: dict
+) -> dict:
+    """Executor node handler (type ``BackwardTraverse``) — backward traversal
+    from seed nodes up to depth 2 (Node 3).
 
     For each seed, fetches its direct references (depth=1) and the references
     of those references (depth=2). Deduplicates by ``node_id`` — when a paper
@@ -291,11 +362,57 @@ async def backward_traverse(
     by :func:`_node3_score`, sorted descending, and truncated to
     ``n_backward``.
 
-    Returns a :class:`Node3Result` carrying the ranked papers, the citation
-    edges discovered during traversal (seed→depth-1 and depth-1→depth-2),
-    and any batch-level fetch failures recorded by ``_fetch_works_by_ids``.
-    See AMD-020.
+    Contract (``core/executor.py`` handler convention):
+      ``params``    — ``{"n_backward": int, "lambda_decay": float,
+                      "sleep_ms": int}``, validated as
+                      ``_BackwardTraverseParams``. All three are REQUIRED.
+                      ``n_backward``/``lambda_decay`` keep their home in
+                      ``PipelineParameters.backward``; ``run_traversal`` reads
+                      them there and marshals them in. ``sleep_ms`` is pacing,
+                      not configuration that reaches output — see that model for
+                      why it is not a ``BackwardParameters`` field.
+      ``inputs``    — BOUND. The node declares ``BACKWARD_TRAVERSE_INPUT_PORTS``,
+                      so the executor builds ``inputs`` solely from the
+                      port-declared edges into it, keyed by ``to_port``:
+                      ``{"seeds": [...]}``, validated as
+                      ``_BackwardTraverseInputs``. Undeclared keys are ignored. A
+                      caller invoking the handler directly shapes ``inputs`` the
+                      same way, so the direct and executor-driven paths share one
+                      contract.
+      ``resources`` — ``{"http_client": <httpx.AsyncClient>, "openalex_api_key":
+                      <str>}``. Both belong to the run, not the graph, and
+                      neither enters a content address — a credential in
+                      particular is a RESOURCE and never a param. ``http_client``
+                      is name-identical to the resource ``fetch_abstract``
+                      declares; the key is qualified rather than bare ``api_key``
+                      because the composition root already owns an Anthropic
+                      credential. Keyword-only with no default: the node
+                      declares, so the executor always supplies, and a silent
+                      call without it would be a bug worth crashing on.
+      returns       — ``{"backward": Node3Result, "failed_batches": [...]}`` —
+                      the declared output ports
+                      (``BACKWARD_TRAVERSE_OUTPUT_PORTS``).
+
+    A :class:`Node3Result` — the ranked papers, the citation edges discovered
+    during traversal (seed→depth-1 and depth-1→depth-2), and any batch-level
+    fetch failures recorded by ``_fetch_works_by_ids`` (see AMD-020) — is
+    CONSTRUCTED internally before the return mapping is built, and rides the
+    ``backward`` port whole.
+
+    THE ``failed_batches`` PORT IS CANONICAL. The same list is also reachable at
+    ``backward.failed_batches``, and that duplication is deliberate: a consumer
+    reads failure provenance off its own declared port, never by digging into
+    another port's payload.
     """
+    config = _BackwardTraverseParams.model_validate(params)
+    data = _BackwardTraverseInputs.model_validate(inputs)
+    seeds = data.seeds
+    n_backward = config.n_backward
+    lambda_decay = config.lambda_decay
+    sleep_ms = config.sleep_ms
+    client = resources["http_client"]
+    api_key = resources["openalex_api_key"]
+
     seed_ids = {s.node_id for s in seeds}
     failed_batches: list[FailedBatch] = []
 
@@ -440,11 +557,12 @@ async def backward_traverse(
     ]
     filtered_edges.sort(key=lambda e: (e.source_id, e.target_id))
 
-    return Node3Result(
+    result = Node3Result(
         papers=papers,
         edges=filtered_edges,
         failed_batches=failed_batches,
     )
+    return {"backward": result, "failed_batches": result.failed_batches}
 
 
 # ── Node 4 — Forward Traversal ──────────────────────────────────────────────
@@ -1710,17 +1828,36 @@ async def run_traversal(
     # 2. Traversal (one batch call each, over the full resolved-seed list).
     #    Failures are read off the results, never caught per seed.
     _log.info("Pipeline: starting backward traversal")
-    n3 = await backward_traverse(
-        resolved,
-        api_key,
-        n_backward=parameters.backward.n_backward,
-        lambda_decay=parameters.backward.lambda_decay,
-        client=client,
+    # Node 3 is BOUND and DECLARING: it declares BACKWARD_TRAVERSE_INPUT_PORTS, so
+    # the executor builds its `inputs` from the port-declared edges into it keyed
+    # by `to_port`, and it declares the http_client and openalex_api_key resources,
+    # which the run supplies. Marshal this direct call into that same contract —
+    # one key per declared input port, the client and the credential through the
+    # resource channel — so the direct and executor-driven paths agree. The
+    # n_backward/lambda_decay config keeps its home in PipelineParameters and is
+    # read here; `sleep_ms` is pacing rather than output-determining config, so it
+    # comes from BACKWARD_SLEEP_MS and is passed EXPLICITLY — the call site states
+    # what the stage is configured with rather than leaning on a default.
+    #
+    # The returned mapping is unwrapped so `n3` stays the Node3Result the rest of
+    # this function consumes unchanged.
+    n3_ports = await backward_traverse(
+        {
+            "n_backward": parameters.backward.n_backward,
+            "lambda_decay": parameters.backward.lambda_decay,
+            "sleep_ms": BACKWARD_SLEEP_MS,
+        },
+        {"seeds": resolved},
+        resources={"http_client": client, "openalex_api_key": api_key},
     )
+    n3 = n3_ports["backward"]
     _log.info("Pipeline: backward traversal complete")
-    if n3.failed_batches:
+    # Failure provenance is read off its OWN declared port, not dug out of the
+    # `backward` payload — that port is the canonical carrier.
+    n3_failed_batches = n3_ports["failed_batches"]
+    if n3_failed_batches:
         _log.warning(
-            "Pipeline: Node 3 recorded %d failed batch(es)", len(n3.failed_batches)
+            "Pipeline: Node 3 recorded %d failed batch(es)", len(n3_failed_batches)
         )
 
     _log.info("Pipeline: starting forward traversal")
