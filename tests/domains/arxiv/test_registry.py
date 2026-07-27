@@ -101,7 +101,13 @@ def _install_stages(
     monkeypatch.setattr(
         pipeline, "fetch_seeds", AsyncMock(return_value=(resolved, failures))
     )
-    monkeypatch.setattr(pipeline, "backward_traverse", AsyncMock(return_value=n3))
+    # Node 3 is a port-declared handler — its stand-in returns the declared
+    # output ports, not a bare Node3Result.
+    monkeypatch.setattr(
+        pipeline,
+        "backward_traverse",
+        AsyncMock(return_value={"backward": n3, "failed_batches": n3.failed_batches}),
+    )
     monkeypatch.setattr(pipeline, "forward_traverse", AsyncMock(return_value=n4))
 
 

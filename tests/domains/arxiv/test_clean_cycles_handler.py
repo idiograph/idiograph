@@ -472,7 +472,13 @@ def test_run_traversal_witness_binds_to_nodes_port(
     )
     n4 = Node4Result(papers=[], edges=[])
 
-    monkeypatch.setattr(pipeline, "backward_traverse", AsyncMock(return_value=n3))
+    # Node 3 is a port-declared handler — its stand-in returns the declared
+    # output ports, not a bare Node3Result.
+    monkeypatch.setattr(
+        pipeline,
+        "backward_traverse",
+        AsyncMock(return_value={"backward": n3, "failed_batches": n3.failed_batches}),
+    )
     monkeypatch.setattr(pipeline, "forward_traverse", AsyncMock(return_value=n4))
 
     async def _annotate_dropping_a(params, inputs, *, resources):

@@ -505,7 +505,9 @@ def test_llm_free_run_skips_node(monkeypatch: pytest.MonkeyPatch) -> None:
     n4 = Node4Result(papers=[_rec("F1")], edges=[_edge("F1", "S")])
 
     async def _fake_backward(*a, **k):
-        return n3
+        # Node 3 is a port-declared handler: the declared output ports, not a
+        # bare Node3Result.
+        return {"backward": n3, "failed_batches": n3.failed_batches}
 
     async def _fake_forward(*a, **k):
         return n4
