@@ -148,7 +148,11 @@ def _install_stages(
     """Mock Node 0/3/4 and return the (fetch, backward, forward) spies so tests
     can assert which stages ran on a hit vs a miss."""
     fetch = AsyncMock(return_value=(resolved, failures))
-    backward = AsyncMock(return_value=n3)
+    # Node 3 is a port-declared handler — its stand-in returns the declared
+    # output ports, not a bare Node3Result.
+    backward = AsyncMock(
+        return_value={"backward": n3, "failed_batches": n3.failed_batches}
+    )
     forward = AsyncMock(return_value=n4)
     monkeypatch.setattr(pipeline, "fetch_seeds", fetch)
     monkeypatch.setattr(pipeline, "backward_traverse", backward)
