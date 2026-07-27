@@ -103,16 +103,18 @@ async def discard(params: dict, inputs: dict) -> dict:
 def register_arxiv_handlers() -> None:
     """Explicit per-domain handler registration for the arXiv pipeline."""
     from idiograph.core.executor import register_handler
-    # assemble_graph, clean_cycles, compute_co_citations, compute_depth_metrics and
-    # compute_pagerank live in pipeline.py (they are traversal stages, not
-    # client-building handlers); imported here to keep registration explicit at the
-    # domain boot site and to avoid a module-load import cycle.
+    # assemble_graph, clean_cycles, compute_co_citations, compute_depth_metrics,
+    # compute_pagerank and detect_communities live in pipeline.py (they are
+    # traversal stages, not client-building handlers); imported here to keep
+    # registration explicit at the domain boot site and to avoid a module-load
+    # import cycle.
     from idiograph.domains.arxiv.pipeline import (
         assemble_graph,
         clean_cycles,
         compute_co_citations,
         compute_depth_metrics,
         compute_pagerank,
+        detect_communities,
     )
     # Node 5.5 lives in its own module rather than pipeline.py — it is the one
     # traversal stage with a model call in it — but registers the same way.
@@ -129,4 +131,5 @@ def register_arxiv_handlers() -> None:
     register_handler("ComputePagerank", compute_pagerank)
     register_handler("ComputeCoCitations", compute_co_citations)
     register_handler("ComputeDepthMetrics", compute_depth_metrics)
+    register_handler("DetectCommunities", detect_communities)
     register_handler("AnnotateRelationships", annotate_relationships)
