@@ -21,6 +21,7 @@ from idiograph.core.models import Graph, Node, Edge, PortDeclaration
 from idiograph.domains.arxiv.models import (
     CitationEdge,
     CoCitationParameters,
+    CommunitiesParameters,
     CommunityResult,
     CycleCleanResult,
     CycleLog,
@@ -1251,39 +1252,97 @@ async def compute_pagerank(params: dict, inputs: dict) -> dict:
 # ── Node 7 — Community Detection ────────────────────────────────────────────
 
 
-def detect_communities(
-    nodes: list[PaperRecord],
-    cites_edges: list[CitationEdge],
-    infomap_seed: int = 42,
-    infomap_trials: int = 10,
-    infomap_teleportation: float = 0.15,
-    leiden_seed: int = 42,
-    community_count_min: int = 5,
-    community_count_max: int = 40,
-) -> CommunityResult:
-    """Assign a community label to every node in the assembled citation graph.
+#: Port declarations for the ``DetectCommunities`` node. These are the contract:
+#: a graph wiring this node declares them on the ``Node``, and ``validate_integrity``
+#: checks the edges against them without reading this handler's source.
+#:
+#: ``all_cites`` is name-identical to ``CleanCycles``' output port of the same name
+#: (``CLEAN_CYCLES_OUTPUT_PORTS``) and to ``ComputeCoCitations``' input port, so a
+#: wiring reads ``clean.all_cites -> communities.all_cites`` with no renaming. This
+#: stage takes the cleaned-plus-suppressed view, not ``cleaned_edges``: suppressed
+#: citations are real co-occurrence signal for clustering.
+DETECT_COMMUNITIES_INPUT_PORTS: list[PortDeclaration] = [
+    _untyped_port("nodes"),
+    _untyped_port("all_cites"),
+]
+
+#: EXACTLY ONE output port, carrying the whole ``CommunityResult``. Ports are named
+#: for what the CONSUMER consumes them by, and ``PipelineResult.communities`` takes
+#: the result whole — this is the ``compute_depth_metrics`` shape, not the
+#: decomposed ``clean_cycles`` / ``compute_co_citations`` one, which decomposed only
+#: because ``PipelineResult`` has a separate field per payload field. Decomposing
+#: here would force every consumer to rebuild a ``CommunityResult`` from loose
+#: ports.
+DETECT_COMMUNITIES_OUTPUT_PORTS: list[PortDeclaration] = [
+    _untyped_port("communities"),
+]
+
+
+class _DetectCommunitiesInputs(BaseModel):
+    """Declared input contract for the ``DetectCommunities`` handler.
+
+    One field per declared input port (``DETECT_COMMUNITIES_INPUT_PORTS``): the
+    assembled node set and the cleaned-plus-suppressed citation edge view. The
+    executor binds each port-declared incoming edge as ``inputs[to_port]``, so the
+    ``inputs`` mapping validates directly against this model.
+    """
+
+    nodes: list[PaperRecord]
+    all_cites: list[CitationEdge]
+
+
+async def detect_communities(params: dict, inputs: dict) -> dict:
+    """Executor node handler (type ``DetectCommunities``) — assign a community
+    label to every node in the assembled citation graph.
+
+    Contract (``core/executor.py`` handler convention):
+      ``params``  — ``{"infomap_seed": int, "infomap_trials": int,
+                    "infomap_teleportation": float, "leiden_seed": int,
+                    "community_count_min": int, "community_count_max": int}``,
+                    validated as ``CommunitiesParameters``; absent keys fall back
+                    to the frozen Node 7 defaults, which live in that model rather
+                    than in this signature. Config keeps its home in
+                    ``PipelineParameters.communities``; ``run_traversal`` reads it
+                    there and marshals it in.
+      ``inputs``  — BOUND. The node declares ``DETECT_COMMUNITIES_INPUT_PORTS``, so
+                    the executor builds ``inputs`` solely from the port-declared
+                    edges into it, keyed by ``to_port``: ``{"nodes": [...],
+                    "all_cites": [...]}``, validated as
+                    ``_DetectCommunitiesInputs``. Undeclared keys are ignored. A
+                    caller invoking the handler directly shapes ``inputs`` the same
+                    way, so the direct and executor-driven paths share one contract.
+      returns     — ``{"communities": CommunityResult}`` — the single declared
+                    output port (``DETECT_COMMUNITIES_OUTPUT_PORTS``), carrying the
+                    result whole.
 
     Runs Infomap (primary) over the directed citation graph, falling back to
     Leiden when ``infomap`` is not installed. Both algorithms produce a flat
     partition keyed by ``node_id``; isolates receive an assignment. The
-    function does not modify graph structure or filter nodes.
+    handler does not modify graph structure or filter nodes.
 
     See docs/specs/spec-node7-community-detection.md for the full contract,
     including fallback policy, edge-input semantics (cleaned ∪ suppressed),
     and LOD validation thresholds.
 
     Raises ``RuntimeError`` if neither ``infomap`` nor ``leidenalg`` is
-    installed. Pure function — no I/O, no mutation of inputs.
+    installed. Pure — no I/O, no mutation of inputs.
     """
+    config = CommunitiesParameters.model_validate(params)
+    data = _DetectCommunitiesInputs.model_validate(inputs)
+    nodes = data.nodes
+    cites_edges = data.all_cites
+
     if not nodes:
         _log.debug("Node 7: empty input — no communities to detect")
-        return CommunityResult(
-            community_assignments={},
-            algorithm_used="infomap",
-            community_count=0,
-            validation_flags=[],
-            warnings=[],  # no edge validation runs on empty input
-        )
+        return {
+            "communities": CommunityResult(
+                community_assignments={},
+                algorithm_used="infomap",
+                community_count=0,
+                validation_flags=[],
+                warnings=[],  # no edge validation runs on empty input
+            )
+        }
 
     _log.info("Node 7: %d nodes, %d edges", len(nodes), len(cites_edges))
 
@@ -1308,15 +1367,15 @@ def detect_communities(
         partial = _run_infomap(
             nodes,
             valid_edges,
-            infomap_seed,
-            infomap_trials,
-            infomap_teleportation,
+            config.infomap_seed,
+            config.infomap_trials,
+            config.infomap_teleportation,
         )
     except ImportError:
         try:
             import igraph  # noqa: F401
             import leidenalg  # noqa: F401
-            partial = _run_leiden(nodes, valid_edges, leiden_seed)
+            partial = _run_leiden(nodes, valid_edges, config.leiden_seed)
         except ImportError:
             raise RuntimeError(
                 "Neither infomap nor leidenalg is installed. "
@@ -1325,9 +1384,9 @@ def detect_communities(
             ) from None
 
     flags: list[str] = []
-    if partial.community_count < community_count_min:
+    if partial.community_count < config.community_count_min:
         flags.append("community_count_below_minimum")
-    if partial.community_count > community_count_max:
+    if partial.community_count > config.community_count_max:
         flags.append("community_count_above_maximum")
 
     result = CommunityResult(
@@ -1345,7 +1404,7 @@ def detect_communities(
         result.validation_flags or "none",
     )
 
-    return result
+    return {"communities": result}
 
 
 def _run_infomap(
@@ -1840,16 +1899,34 @@ async def run_traversal(
     _log.info("Pipeline: pagerank complete")
 
     _log.info("Pipeline: starting community detection")
-    communities = detect_communities(
-        unified_nodes,
-        all_cites,
-        infomap_seed=parameters.communities.infomap_seed,
-        infomap_trials=parameters.communities.infomap_trials,
-        infomap_teleportation=parameters.communities.infomap_teleportation,
-        leiden_seed=parameters.communities.leiden_seed,
-        community_count_min=parameters.communities.community_count_min,
-        community_count_max=parameters.communities.community_count_max,
-    )
+    # Node 7 is BOUND: it declares DETECT_COMMUNITIES_INPUT_PORTS, so the executor
+    # builds its `inputs` from the port-declared edges into it, keyed by `to_port`.
+    # Marshal this direct call into that same contract — one key per declared input
+    # port — so the direct and executor-driven paths agree. The community-detection
+    # config keeps its home in PipelineParameters and is read here. The returned
+    # mapping is unwrapped so `communities` stays the `CommunityResult` the rest of
+    # this function consumes unchanged.
+    #
+    # `all_cites`, not `cleaned_edges`: clustering keeps the real-but-suppressed
+    # citations, the same view Node 5 takes. The `nodes` port binds whichever
+    # `unified_nodes` is in scope HERE — Node 5.5 above may have rebound it to the
+    # annotated copies.
+    communities = (
+        await detect_communities(
+            {
+                "infomap_seed": parameters.communities.infomap_seed,
+                "infomap_trials": parameters.communities.infomap_trials,
+                "infomap_teleportation": parameters.communities.infomap_teleportation,
+                "leiden_seed": parameters.communities.leiden_seed,
+                "community_count_min": parameters.communities.community_count_min,
+                "community_count_max": parameters.communities.community_count_max,
+            },
+            {
+                "nodes": unified_nodes,
+                "all_cites": all_cites,
+            },
+        )
+    )["communities"]
     _log.info("Pipeline: community detection complete")
 
     # 5. End-of-pipeline enrichment (immutable write path — Node 6 owns the
