@@ -613,8 +613,13 @@ class LLMConfig(BaseModel):
 
 class PipelineParameters(BaseModel):
     """Per-stage configuration for ``run_arxiv_pipeline``, as nested model
-    objects. ``backward`` and ``forward`` are required; the rest default to the
-    frozen per-node defaults. Frozen — an immutable config input.
+    objects. ``backward``, ``forward`` and ``current_year`` are required; the
+    rest default to the frozen per-node defaults. Frozen — an immutable config
+    input.
+
+    ``current_year`` is the one required field that is not a nested per-stage
+    model: it is a whole-run fact both traversal stages score against, so it
+    sits at this level rather than being duplicated onto two of them.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -624,6 +629,27 @@ class PipelineParameters(BaseModel):
     )
     forward: ForwardParameters = Field(
         ..., description="Node 4 forward-traversal parameters."
+    )
+    current_year: int = Field(
+        ...,
+        description="The year the traversal scores against — the reference "
+                    "point for recency in BOTH Node 3's `_node3_score` and Node "
+                    "4's `_node4_score`/`_compute_velocity`. Output-determining: "
+                    "it orders the sorts that `n_backward`/`n_forward` truncate, "
+                    "so two runs reading a different year select different "
+                    "corpora. It sits HERE, top-level, and NOT on "
+                    "BackwardParameters/ForwardParameters, because it is a fact "
+                    "about the RUN rather than per-stage tuning — two fields "
+                    "would have to agree with nothing enforcing agreement. "
+                    "REQUIRED with no default and no default_factory ON "
+                    "PURPOSE: a `date.today().year` factory would merely "
+                    "relocate the wall-clock read one layer up, and would let "
+                    "two runs on either side of a New Year boundary take "
+                    "different content addresses without the caller having "
+                    "stated anything different. The read belongs to whoever "
+                    "constructs this model. See the `llm` field below for the "
+                    "sibling hazard of defaults that inject values into every "
+                    "run's model_dump.",
     )
     co_citation: CoCitationParameters = Field(
         default_factory=CoCitationParameters,

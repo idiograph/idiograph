@@ -110,6 +110,8 @@ def _toy_result() -> PipelineResult:
                 n_forward=10, lambda_decay=0.1, alpha=1.0, beta=0.0,
                 sort="cited_by_count:desc",
             ),
+            # Stated, never read from the clock: it enters the content address.
+            current_year=2026,
         ),
     )
 
@@ -238,6 +240,8 @@ def _foundation_result() -> PipelineResult:
                 n_forward=10, lambda_decay=0.1, alpha=1.0, beta=0.0,
                 sort="cited_by_count:desc",
             ),
+            # Stated, never read from the clock: it enters the content address.
+            current_year=2026,
         ),
     )
 

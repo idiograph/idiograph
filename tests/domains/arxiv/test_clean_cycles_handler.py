@@ -472,14 +472,24 @@ def test_run_traversal_witness_binds_to_nodes_port(
     )
     n4 = Node4Result(papers=[], edges=[])
 
-    # Node 3 is a port-declared handler — its stand-in returns the declared
-    # output ports, not a bare Node3Result.
+    # Nodes 3 and 4 are port-declared handlers — their stand-ins return the
+    # declared output ports, not a bare Node3Result/Node4Result.
     monkeypatch.setattr(
         pipeline,
         "backward_traverse",
         AsyncMock(return_value={"backward": n3, "failed_batches": n3.failed_batches}),
     )
-    monkeypatch.setattr(pipeline, "forward_traverse", AsyncMock(return_value=n4))
+    monkeypatch.setattr(
+        pipeline,
+        "forward_traverse",
+        AsyncMock(
+            return_value={
+                "forward": n4,
+                "failed_seeds": n4.failed_seeds,
+                "truncated_seeds": n4.truncated_seeds,
+            }
+        ),
+    )
 
     async def _annotate_dropping_a(params, inputs, *, resources):
         """Stands in for the converted Node 5.5 handler, in its own contract:
@@ -506,6 +516,8 @@ def test_run_traversal_witness_binds_to_nodes_port(
             n_forward=10, lambda_decay=0.1, alpha=1.0, beta=1.0,
             sort="cited_by_count:desc",
         ),
+        # Stated, never read from the clock: it enters the content address.
+        current_year=2026,
         co_citation=CoCitationParameters(min_strength=1, max_edges=None),
         llm=LLMConfig(
             model_id="claude-haiku-4-5-20251001",

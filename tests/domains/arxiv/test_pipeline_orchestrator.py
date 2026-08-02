@@ -85,6 +85,9 @@ def _params(
             beta=1.0,
             sort="cited_by_count:desc",
         ),
+        # Stated, never read from the clock: it enters the content address, so a
+        # wall-clock value would move every address in this file on New Year.
+        current_year=2026,
         co_citation=CoCitationParameters(
             min_strength=min_strength, max_edges=max_edges
         ),
@@ -115,8 +118,18 @@ def _install_stages(
         "backward_traverse",
         AsyncMock(return_value={"backward": n3, "failed_batches": n3.failed_batches}),
     )
+    # Node 4 likewise: the stand-in returns the same three-port mapping the real
+    # handler does, so run_traversal's unwrap is exercised for real.
     monkeypatch.setattr(
-        pipeline, "forward_traverse", AsyncMock(return_value=n4)
+        pipeline,
+        "forward_traverse",
+        AsyncMock(
+            return_value={
+                "forward": n4,
+                "failed_seeds": n4.failed_seeds,
+                "truncated_seeds": n4.truncated_seeds,
+            }
+        ),
     )
 
 

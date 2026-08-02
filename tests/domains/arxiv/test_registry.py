@@ -87,6 +87,9 @@ def _params(min_strength: int = 1) -> PipelineParameters:
             beta=1.0,
             sort="cited_by_count:desc",
         ),
+        # Stated, never read from the clock: it enters the content address, so a
+        # wall-clock value would move every address in this file on New Year.
+        current_year=2026,
         co_citation=CoCitationParameters(min_strength=min_strength, max_edges=None),
     )
 
@@ -101,14 +104,24 @@ def _install_stages(
     monkeypatch.setattr(
         pipeline, "fetch_seeds", AsyncMock(return_value=(resolved, failures))
     )
-    # Node 3 is a port-declared handler — its stand-in returns the declared
-    # output ports, not a bare Node3Result.
+    # Nodes 3 and 4 are port-declared handlers — their stand-ins return the
+    # declared output ports, not a bare Node3Result/Node4Result.
     monkeypatch.setattr(
         pipeline,
         "backward_traverse",
         AsyncMock(return_value={"backward": n3, "failed_batches": n3.failed_batches}),
     )
-    monkeypatch.setattr(pipeline, "forward_traverse", AsyncMock(return_value=n4))
+    monkeypatch.setattr(
+        pipeline,
+        "forward_traverse",
+        AsyncMock(
+            return_value={
+                "forward": n4,
+                "failed_seeds": n4.failed_seeds,
+                "truncated_seeds": n4.truncated_seeds,
+            }
+        ),
+    )
 
 
 def _run(

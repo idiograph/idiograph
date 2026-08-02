@@ -7,7 +7,6 @@
 import asyncio
 import math
 import os
-from datetime import date
 from typing import Literal
 
 import httpx
@@ -317,7 +316,7 @@ class _BackwardTraverseParams(BaseModel):
     """Declared param contract for the ``BackwardTraverse`` handler.
 
     The two ``BackwardParameters`` fields, mirrored here with their required-ness
-    intact, PLUS ``sleep_ms``.
+    intact, PLUS ``sleep_ms`` and ``current_year``.
 
     ``sleep_ms`` lives HERE and deliberately NOT on ``BackwardParameters``.
     That model is nested inside ``PipelineParameters``, which ``content_address``
@@ -326,14 +325,26 @@ class _BackwardTraverseParams(BaseModel):
     ``llm`` field documents. ``Node.params`` is not read by ``content_address``,
     so the key is free on this side of the fence.
 
-    Required with no default, like its two siblings: the sole home of the
-    production value is ``BACKWARD_SLEEP_MS``, and a model default would be a
-    second one, silently applying whenever a wiring forgot to state its pacing.
+    ``current_year`` is the OPPOSITE case and is here for the opposite reason.
+    It IS output-determining — it orders the ``_node3_score`` sort that
+    ``n_backward`` truncates — so it belongs in the address, and it is in the
+    address: its home is ``PipelineParameters.current_year``, top-level, which
+    ``content_address`` hashes. It appears on this model only as the marshalling
+    channel that carries the run's value to the stage. It is NOT a
+    ``BackwardParameters`` field because Node 4 scores against the same year and
+    two per-stage fields would have to agree with nothing enforcing agreement.
+    This stage no longer reads a clock; the value arrives stated.
+
+    Required with no default, like its siblings: the sole home of the production
+    pacing value is ``BACKWARD_SLEEP_MS`` and the sole home of the year is
+    ``PipelineParameters``, and a model default would be a second one — silently
+    applying whenever a wiring forgot to state its pacing or its year.
     """
 
     n_backward: int
     lambda_decay: float
     sleep_ms: int
+    current_year: int
 
 
 class _BackwardTraverseInputs(BaseModel):
@@ -364,13 +375,17 @@ async def backward_traverse(
 
     Contract (``core/executor.py`` handler convention):
       ``params``    — ``{"n_backward": int, "lambda_decay": float,
-                      "sleep_ms": int}``, validated as
-                      ``_BackwardTraverseParams``. All three are REQUIRED.
+                      "sleep_ms": int, "current_year": int}``, validated as
+                      ``_BackwardTraverseParams``. All four are REQUIRED.
                       ``n_backward``/``lambda_decay`` keep their home in
-                      ``PipelineParameters.backward``; ``run_traversal`` reads
-                      them there and marshals them in. ``sleep_ms`` is pacing,
-                      not configuration that reaches output — see that model for
-                      why it is not a ``BackwardParameters`` field.
+                      ``PipelineParameters.backward`` and ``current_year`` in
+                      ``PipelineParameters`` itself, top-level;
+                      ``run_traversal`` reads them there and marshals them in.
+                      ``sleep_ms`` is pacing, not configuration that reaches
+                      output — see that model for why it is not a
+                      ``BackwardParameters`` field, and for why
+                      ``current_year`` is not one either despite being fully
+                      output-determining.
       ``inputs``    — BOUND. The node declares ``BACKWARD_TRAVERSE_INPUT_PORTS``,
                       so the executor builds ``inputs`` solely from the
                       port-declared edges into it, keyed by ``to_port``:
@@ -410,6 +425,7 @@ async def backward_traverse(
     n_backward = config.n_backward
     lambda_decay = config.lambda_decay
     sleep_ms = config.sleep_ms
+    current_year = config.current_year
     client = resources["http_client"]
     api_key = resources["openalex_api_key"]
 
@@ -543,7 +559,11 @@ async def backward_traverse(
                 )
             )
 
-    current_year = date.today().year
+    # `current_year` arrives on `params` (see `_BackwardTraverseParams`). It is
+    # NOT read from the clock here: this sort is what `n_backward` truncates, so
+    # the year selects the corpus, and a wall-clock read would make two runs with
+    # identical seeds and identical parameters return different corpora under the
+    # same content address across a New Year boundary — a false HIT.
     scored = sorted(
         merged.values(),
         key=lambda r: (-_node3_score(r, lambda_decay, current_year), r.node_id),
@@ -627,20 +647,120 @@ def _node4_score(
     return alpha * velocity + effective_beta * accel * recency_weight
 
 
+#: Production acceleration method for this stage. THE ONE HOME for the value,
+#: mirroring ``BACKWARD_SLEEP_MS``: ``_ForwardTraverseParams.acceleration_method``
+#: is required with no default, so the choice cannot also hide as a model
+#: fallback, and ``run_traversal`` marshals THIS constant in explicitly rather
+#: than relying on an implicit default — a declared graph should show what the
+#: stage is configured with.
+#:
+#: It is deliberately NOT a ``ForwardParameters`` field. ``_compute_acceleration``
+#: admits exactly ONE non-raising method: ``"regression"`` raises
+#: ``NotImplementedError`` and every other value raises ``ValueError``. A hash
+#: over a value with one admissible member records nothing, so promoting it into
+#: the model would re-address every cached record to record a constant. The
+#: exemption is guarded by a test, not by this comment — see
+#: ``test_forward_traverse_handler.py``'s ``_compute_acceleration`` tripwire,
+#: which fails the day regression is implemented and is the instruction to move
+#: the field into the hashed model deliberately and pay the rebaselining then.
+FORWARD_ACCELERATION_METHOD = "first_difference"
+
+#: Port declarations for the ``ForwardTraverse`` node. These are the contract:
+#: a graph wiring this node declares them on the ``Node``, and ``validate_integrity``
+#: checks the edges against them without reading this handler's source.
+#:
+#: EXACTLY ONE input port. ``seeds`` is name-identical to ``AssembleGraph``'s and
+#: ``BackwardTraverse``'s input ports of the same name
+#: (``ASSEMBLE_GRAPH_INPUT_PORTS``, ``BACKWARD_TRAVERSE_INPUT_PORTS``), so one
+#: producer feeds all three stages with no renaming.
+FORWARD_TRAVERSE_INPUT_PORTS: list[PortDeclaration] = [
+    _untyped_port("seeds"),
+]
+
+#: THREE output ports.
+#:
+#: ``forward`` carries the whole ``Node4Result``. Not decomposed into
+#: ``papers``/``edges``: ``AssembleGraph`` already ships an input port literally
+#: named ``forward`` whose declared contract IS a whole ``Node4Result``
+#: (``_AssembleGraphInputs.forward``), so decomposing here would force reopening
+#: a merged handler's input contract only to arrive back at the same dataflow.
+#: This is the ``backward`` port's ruling running one node later.
+#:
+#: ``failed_seeds`` and ``truncated_seeds`` carry the same list objects also
+#: reachable inside the ``forward`` port's payload. The duplication is
+#: DELIBERATE: failure provenance rides a declared output port of its own node
+#: rather than being dug out of another port's payload by the consumer, and
+#: truncation is failure provenance — it records that OpenAlex had more citing
+#: papers than it returned, so the ranked set is a sample of an unknown larger
+#: one. Both are currently unconsumed, and that is legal —
+#: ``validate_integrity`` checks referential integrity and port-declared edges,
+#: never unconsumed outputs, and ``failed_batches``/``cycle_log``/
+#: ``co_citation_warnings``/``mismatches`` already dangle green.
+FORWARD_TRAVERSE_OUTPUT_PORTS: list[PortDeclaration] = [
+    _untyped_port("forward"),
+    _untyped_port("failed_seeds"),
+    _untyped_port("truncated_seeds"),
+]
+
+
+class _ForwardTraverseParams(BaseModel):
+    """Declared param contract for the ``ForwardTraverse`` handler.
+
+    The five ``ForwardParameters`` fields, mirrored here with their required-ness
+    intact, PLUS ``acceleration_method`` and ``current_year``.
+
+    ``acceleration_method`` lives HERE and deliberately NOT on
+    ``ForwardParameters``. That model is nested inside ``PipelineParameters``,
+    which ``content_address`` hashes whole, and ``_compute_acceleration`` admits
+    exactly one non-raising method — so hashing it would re-address every
+    existing cached record in order to record a constant. ``Node.params`` is not
+    read by ``content_address``, so the key is free on this side of the fence.
+    See ``FORWARD_ACCELERATION_METHOD`` for the tripwire guarding the exemption.
+
+    ``current_year`` is the OPPOSITE case and is here for the opposite reason.
+    It IS output-determining — it feeds ``_compute_velocity`` and ``_node4_score``
+    and so orders the sort that ``n_forward`` truncates — and it IS in the
+    address: its home is ``PipelineParameters.current_year``, top-level, which
+    ``content_address`` hashes. It appears on this model only as the marshalling
+    channel that carries the run's value to the stage. It is NOT a
+    ``ForwardParameters`` field because Node 3 scores against the same year and
+    two per-stage fields would have to agree with nothing enforcing agreement.
+    This stage no longer reads a clock; the value arrives stated.
+
+    Required with no default, like its siblings: the production
+    ``acceleration_method`` has one home (``FORWARD_ACCELERATION_METHOD``) and
+    the year has one (``PipelineParameters``), and a model default would be a
+    second — silently applying whenever a wiring forgot to state it. The
+    pre-conversion function defaulted both; that is exactly the second home this
+    conversion removes.
+    """
+
+    n_forward: int
+    lambda_decay: float
+    alpha: float
+    beta: float
+    sort: ForwardSort
+    acceleration_method: str
+    current_year: int
+
+
+class _ForwardTraverseInputs(BaseModel):
+    """Declared input contract for the ``ForwardTraverse`` handler.
+
+    One field per declared input port (``FORWARD_TRAVERSE_INPUT_PORTS``): the
+    resolved seed records to find citing papers for. The executor binds each
+    port-declared incoming edge as ``inputs[to_port]``, so the ``inputs`` mapping
+    validates directly against this model.
+    """
+
+    seeds: list[PaperRecord]
+
+
 async def forward_traverse(
-    seeds: list[PaperRecord],
-    api_key: str,
-    n_forward: int,
-    alpha: float,
-    beta: float,
-    lambda_decay: float,
-    *,
-    client: httpx.AsyncClient,
-    sort: ForwardSort,
-    acceleration_method: str = "first_difference",
-    current_year: int | None = None,
-) -> Node4Result:
-    """Forward traversal: fetch papers citing each seed, rank by α/β score.
+    params: dict, inputs: dict, *, resources: dict
+) -> dict:
+    """Executor node handler (type ``ForwardTraverse``) — forward traversal:
+    fetch papers citing each seed, rank by α/β score (Node 4).
 
     For each seed, issues an OpenAlex ``cites:<openalex_id>`` query and maps
     each returned work to a ``PaperRecord`` with ``hop_depth=1``. Papers
@@ -649,20 +769,76 @@ async def forward_traverse(
     merged set is scored by :func:`_node4_score`, sorted descending, and
     truncated to ``n_forward``.
 
-    ``sort`` is required (no default): OpenAlex's default sort order is not
-    contractual and produces nondeterministic "first 200" sets across runs.
-    See AMD-020.
+    Contract (``core/executor.py`` handler convention):
+      ``params``    — ``{"n_forward": int, "lambda_decay": float, "alpha": float,
+                      "beta": float, "sort": ForwardSort,
+                      "acceleration_method": str, "current_year": int}``,
+                      validated as ``_ForwardTraverseParams``. All seven are
+                      REQUIRED. The first five keep their home in
+                      ``PipelineParameters.forward`` and ``current_year`` in
+                      ``PipelineParameters`` itself, top-level;
+                      ``run_traversal`` reads them there and marshals them in.
+                      ``acceleration_method`` comes from
+                      ``FORWARD_ACCELERATION_METHOD`` — see that constant and
+                      ``_ForwardTraverseParams`` for why it is not a
+                      ``ForwardParameters`` field, and for why ``current_year``
+                      is not one either despite being fully output-determining.
+                      ``sort`` stays required for the reason it always was:
+                      OpenAlex's default sort order is not contractual and
+                      produces nondeterministic "first 200" sets across runs
+                      (AMD-020). Under this contract a missing key is a
+                      ``ValidationError`` rather than a ``TypeError``, which is
+                      the same refusal through the declared channel.
+      ``inputs``    — BOUND. The node declares ``FORWARD_TRAVERSE_INPUT_PORTS``,
+                      so the executor builds ``inputs`` solely from the
+                      port-declared edges into it, keyed by ``to_port``:
+                      ``{"seeds": [...]}``, validated as
+                      ``_ForwardTraverseInputs``. Undeclared keys are ignored. A
+                      caller invoking the handler directly shapes ``inputs`` the
+                      same way, so the direct and executor-driven paths share one
+                      contract.
+      ``resources`` — ``{"http_client": <httpx.AsyncClient>, "openalex_api_key":
+                      <str>}``, name-identical to Node 3's. Both belong to the
+                      run, not the graph, and neither enters a content address —
+                      a credential in particular is a RESOURCE and never a param.
+                      Keyword-only with no default: the node declares, so the
+                      executor always supplies, and a silent call without it
+                      would be a bug worth crashing on.
+      returns       — ``{"forward": Node4Result, "failed_seeds": [...],
+                      "truncated_seeds": [...]}`` — the declared output ports
+                      (``FORWARD_TRAVERSE_OUTPUT_PORTS``).
 
-    Returns a :class:`Node4Result` carrying the ranked papers, the citer→seed
-    citation edges, per-seed call failures, and per-seed truncation events
-    when OpenAlex reports a ``meta.count`` exceeding the returned-results
-    length (currently capped at 200).
+    A :class:`Node4Result` — the ranked papers, the citer→seed citation edges,
+    per-seed call failures, and per-seed truncation events when OpenAlex reports
+    a ``meta.count`` exceeding the returned-results length (currently capped at
+    200) — is CONSTRUCTED internally before the return mapping is built, and
+    rides the ``forward`` port whole.
+
+    THE ``failed_seeds`` AND ``truncated_seeds`` PORTS ARE CANONICAL. The same
+    lists are also reachable at ``forward.failed_seeds`` /
+    ``forward.truncated_seeds``, and that duplication is deliberate: a consumer
+    reads failure provenance off its own declared port, never by digging into
+    another port's payload.
 
     ``counts_by_year`` is fetched here only — it is not available from Node 0
     or Node 3's ``select=`` fields.
     """
-    if current_year is None:
-        current_year = date.today().year
+    config = _ForwardTraverseParams.model_validate(params)
+    data = _ForwardTraverseInputs.model_validate(inputs)
+    seeds = data.seeds
+    n_forward = config.n_forward
+    lambda_decay = config.lambda_decay
+    alpha = config.alpha
+    beta = config.beta
+    sort = config.sort
+    acceleration_method = config.acceleration_method
+    # Arrives on `params`, never from the clock: this year feeds the sort that
+    # `n_forward` truncates, so a wall-clock read would make two runs with
+    # identical seeds and identical parameters return different corpora under the
+    # same content address across a New Year boundary — a false HIT.
+    current_year = config.current_year
+    client = resources["http_client"]
+    api_key = resources["openalex_api_key"]
 
     seed_ids = {s.node_id for s in seeds}
     merged: dict[str, PaperRecord] = {}
@@ -760,12 +936,17 @@ async def forward_traverse(
     ]
     filtered_edges.sort(key=lambda e: (e.source_id, e.target_id))
 
-    return Node4Result(
+    result = Node4Result(
         papers=papers,
         edges=filtered_edges,
         failed_seeds=failed_seeds,
         truncated_seeds=truncated_seeds,
     )
+    return {
+        "forward": result,
+        "failed_seeds": result.failed_seeds,
+        "truncated_seeds": result.truncated_seeds,
+    }
 
 
 # ── Node 4.5 — Cycle Cleaning ───────────────────────────────────────────────
@@ -1838,6 +2019,10 @@ async def run_traversal(
     # read here; `sleep_ms` is pacing rather than output-determining config, so it
     # comes from BACKWARD_SLEEP_MS and is passed EXPLICITLY — the call site states
     # what the stage is configured with rather than leaning on a default.
+    # `current_year` is output-determining and comes from PipelineParameters
+    # top-level, marshalled explicitly here exactly as it is for Node 4 below: one
+    # stated year for the run, so the two stages cannot disagree and neither reads
+    # a clock.
     #
     # The returned mapping is unwrapped so `n3` stays the Node3Result the rest of
     # this function consumes unchanged.
@@ -1846,6 +2031,7 @@ async def run_traversal(
             "n_backward": parameters.backward.n_backward,
             "lambda_decay": parameters.backward.lambda_decay,
             "sleep_ms": BACKWARD_SLEEP_MS,
+            "current_year": parameters.current_year,
         },
         {"seeds": resolved},
         resources={"http_client": client, "openalex_api_key": api_key},
@@ -1861,22 +2047,45 @@ async def run_traversal(
         )
 
     _log.info("Pipeline: starting forward traversal")
-    n4 = await forward_traverse(
-        resolved,
-        api_key,
-        n_forward=parameters.forward.n_forward,
-        alpha=parameters.forward.alpha,
-        beta=parameters.forward.beta,
-        lambda_decay=parameters.forward.lambda_decay,
-        client=client,
-        sort=parameters.forward.sort,
+    # Node 4 is BOUND and DECLARING, exactly as Node 3 above: it declares
+    # FORWARD_TRAVERSE_INPUT_PORTS, so the executor builds its `inputs` from the
+    # port-declared edges into it keyed by `to_port`, and it declares the
+    # http_client and openalex_api_key resources, which the run supplies. Marshal
+    # this direct call into that same contract — one key per declared input port,
+    # the client and the credential through the resource channel — so the direct
+    # and executor-driven paths agree. The n_forward/lambda_decay/alpha/beta/sort
+    # config keeps its home in PipelineParameters and is read here;
+    # `acceleration_method` is not output-determining (one admissible method), so
+    # it comes from FORWARD_ACCELERATION_METHOD and is passed EXPLICITLY rather
+    # than leaning on a default; `current_year` is output-determining and comes
+    # from PipelineParameters top-level — the SAME value Node 3 was handed above.
+    #
+    # The returned mapping is unwrapped so `n4` stays the Node4Result the rest of
+    # this function consumes unchanged.
+    n4_ports = await forward_traverse(
+        {
+            "n_forward": parameters.forward.n_forward,
+            "lambda_decay": parameters.forward.lambda_decay,
+            "alpha": parameters.forward.alpha,
+            "beta": parameters.forward.beta,
+            "sort": parameters.forward.sort,
+            "acceleration_method": FORWARD_ACCELERATION_METHOD,
+            "current_year": parameters.current_year,
+        },
+        {"seeds": resolved},
+        resources={"http_client": client, "openalex_api_key": api_key},
     )
+    n4 = n4_ports["forward"]
     _log.info("Pipeline: forward traversal complete")
-    if n4.failed_seeds or n4.truncated_seeds:
+    # Failure provenance is read off its OWN declared ports, not dug out of the
+    # `forward` payload — those ports are the canonical carriers.
+    n4_failed_seeds = n4_ports["failed_seeds"]
+    n4_truncated_seeds = n4_ports["truncated_seeds"]
+    if n4_failed_seeds or n4_truncated_seeds:
         _log.warning(
             "Pipeline: Node 4 recorded %d failed seed(s), %d truncated",
-            len(n4.failed_seeds),
-            len(n4.truncated_seeds),
+            len(n4_failed_seeds),
+            len(n4_truncated_seeds),
         )
 
     # 3. Graph merge.

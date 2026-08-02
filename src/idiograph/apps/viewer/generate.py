@@ -30,8 +30,14 @@ from idiograph.domains.viewer import project_depth_provenance
 #   apps/viewer/generate.py -> parents[4] == repo root -> demo/registry.
 REPO_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_REGISTRY_ROOT = REPO_ROOT / "demo" / "registry"
+# Re-addressed by the IDG-080 `current_year` rebaselining: the year both
+# traversal stages score against became a top-level PipelineParameters field, so
+# it entered the content address. The record's payload is byte-identical apart
+# from that one field, retro-stamped with the year it was actually derived under
+# (frozen 2026-07-18). Previous address:
+# 4e368a767b8778a9b5487abc449c6dbdf37815da60783110eead60ee1d9b7200
 FROZEN_CRISPR_ADDRESS = (
-    "4e368a767b8778a9b5487abc449c6dbdf37815da60783110eead60ee1d9b7200"
+    "27429df2e265cb7792addfdf2aa054937bc82b34988bacfe0c049618ecf064d4"
 )
 
 _ASSETS = Path(__file__).resolve().parent / "assets"
