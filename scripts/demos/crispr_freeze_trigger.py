@@ -204,6 +204,15 @@ def _parameters() -> PipelineParameters:
             beta=1.0,
             sort="cited_by_count:desc",
         ),
+        # 2026 is NOT "the current year" and must never be read off the clock —
+        # a `date.today().year` here would silently re-address this run on 1 Jan.
+        # It is the value stamped into the parameters block of the committed
+        # frozen record (demo/registry/27429df2…f064d4.json), and current_year
+        # enters the content address like every other parameter. Both legs must
+        # key to that ONE address: move this and the HIT leg misses the committed
+        # record, so the demo silently re-derives at live OpenAlex and Anthropic
+        # cost (~50 minutes, ~1,100 LLM draws) and proves nothing about replay.
+        current_year=2026,
         llm=LLMConfig(
             model_id=_MODEL_ID,
             prompt_template_hash=prompt_template_hash(),
