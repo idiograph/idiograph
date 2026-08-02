@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from idiograph.domains.arxiv.models import (
     FailedSeed,
@@ -14,6 +15,7 @@ from idiograph.domains.arxiv.models import (
     TruncatedSeed,
 )
 from idiograph.domains.arxiv.pipeline import (
+    FORWARD_ACCELERATION_METHOD,
     _compute_acceleration,
     forward_traverse,
 )
@@ -97,7 +99,48 @@ class _CitesClient:
 
 
 def _run_forward(client: _CitesClient, **kwargs) -> Node4Result:
-    return asyncio.run(forward_traverse(client=client, **kwargs))
+    """Drive the ``ForwardTraverse`` handler through its declared contract.
+
+    Node 4 is now a port-declared executor handler: ``(params, inputs, *,
+    resources) -> dict``. This helper is the ONE site in this file that knows
+    that, so every behavioral test below keeps its pre-conversion call shape and
+    every assertion below still reads a ``Node4Result``. The marshalling here is
+    the same one ``run_traversal`` performs — one key per declared param, one key
+    per declared input port, the client and the credential through the resource
+    channel — so these tests exercise the contract the executor would use.
+
+    ``acceleration_method`` and ``current_year`` are REQUIRED on the params model
+    (the stage no longer defaults either, and no longer reads a clock), but both
+    default HERE so the behavioral tests keep their call shape. A fixed year
+    rather than the wall clock, deliberately: these tests pin ranking and
+    truncation, and a clock-derived year would make them re-rank on New Year.
+
+    The ``forward`` port is unwrapped because it carries the whole result; the
+    ``failed_seeds`` and ``truncated_seeds`` ports are asserted through it, and
+    on their own ports in ``test_forward_traverse_handler.py``, where they are
+    the subject.
+    """
+    out = asyncio.run(
+        forward_traverse(
+            {
+                "n_forward": kwargs["n_forward"],
+                "lambda_decay": kwargs["lambda_decay"],
+                "alpha": kwargs["alpha"],
+                "beta": kwargs["beta"],
+                "sort": kwargs["sort"],
+                "acceleration_method": kwargs.get(
+                    "acceleration_method", FORWARD_ACCELERATION_METHOD
+                ),
+                "current_year": kwargs.get("current_year", 2026),
+            },
+            {"seeds": kwargs["seeds"]},
+            resources={
+                "http_client": client,
+                "openalex_api_key": kwargs["api_key"],
+            },
+        )
+    )
+    return out["forward"]
 
 
 # ── Tests ───────────────────────────────────────────────────────────────────
@@ -594,22 +637,57 @@ def test_node4_no_truncation_under_cap():
 
 
 def test_node4_sort_parameter_required():
-    """Calling forward_traverse without sort raises TypeError."""
+    """Invoking ForwardTraverse without `sort` is REFUSED — the handler does not
+    run and does not pick an order of its own.
+
+    The refusal changed shape with the port conversion and not in strength.
+    Pre-conversion `sort` was a keyword-only parameter with no default, so a
+    missing one was a ``TypeError`` at the call boundary; now it is a required
+    field on ``_ForwardTraverseParams``, so it is a ``ValidationError`` from
+    ``model_validate`` — the same refusal, through the declared channel.
+
+    What must NOT change is that it fails at all. AMD-020: OpenAlex's default
+    sort order is not contractual and produces nondeterministic "first 200" sets
+    across runs, so a stage that silently chose an order would return a
+    different corpus run to run under one content address. Asserted with the
+    client's call log so the refusal is proven to be PRE-FLIGHT — no OpenAlex
+    request is issued — rather than a late failure after the traversal already
+    ran on some default.
+    """
     client = _CitesClient({"W_SEED": []})
     seeds = [_seed_record("arxiv:seed.1", "W_SEED")]
-    with pytest.raises(TypeError):
+    params = {
+        "n_forward": 10,
+        "alpha": 1.0,
+        "beta": 0.0,
+        "lambda_decay": 0.05,
+        "acceleration_method": FORWARD_ACCELERATION_METHOD,
+        "current_year": 2026,
+    }
+    assert "sort" not in params
+
+    with pytest.raises(ValidationError) as exc:
         asyncio.run(
             forward_traverse(
-                seeds=seeds,
-                api_key="k",
-                n_forward=10,
-                alpha=1.0,
-                beta=0.0,
-                lambda_decay=0.05,
-                current_year=2026,
-                client=client,
+                params,
+                {"seeds": seeds},
+                resources={"http_client": client, "openalex_api_key": "k"},
             )
         )
+
+    assert "sort" in str(exc.value)
+    assert client.calls == []
+
+    # Control: the SAME params with `sort` supplied are accepted, so the failure
+    # above is specifically the missing key and not a malformed mapping.
+    asyncio.run(
+        forward_traverse(
+            {**params, "sort": "cited_by_count:desc"},
+            {"seeds": seeds},
+            resources={"http_client": client, "openalex_api_key": "k"},
+        )
+    )
+    assert client.calls
 
 
 def test_node4_sort_passes_through_to_query():
@@ -908,15 +986,20 @@ def test_node4_does_not_close_client():
     try:
         asyncio.run(
             forward_traverse(
-                seeds=seeds,
-                api_key="k",
-                n_forward=10,
-                alpha=1.0,
-                beta=0.0,
-                lambda_decay=0.05,
-                sort="cited_by_count:desc",
-                current_year=2026,
-                client=client,
+                {
+                    "n_forward": 10,
+                    "alpha": 1.0,
+                    "beta": 0.0,
+                    "lambda_decay": 0.05,
+                    "sort": "cited_by_count:desc",
+                    "acceleration_method": FORWARD_ACCELERATION_METHOD,
+                    "current_year": 2026,
+                },
+                {"seeds": seeds},
+                # The client arrives through the resource channel now; the
+                # lifecycle claim is unchanged — the handler neither constructed
+                # it nor owns it, so it must not close it.
+                resources={"http_client": client, "openalex_api_key": "k"},
             )
         )
         assert client.is_closed is False

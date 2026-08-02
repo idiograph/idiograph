@@ -126,6 +126,13 @@ def _run(client, **kwargs) -> Node3Result:
 
     The ``backward`` port is unwrapped because it carries the whole result; the
     ``failed_batches`` port is asserted separately, where it is the subject.
+
+    ``current_year`` is REQUIRED on the params model — the stage no longer reads
+    a clock (IDG-080 clause 3) — but it defaults HERE, in the one helper that
+    knows the contract, so the behavioral tests below keep their call shape.
+    A fixed year rather than the wall clock, deliberately: these tests pin
+    ranking and truncation, and a clock-derived year would make them re-rank on
+    New Year. The scoring tests in this file already pin 2026 directly.
     """
     out = asyncio.run(
         backward_traverse(
@@ -133,6 +140,7 @@ def _run(client, **kwargs) -> Node3Result:
                 "n_backward": kwargs["n_backward"],
                 "lambda_decay": kwargs["lambda_decay"],
                 "sleep_ms": kwargs["sleep_ms"],
+                "current_year": kwargs.get("current_year", 2026),
             },
             {"seeds": kwargs["seeds"]},
             resources={

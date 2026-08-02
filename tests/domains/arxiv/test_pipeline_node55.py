@@ -487,6 +487,9 @@ def _params(
             beta=1.0,
             sort="cited_by_count:desc",
         ),
+        # Stated, never read from the clock: it enters the content address, so a
+        # wall-clock value would move every address in this file on New Year.
+        current_year=2026,
         llm=llm,
         **extra,
     )
@@ -510,7 +513,12 @@ def test_llm_free_run_skips_node(monkeypatch: pytest.MonkeyPatch) -> None:
         return {"backward": n3, "failed_batches": n3.failed_batches}
 
     async def _fake_forward(*a, **k):
-        return n4
+        # Node 4 likewise: the declared output ports, not a bare Node4Result.
+        return {
+            "forward": n4,
+            "failed_seeds": n4.failed_seeds,
+            "truncated_seeds": n4.truncated_seeds,
+        }
 
     called = {"annotate": False}
 

@@ -78,8 +78,18 @@ def _port(name: str) -> PortDeclaration:
 
 def _params(n_backward: int = 10) -> dict:
     """Params as the direct call site shapes them. `sleep_ms=0` because tests do
-    not pace: the production value has exactly one home, and it is not here."""
-    return {"n_backward": n_backward, "lambda_decay": 0.05, "sleep_ms": 0}
+    not pace: the production value has exactly one home, and it is not here.
+
+    `current_year` is stated for the opposite reason — it IS output-determining,
+    the stage reads no clock, and its home is the top-level
+    `PipelineParameters.current_year`, so it must arrive on params.
+    """
+    return {
+        "n_backward": n_backward,
+        "lambda_decay": 0.05,
+        "sleep_ms": 0,
+        "current_year": 2026,
+    }
 
 
 def _fixture_works() -> dict[str, dict]:
