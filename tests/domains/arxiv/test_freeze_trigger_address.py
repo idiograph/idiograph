@@ -21,6 +21,14 @@ artifact ``demo/registry/27429df2…f064d4.json``:
 
 Both are offline: the record is read from disk, the address is computed by
 ``registry.content_address``, and no network call or credential is involved.
+
+When a test here goes red on a LEGITIMATE edit to the Node 5.5 prompt
+template or the parse contract (both ride into the address via
+``prompt_template_hash`` / ``parse_contract_hash``), the remedy is a
+RE-FREEZE of the demo artifact (~50 minutes, ~1,100 live LLM draws, real
+OpenAlex and Anthropic cost) — never an update to ``FROZEN_ADDRESS``, which
+would silently convert this guard into a tautology and destroy the
+record-replay contract the demo exists to demonstrate.
 """
 
 import importlib.util

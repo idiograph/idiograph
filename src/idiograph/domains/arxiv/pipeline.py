@@ -1781,6 +1781,108 @@ def _run_leiden(
     )
 
 
+# ── Node Enrichment — End-of-Pipeline Merge ─────────────────────────────────
+
+
+#: Port declarations for the ``EnrichNodes`` node. These are the contract:
+#: a graph wiring this node declares them on the ``Node``, and ``validate_integrity``
+#: checks the edges against them without reading this handler's source.
+#:
+#: ``depth_metrics``, ``pagerank`` and ``communities`` are deliberately
+#: name-identical to their producers' declared output ports
+#: (``COMPUTE_DEPTH_METRICS_OUTPUT_PORTS``, ``COMPUTE_PAGERANK_OUTPUT_PORTS``,
+#: ``DETECT_COMMUNITIES_OUTPUT_PORTS``), so a wiring reads
+#: ``depth.depth_metrics -> enrich.depth_metrics``,
+#: ``pagerank.pagerank -> enrich.pagerank`` and
+#: ``communities.communities -> enrich.communities`` with no adapter node between
+#: them. ``nodes`` is the same node-set port every metric stage takes, and binds
+#: the same node set they were computed over — this is a four-input join, so the
+#: three metric ports and the node set must describe one graph.
+ENRICH_NODES_INPUT_PORTS: list[PortDeclaration] = [
+    _untyped_port("nodes"),
+    _untyped_port("depth_metrics"),
+    _untyped_port("pagerank"),
+    _untyped_port("communities"),
+]
+
+#: EXACTLY ONE output port, carrying the whole enriched ``list[PaperRecord]``.
+#: Ports are named for what the CONSUMER consumes them by, and a bare ``nodes``
+#: would be too generic to read at a graph edge, where the port name is all a
+#: wiring shows — the ``COMPUTE_DEPTH_METRICS_OUTPUT_PORTS`` rationale. Here it
+#: would also collide in the reader's eye with this stage's own ``nodes`` INPUT
+#: port, which carries the UNenriched set.
+ENRICH_NODES_OUTPUT_PORTS: list[PortDeclaration] = [
+    _untyped_port("enriched_nodes"),
+]
+
+
+class _EnrichNodesInputs(BaseModel):
+    """Declared input contract for the ``EnrichNodes`` handler.
+
+    One field per declared input port (``ENRICH_NODES_INPUT_PORTS``): the node
+    set to enrich, and the three metric payloads merged onto it. The executor
+    binds each port-declared incoming edge as ``inputs[to_port]``, so the
+    ``inputs`` mapping validates directly against this model.
+    """
+
+    nodes: list[PaperRecord]
+    depth_metrics: dict[str, DepthMetrics]
+    pagerank: dict[str, float]
+    communities: CommunityResult
+
+
+async def enrich_nodes(params: dict, inputs: dict) -> dict:
+    """Executor node handler (type ``EnrichNodes``) — merge the computed metrics
+    onto the assembled node set.
+
+    For every input node, emits a copy carrying ``traversal_direction`` and
+    ``hop_depth_per_root`` from the depth metrics, ``pagerank`` from the pagerank
+    mapping, and ``community_id`` from the community assignments. The write path
+    is immutable — ``model_copy(update=...)`` — and Node 6 owns the canonical
+    ``hop_depth_per_root`` / ``traversal_direction``, so the input records are
+    left as they were.
+
+    Contract (``core/executor.py`` handler convention):
+      ``params``  — UNUSED. This stage takes no configuration; it is a four-input
+                    join and nothing about the merge is tunable. Nothing is read
+                    off ``params`` and no parameters model exists for it.
+      ``inputs``  — BOUND. The node declares ``ENRICH_NODES_INPUT_PORTS``, so the
+                    executor builds ``inputs`` solely from the port-declared
+                    edges into it, keyed by ``to_port``: ``{"nodes": [...],
+                    "depth_metrics": {...}, "pagerank": {...},
+                    "communities": CommunityResult}``, validated as
+                    ``_EnrichNodesInputs``. Undeclared keys are ignored. A caller
+                    invoking the handler directly shapes ``inputs`` the same way,
+                    so the direct and executor-driven paths share one contract.
+      returns     — ``{"enriched_nodes": [PaperRecord, ...]}`` — the single
+                    declared output port (``ENRICH_NODES_OUTPUT_PORTS``),
+                    carrying the whole enriched node set.
+
+    ``_EnrichNodesInputs`` validates SHAPE, not COVERAGE: a ``node_id`` present
+    in ``nodes`` but absent from any of the three mappings raises ``KeyError``
+    out of the merge, which is exactly what it did before this stage was bound.
+    Pure — no I/O, no mutation of inputs.
+    """
+    data = _EnrichNodesInputs.model_validate(inputs)
+    depth = data.depth_metrics
+    prank = data.pagerank
+    communities = data.communities
+
+    enriched = [
+        node.model_copy(
+            update={
+                "traversal_direction": depth[node.node_id].traversal_direction,
+                "hop_depth_per_root": depth[node.node_id].hop_depth_per_root,
+                "pagerank": prank[node.node_id],
+                "community_id": communities.community_assignments[node.node_id],
+            }
+        )
+        for node in data.nodes
+    ]
+
+    return {"enriched_nodes": enriched}
+
+
 # ── Pipeline Orchestrator ───────────────────────────────────────────────────
 
 
@@ -2275,19 +2377,30 @@ async def run_traversal(
     )["communities"]
     _log.info("Pipeline: community detection complete")
 
-    # 5. End-of-pipeline enrichment (immutable write path — Node 6 owns the
-    #    canonical hop_depth_per_root / traversal_direction).
-    enriched_nodes = [
-        node.model_copy(
-            update={
-                "traversal_direction": depth[node.node_id].traversal_direction,
-                "hop_depth_per_root": depth[node.node_id].hop_depth_per_root,
-                "pagerank": prank[node.node_id],
-                "community_id": communities.community_assignments[node.node_id],
-            }
+    # 5. End-of-pipeline enrichment is BOUND: it declares ENRICH_NODES_INPUT_PORTS,
+    #    so the executor builds its `inputs` from the port-declared edges into it,
+    #    keyed by `to_port`. Marshal this direct call into that same contract — one
+    #    key per declared input port — so the direct and executor-driven paths
+    #    agree. It takes no configuration, so `params` is empty. The returned
+    #    mapping is unwrapped so `enriched_nodes` stays the `list[PaperRecord]` the
+    #    rest of this function consumes unchanged.
+    #
+    #    The merge is an immutable write path (model_copy) and Node 6 owns the
+    #    canonical hop_depth_per_root / traversal_direction. The `nodes` port binds
+    #    whichever `unified_nodes` is in scope HERE — Node 5.5 above may have
+    #    rebound it to the annotated copies, and the enrichment is a consumer of
+    #    that rebinding: the annotations ride into `enriched_nodes` through it.
+    enriched_nodes = (
+        await enrich_nodes(
+            {},
+            {
+                "nodes": unified_nodes,
+                "depth_metrics": depth,
+                "pagerank": prank,
+                "communities": communities,
+            },
         )
-        for node in unified_nodes
-    ]
+    )["enriched_nodes"]
 
     # 6. Merged edge view. Suppressed originals are NOT in `edges` — they live in
     #    cycle_log.suppressed_edges for audit.
