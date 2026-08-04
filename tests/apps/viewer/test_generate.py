@@ -8,15 +8,12 @@ a non-empty, self-contained (no external references) HTML file that embeds the
 projection data and the vendored D3 bundle.
 """
 
-from idiograph.apps.viewer.generate import (
-    generate_viewer_html,
-    load_frozen_result,
-    render_viewer,
-)
+from idiograph.apps.viewer.generate import generate_viewer_html, render_viewer
+from idiograph.demo import load_frozen_crispr
 
 
 def test_generate_html_non_empty_and_self_contained():
-    html = generate_viewer_html(load_frozen_result())
+    html = generate_viewer_html(load_frozen_crispr())
     assert html.startswith("<!DOCTYPE html>")
     assert len(html) > 100_000  # inlined D3 + ~1,885 nodes of data
     # Self-contained: nothing is fetched over the network at load time.
@@ -30,7 +27,7 @@ def test_generate_html_non_empty_and_self_contained():
 
 
 def test_generated_html_carries_load_bearing_signals():
-    html = generate_viewer_html(load_frozen_result())
+    html = generate_viewer_html(load_frozen_crispr())
     # cites vs co-citation distinction, cycle count, local + lag caveats.
     assert "cites" in html and "co_citation" in html
     assert "suppressed" in html
@@ -47,7 +44,7 @@ def test_render_viewer_writes_file(tmp_path):
 
 
 def test_no_unreplaced_markers(tmp_path):
-    html = generate_viewer_html(load_frozen_result())
+    html = generate_viewer_html(load_frozen_crispr())
     for marker in ("/*__TITLE__*/", "/*__CSS__*/", "/*__D3__*/",
                    "/*__DATA__*/", "/*__JS__*/"):
         assert marker not in html, f"unreplaced marker {marker}"

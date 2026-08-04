@@ -62,6 +62,33 @@ def content_address(
     return hashlib.sha256(encoded).hexdigest()
 
 
+def sole_record_address(root: Path) -> str:
+    """The content address of the ONE record stored under ``root``.
+
+    A registry names each record by its own content address (``<address>.json``),
+    so a root holding exactly one record already states that record's address in
+    the filename. Reading it back off disk is therefore strictly better than
+    hand-authoring the hex beside the file: the two cannot drift, because there
+    is only one of them.
+
+    Deliberately generic. It knows nothing about which record it finds and
+    resolves no root of its own — ``root`` is always the caller's parameter, so
+    the registry layer never acquires knowledge of any particular artifact.
+
+    Zero or several matches raise :class:`ValueError`. Both are checkout or
+    packaging faults rather than caller errors, so the message names the root and
+    the count: those two facts are what locate the fault.
+    """
+    root = Path(root)
+    records = sorted(root.glob("*.json"))
+    if len(records) != 1:
+        raise ValueError(
+            f"expected exactly one *.json record under {root}, found "
+            f"{len(records)}"
+        )
+    return records[0].stem
+
+
 def address_of(result: PipelineResult) -> str:
     """The content address a ``PipelineResult`` addresses to.
 

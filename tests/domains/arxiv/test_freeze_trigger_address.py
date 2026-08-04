@@ -9,8 +9,8 @@ OpenAlex and Anthropic cost. If they drift, the HIT leg misses the committed
 record and the demo silently re-derives instead of replaying — a failure the
 suite could not otherwise see, because nothing imports the script.
 
-These tests bind the script's live parameter construction to the committed
-artifact ``demo/registry/27429df2…f064d4.json``:
+These tests bind the script's live parameter construction to the record packaged
+under ``idiograph.demo``:
 
 1. The address computed from the record's RESOLVED SEEDS plus the script's OWN
    ``_parameters()`` equals the record's filename. Deliberately NOT
@@ -18,8 +18,10 @@ artifact ``demo/registry/27429df2…f064d4.json``:
    themselves and would pass no matter how far the script had drifted.
 2. The script's parameter dump equals the record's ``parameters`` block field for
    field — the same binding, stated finely enough to name which field moved.
+3. ``frozen_crispr_address()`` — which production code derives by globbing the
+   packaged registry — equals the literal authored below.
 
-Both are offline: the record is read from disk, the address is computed by
+All three are offline: the record is read from disk, the address is computed by
 ``registry.content_address``, and no network call or credential is involved.
 
 When a test here goes red on a LEGITIMATE edit to the Node 5.5 prompt
@@ -38,17 +40,25 @@ from pathlib import Path
 
 import pytest
 
+from idiograph.demo import REGISTRY_ROOT, frozen_crispr_address
 from idiograph.domains.arxiv.models import PipelineParameters
 from idiograph.domains.arxiv.registry import content_address
 
-# The committed frozen artifact this demo replays. The address IS the filename —
-# that identity is what these tests exist to hold.
+# The frozen artifact this demo replays. The address IS the filename — that
+# identity is what these tests exist to hold.
+#
+# This literal is the ONLY hand-authored copy of the address left in the tree
+# (IDG-087 deleted the rest in favour of deriving it from the packaged record's
+# filename). It stays authored ON PURPOSE: a test that derived the address the
+# same way production does would compare a value against itself and pass for any
+# record whatsoever. An independent second opinion has to be independently
+# written down.
 FROZEN_ADDRESS = (
     "27429df2e265cb7792addfdf2aa054937bc82b34988bacfe0c049618ecf064d4"
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_FROZEN_RECORD = _REPO_ROOT / "demo" / "registry" / f"{FROZEN_ADDRESS}.json"
+_FROZEN_RECORD = REGISTRY_ROOT / f"{FROZEN_ADDRESS}.json"
 _DEMO_SCRIPT = _REPO_ROOT / "scripts" / "demos" / "crispr_freeze_trigger.py"
 
 
@@ -83,8 +93,26 @@ def frozen_record() -> dict:
 
 
 def test_frozen_record_is_present() -> None:
-    """The fixture these tests assert against is the committed artifact."""
+    """The fixture these tests assert against is the packaged artifact."""
     assert _FROZEN_RECORD.is_file(), f"frozen artifact missing: {_FROZEN_RECORD}"
+
+
+def test_packaged_registry_resolves_to_the_authored_address() -> None:
+    """What production DERIVES equals what this file AUTHORS.
+
+    ``frozen_crispr_address()`` reads the address off the packaged registry's
+    sole filename; ``FROZEN_ADDRESS`` above is written out by hand. Since
+    IDG-087 that pair is the only place the derived and the authored address
+    meet, so this is the seam where a re-freeze — a new record under a new
+    filename — becomes visible to the suite.
+    """
+    assert frozen_crispr_address() == FROZEN_ADDRESS, (
+        "the packaged registry no longer holds the record this file names. The "
+        "remedy is a RE-FREEZE of the demo artifact (~50 minutes, ~1,100 live "
+        "LLM draws) and repackaging the record it produces — NEVER an edit to "
+        "FROZEN_ADDRESS, which would make this test agree with whatever "
+        "happens to be on disk and destroy the guard entirely."
+    )
 
 
 def test_script_parameters_address_the_frozen_record(demo, frozen_record) -> None:

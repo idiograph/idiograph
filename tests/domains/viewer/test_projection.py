@@ -13,7 +13,7 @@ import json
 
 import pytest
 
-from idiograph.apps.viewer.generate import load_frozen_result
+from idiograph.demo import load_frozen_crispr
 from idiograph.domains.arxiv.models import (
     BackwardParameters,
     CitationEdge,
@@ -300,7 +300,7 @@ def test_caveats_present():
 
 @pytest.fixture(scope="module")
 def frozen_projection():
-    return project_depth_provenance(load_frozen_result())
+    return project_depth_provenance(load_frozen_crispr())
 
 
 def test_frozen_full_corpus_rendered(frozen_projection):
@@ -337,6 +337,6 @@ def test_frozen_all_nodes_positioned_and_in_unit_square(frozen_projection):
 
 
 def test_frozen_determinism_byte_identical():
-    a = project_depth_provenance(load_frozen_result())
-    b = project_depth_provenance(load_frozen_result())
+    a = project_depth_provenance(load_frozen_crispr())
+    b = project_depth_provenance(load_frozen_crispr())
     assert json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
