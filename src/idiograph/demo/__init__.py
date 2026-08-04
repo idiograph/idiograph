@@ -12,6 +12,14 @@ and the static viewer replay. It lives inside the package rather than at the rep
 root so it ships in the wheel — an installed idiograph can render the viewer and
 run the HIT leg with no checkout present.
 
+The record was re-addressed once, by the IDG-080 ``current_year`` rebaselining:
+the year both traversal stages score against became a top-level
+``PipelineParameters`` field and so entered the content address. Its payload is
+byte-identical apart from that one field, retro-stamped with the year it was
+actually derived under (frozen 2026-07-18). The superseded address is not
+restated here — git holds it, and a dead hex in the tree is one more thing that
+can be mistaken for a live one.
+
 This module is the ONE place that knows where that record sits and what it is
 addressed by. Nothing else in the tree hand-authors the address: it is read back
 off the filename by :func:`frozen_crispr_address`, so the record and its address
