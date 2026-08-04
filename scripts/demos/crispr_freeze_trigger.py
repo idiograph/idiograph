@@ -353,9 +353,15 @@ async def _main() -> int:
         timeout=OPENALEX_TIMEOUT_SECONDS,
         event_hooks={"request": [precheck_openalex]},
     ) as precheck_client:
-        precheck_resolved, _ = await resolve_seeds(
-            SEEDS, client=precheck_client, api_key=openalex_key
+        precheck_node0 = await resolve_seeds(
+            {"seeds": SEEDS},
+            {},
+            resources={
+                "http_client": precheck_client,
+                "openalex_api_key": openalex_key,
+            },
         )
+    precheck_resolved = precheck_node0["seeds"]
     address = content_address(
         [record.node_id for record in precheck_resolved], parameters
     )
