@@ -35,6 +35,7 @@ from idiograph.domains.arxiv.registry import (
     PipelineRegistry,
     address_of,
     content_address,
+    sole_record_address,
 )
 
 _CLIENT = object()  # sentinel — every network stage is mocked, so it is unused.
@@ -304,3 +305,55 @@ def test_seed_failures_survive_but_do_not_alter_address(
     restored = reg.read(address)
     assert restored.seed_failures == with_f.seed_failures
     assert restored.seed_failures[0].seed == {"doi": "bad"}
+
+
+# ── Sole-record address ──────────────────────────────────────────────────────
+
+
+def test_sole_record_address_returns_the_stem(tmp_path: Path) -> None:
+    """One record under the root → its filename stem, which IS its address.
+
+    The point of the helper: a single-record root already states its record's
+    address, so nothing downstream has to hand-author the hex beside the file.
+    """
+    address = "a" * 64
+    (tmp_path / f"{address}.json").write_text("{}", encoding="utf-8")
+
+    assert sole_record_address(tmp_path) == address
+
+
+def test_sole_record_address_ignores_non_json_neighbours(tmp_path: Path) -> None:
+    """Only ``*.json`` counts — a stray README or a torn ``.json.tmp`` from the
+    write path's atomic swap must not make a valid root look ambiguous."""
+    address = "b" * 64
+    (tmp_path / f"{address}.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "README.md").write_text("notes", encoding="utf-8")
+    (tmp_path / "leftover.json.tmp").write_text("{}", encoding="utf-8")
+
+    assert sole_record_address(tmp_path) == address
+
+
+def test_sole_record_address_rejects_an_empty_root(tmp_path: Path) -> None:
+    """Zero records raises, naming the root and the count — the two facts that
+    locate a broken checkout or a packaging fault."""
+    with pytest.raises(ValueError) as excinfo:
+        sole_record_address(tmp_path)
+
+    message = str(excinfo.value)
+    assert str(tmp_path) in message
+    assert "0" in message
+
+
+def test_sole_record_address_rejects_multiple_records(tmp_path: Path) -> None:
+    """Two records raises rather than picking one: "the sole record" is a claim
+    about the directory, and silently choosing a winner would launder a fault
+    into a plausible-looking address."""
+    (tmp_path / f"{'c' * 64}.json").write_text("{}", encoding="utf-8")
+    (tmp_path / f"{'d' * 64}.json").write_text("{}", encoding="utf-8")
+
+    with pytest.raises(ValueError) as excinfo:
+        sole_record_address(tmp_path)
+
+    message = str(excinfo.value)
+    assert str(tmp_path) in message
+    assert "2" in message
