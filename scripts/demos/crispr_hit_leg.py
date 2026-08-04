@@ -182,9 +182,15 @@ async def _diagnose_miss(openalex_key: str) -> str:
     STOP report, so the finding names the address that actually moved.
     """
     async with httpx.AsyncClient(timeout=OPENALEX_TIMEOUT_SECONDS) as http_client:
-        resolved, _ = await resolve_seeds(
-            SEEDS, client=http_client, api_key=openalex_key
+        node0 = await resolve_seeds(
+            {"seeds": SEEDS},
+            {},
+            resources={
+                "http_client": http_client,
+                "openalex_api_key": openalex_key,
+            },
         )
+    resolved = node0["seeds"]
     return content_address([r.node_id for r in resolved], _parameters())
 
 

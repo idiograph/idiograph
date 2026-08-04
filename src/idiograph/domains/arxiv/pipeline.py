@@ -2027,34 +2027,110 @@ async def assemble_graph(params: dict, inputs: dict) -> dict:
     }
 
 
-async def resolve_seeds(
-    seeds: list[dict],
-    *,
-    client: httpx.AsyncClient,
-    api_key: str,
-) -> tuple[list[PaperRecord], list[SeedResolutionFailure]]:
-    """Node 0 resolution phase, extracted so the uncached orchestrator and the
-    read-through cache share ONE resolution per invocation.
+#: Port declarations for the ``ResolveSeeds`` node. These are the contract:
+#: a graph wiring this node declares them on the ``Node``, and ``validate_integrity``
+#: checks the edges against them without reading this handler's source.
+#:
+#: AN EMPTY LIST, NOT ``None``. Per ``core/executor.py::_is_bound`` an empty list
+#: IS a declaration: the node is bound and accepts no inputs, so the executor
+#: builds its ``inputs`` from port-declared incoming edges — of which there are
+#: none — rather than handing it every upstream payload keyed by source id.
+#: ``None`` would leave the node in the legacy regime, which is the opposite of
+#: this conversion. Node 0 is the head of the pipeline: its seed set arrives as
+#: CONFIGURATION on ``params``, not as dataflow from a producer, so having
+#: nothing to bind is the shape of the stage rather than an omission.
+RESOLVE_SEEDS_INPUT_PORTS: list[PortDeclaration] = []
 
-    ``seeds`` is a list of seed identifier dicts (``{"arxiv_id": ...}`` /
-    ``{"doi": ...}``) — the exact shape ``fetch_seeds`` accepts. Returns
-    ``(resolved, seed_failures)``: the resolved ``PaperRecord`` list that feeds
-    BOTH the content-address key and traversal, and the typed per-seed
-    resolution failures.
+#: TWO output ports.
+#:
+#: ``seeds`` carries the resolved ``list[PaperRecord]`` that feeds BOTH the
+#: content-address key and traversal. It is name-identical to the ``seeds`` input
+#: port ``BACKWARD_TRAVERSE_INPUT_PORTS``, ``FORWARD_TRAVERSE_INPUT_PORTS`` and
+#: ``ASSEMBLE_GRAPH_INPUT_PORTS`` already declare, so a future wiring feeds all
+#: three consumers from this one producer with no renaming.
+#:
+#: ``seed_failures`` carries the typed per-seed resolution failures. Not folded
+#: into the ``seeds`` port as one struct: that shape was considered and rejected,
+#: on the grounds already written into ``BACKWARD_TRAVERSE_OUTPUT_PORTS``' comment
+#: — failure provenance rides its own declared output port rather than being dug
+#: out of another port's payload by the consumer. The port is currently
+#: unconsumed by any graph, and that is legal — ``validate_integrity`` checks
+#: referential integrity and port-declared edges, never unconsumed outputs.
+RESOLVE_SEEDS_OUTPUT_PORTS: list[PortDeclaration] = [
+    _untyped_port("seeds"),
+    _untyped_port("seed_failures"),
+]
+
+
+class _ResolveSeedsParams(BaseModel):
+    """Declared param contract for the ``ResolveSeeds`` handler.
+
+    One field: the requested seed identifier dicts. It is CONFIGURATION and it
+    belongs on ``params`` — plain JSON, serializable, no network types — because
+    Node 0 is the head of the pipeline and has no producer to bind a seed set
+    from. The credential and the HTTP client that resolve it are RESOURCES,
+    declared on the node and supplied by the run; neither is a param, and a
+    credential never becomes one.
+
+    Required with no default. An empty seed list is not a configuration state to
+    fall back to — it is the halt this stage raises ``ValueError`` on — so a
+    model default would only turn a wiring that forgot to state its seeds into a
+    run that resolves nothing.
+    """
+
+    seeds: list[dict]
+
+
+async def resolve_seeds(params: dict, inputs: dict, *, resources: dict) -> dict:
+    """Executor node handler (type ``ResolveSeeds``) — Node 0 seed resolution.
+
+    The resolution phase, held apart from traversal so the uncached orchestrator
+    and the read-through cache share ONE resolution per invocation.
+
+    Contract (``core/executor.py`` handler convention):
+      ``params``    — ``{"seeds": [request dicts]}``, validated as
+                      ``_ResolveSeedsParams``. Seed identifier dicts
+                      (``{"arxiv_id": ...}`` / ``{"doi": ...}``) — the exact
+                      shape ``fetch_seeds`` accepts; shape classification is
+                      Node 0's own job. REQUIRED.
+      ``inputs``    — BOUND AND EMPTY. The node declares
+                      ``RESOLVE_SEEDS_INPUT_PORTS``, which is ``[]``: an empty
+                      list is a declaration, so the node is on the bound side of
+                      the fence and accepts no inputs. Nothing is read off
+                      ``inputs`` and no inputs model exists for it. A caller
+                      invoking the handler directly passes ``{}``, so the direct
+                      and executor-driven paths share one contract.
+      ``resources`` — ``{"http_client": <httpx.AsyncClient>, "openalex_api_key":
+                      <str>}``. Name-identical to what ``backward_traverse`` and
+                      ``forward_traverse`` declare. Both belong to the run, not
+                      the graph, and neither enters a content address — a
+                      credential in particular is a RESOURCE and never a param.
+                      Keyword-only with no default: the node declares, so the
+                      executor always supplies, and a silent call without it
+                      would be a bug worth crashing on.
+      returns       — ``{"seeds": [PaperRecord], "seed_failures":
+                      [SeedResolutionFailure]}`` — the declared output ports
+                      (``RESOLVE_SEEDS_OUTPUT_PORTS``), in the order the
+                      pre-binding 2-tuple carried them.
 
     Resolution runs on every pipeline call, hit or miss — the cache short-circuits
     TRAVERSAL, never resolution — so this phase is deliberately independent of the
     cache. ``seed_failures`` is request-derived (a function of the requested seed
     set, which is not part of the content address); the composition layer
-    re-supplies it onto the result, so this helper returns it separately rather
-    than embedding it.
+    re-supplies it onto the result, so this stage emits it on its own port rather
+    than embedding it in the ``seeds`` payload.
 
-    Input validation: ``seeds == []`` raises ``ValueError`` here, before any work
-    (a pre-check, not a reliance on ``fetch_seeds``' own empty-input guard — see
-    Halt conditions in the spec). ``fetch_seeds``' own ``ValueError`` on total
-    resolution failure propagates; the empty-resolved-without-raising Node 0
-    contract violation raises ``PipelineError``.
+    Input validation: an empty ``seeds`` param raises ``ValueError`` here, before
+    any work (a pre-check, not a reliance on ``fetch_seeds``' own empty-input
+    guard — see Halt conditions in the spec). ``fetch_seeds``' own ``ValueError``
+    on total resolution failure propagates; the empty-resolved-without-raising
+    Node 0 contract violation raises ``PipelineError``.
     """
+    config = _ResolveSeedsParams.model_validate(params)
+    seeds = config.seeds
+    client = resources["http_client"]
+    api_key = resources["openalex_api_key"]
+
     if not seeds:
         raise ValueError("seeds must be non-empty")
 
@@ -2077,7 +2153,7 @@ async def resolve_seeds(
         _log.warning(
             "Pipeline: Node 0 failed to resolve %d seed(s)", len(seed_failures)
         )
-    return resolved, seed_failures
+    return {"seeds": resolved, "seed_failures": seed_failures}
 
 
 async def run_traversal(
@@ -2468,8 +2544,12 @@ async def run_arxiv_pipeline(
     Body is the composition of the two extracted halves: :func:`resolve_seeds`
     (the Node 0 phase, which also raises the empty-input, total-failure, and
     contract-violation halts) then :func:`run_traversal` (the traversal + assembly
-    core). The single request-derived field, ``seed_failures``, is re-supplied
-    from the resolve output onto the traversal result — the same re-supply the
+    core). ``resolve_seeds`` is a port-declared executor handler, so this direct
+    call shapes its ``params`` / ``inputs`` / ``resources`` exactly as the executor
+    would and reads its results off the declared output ports
+    (``RESOLVE_SEEDS_OUTPUT_PORTS``) — one contract, whichever path invoked it.
+    The single request-derived field, ``seed_failures``, is re-supplied from the
+    resolve output onto the traversal result — the same re-supply the
     read-through cache applies on a hit, so this orchestrator and a cache hit
     produce byte-identical results. This function is deliberately cache-unaware;
     the caching decision layer lives above it in ``cache.py``.
@@ -2480,9 +2560,13 @@ async def run_arxiv_pipeline(
     Node 0/3/4 failures and empty backward/forward results still produce a valid
     (possibly seeds-only) graph.
     """
-    resolved, seed_failures = await resolve_seeds(
-        seeds, client=client, api_key=api_key
+    node0 = await resolve_seeds(
+        {"seeds": seeds},
+        {},
+        resources={"http_client": client, "openalex_api_key": api_key},
     )
+    resolved = node0["seeds"]
+    seed_failures = node0["seed_failures"]
     result = await run_traversal(
         resolved,
         parameters,

@@ -125,6 +125,10 @@ async def cached_run_arxiv_pipeline(
     stored ``PipelineResult`` is loaded from ``registry`` and its request-derived
     fields re-supplied from the current resolve output (a hit equals a fresh miss);
     on a MISS the traversal core runs, its result is persisted, and it is returned.
+    Both legs read the SAME resolve output — ``resolve_seeds`` is a port-declared
+    executor handler, so this direct call shapes its ``params`` / ``inputs`` /
+    ``resources`` as the executor would and reads ``seeds`` and ``seed_failures``
+    off its declared output ports.
 
     The traversal call NEVER runs on a hit, so a hit issues no OpenAlex call for
     traversal (including the seed-refetch) — the whole point of the cache. The key
@@ -145,9 +149,13 @@ async def cached_run_arxiv_pipeline(
     This wrapper mirrors ``run_arxiv_pipeline``'s forwarding — it adds no guard of
     its own, since the sole draw site is inside ``run_traversal``.
     """
-    resolved, seed_failures = await resolve_seeds(
-        seeds, client=client, api_key=api_key
+    node0 = await resolve_seeds(
+        {"seeds": seeds},
+        {},
+        resources={"http_client": client, "openalex_api_key": api_key},
     )
+    resolved = node0["seeds"]
+    seed_failures = node0["seed_failures"]
     address = content_address(
         [record.node_id for record in resolved], parameters
     )

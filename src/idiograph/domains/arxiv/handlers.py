@@ -104,10 +104,10 @@ def register_arxiv_handlers() -> None:
     """Explicit per-domain handler registration for the arXiv pipeline."""
     from idiograph.core.executor import register_handler
     # assemble_graph, backward_traverse, clean_cycles, compute_co_citations,
-    # compute_depth_metrics, compute_pagerank, detect_communities, enrich_nodes
-    # and forward_traverse live in pipeline.py (they are traversal stages, not
-    # client-building handlers); imported here to keep registration explicit at
-    # the domain boot site and to avoid a module-load import cycle.
+    # compute_depth_metrics, compute_pagerank, detect_communities, enrich_nodes,
+    # forward_traverse and resolve_seeds live in pipeline.py (they are pipeline
+    # stages, not client-building handlers); imported here to keep registration
+    # explicit at the domain boot site and to avoid a module-load import cycle.
     from idiograph.domains.arxiv.pipeline import (
         assemble_graph,
         backward_traverse,
@@ -118,6 +118,7 @@ def register_arxiv_handlers() -> None:
         detect_communities,
         enrich_nodes,
         forward_traverse,
+        resolve_seeds,
     )
     # Node 5.5 lives in its own module rather than pipeline.py — it is the one
     # traversal stage with a model call in it — but registers the same way.
@@ -129,6 +130,7 @@ def register_arxiv_handlers() -> None:
     register_handler("Evaluator",      evaluator)
     register_handler("LLMSummarize",   llm_summarize)
     register_handler("Discard",        discard)
+    register_handler("ResolveSeeds",   resolve_seeds)
     register_handler("BackwardTraverse", backward_traverse)
     register_handler("ForwardTraverse", forward_traverse)
     register_handler("AssembleGraph",  assemble_graph)
