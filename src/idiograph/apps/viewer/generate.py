@@ -21,24 +21,10 @@ template, and writes a file.
 import json
 from pathlib import Path
 
+from idiograph.demo import REGISTRY_ROOT
 from idiograph.domains.arxiv.models import PipelineResult
-from idiograph.domains.arxiv.registry import PipelineRegistry
+from idiograph.domains.arxiv.registry import PipelineRegistry, sole_record_address
 from idiograph.domains.viewer import project_depth_provenance
-
-# The committed frozen CRISPR artifact and its known content address. Resolved
-# from this file's location (never CWD) so the generator runs from anywhere:
-#   apps/viewer/generate.py -> parents[4] == repo root -> demo/registry.
-REPO_ROOT = Path(__file__).resolve().parents[4]
-DEFAULT_REGISTRY_ROOT = REPO_ROOT / "demo" / "registry"
-# Re-addressed by the IDG-080 `current_year` rebaselining: the year both
-# traversal stages score against became a top-level PipelineParameters field, so
-# it entered the content address. The record's payload is byte-identical apart
-# from that one field, retro-stamped with the year it was actually derived under
-# (frozen 2026-07-18). Previous address:
-# 4e368a767b8778a9b5487abc449c6dbdf37815da60783110eead60ee1d9b7200
-FROZEN_CRISPR_ADDRESS = (
-    "27429df2e265cb7792addfdf2aa054937bc82b34988bacfe0c049618ecf064d4"
-)
 
 _ASSETS = Path(__file__).resolve().parent / "assets"
 _TEMPLATE = _ASSETS / "template.html"
@@ -53,19 +39,6 @@ _MARK_CSS = "/*__CSS__*/"
 _MARK_D3 = "/*__D3__*/"
 _MARK_DATA = "/*__DATA__*/"
 _MARK_JS = "/*__JS__*/"
-
-
-def load_frozen_result(
-    registry_root: Path = DEFAULT_REGISTRY_ROOT,
-    address: str = FROZEN_CRISPR_ADDRESS,
-) -> PipelineResult:
-    """Load a persisted ``PipelineResult`` through the registry read path.
-
-    Read-only: goes through :meth:`PipelineRegistry.read`, which re-supplies the
-    excluded cycle witness and verifies the content address. Never writes, never
-    re-freezes.
-    """
-    return PipelineRegistry(Path(registry_root)).read(address)
 
 
 def generate_viewer_html(result: PipelineResult) -> str:
@@ -100,15 +73,24 @@ def generate_viewer_html(result: PipelineResult) -> str:
 
 def render_viewer(
     output_path: Path,
-    registry_root: Path = DEFAULT_REGISTRY_ROOT,
-    address: str = FROZEN_CRISPR_ADDRESS,
+    registry_root: Path | None = None,
+    address: str | None = None,
 ) -> Path:
-    """Load the frozen artifact, render the viewer, and write it to ``output_path``.
+    """Load a persisted artifact, render the viewer, and write it to ``output_path``.
+
+    Both selectors default: ``registry_root`` to the packaged demo registry, and
+    ``address`` to whatever sole record the chosen root holds — so pointing this
+    at another single-record root needs no second argument, and the frozen CRISPR
+    address is never restated here. Defaults resolve at CALL time, not import
+    time, so merely importing this module touches no registry.
 
     Returns the written path. Creates parent directories as needed. This is the
     generator's top-level entry, used by ``python -m idiograph.apps.viewer``.
     """
-    result = load_frozen_result(registry_root, address)
+    root = REGISTRY_ROOT if registry_root is None else Path(registry_root)
+    result = PipelineRegistry(root).read(
+        sole_record_address(root) if address is None else address
+    )
     html = generate_viewer_html(result)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)

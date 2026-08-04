@@ -206,10 +206,12 @@ def _parameters() -> PipelineParameters:
         ),
         # 2026 is NOT "the current year" and must never be read off the clock —
         # a `date.today().year` here would silently re-address this run on 1 Jan.
-        # It is the value stamped into the parameters block of the committed
-        # frozen record (demo/registry/27429df2…f064d4.json), and current_year
+        # It is the value stamped into the parameters block of the packaged frozen
+        # record, whose address is ``idiograph.demo.frozen_crispr_address()`` —
+        # the mechanism, deliberately not restated as a literal here, since a
+        # restated hex is one more copy to fall behind a re-freeze. current_year
         # enters the content address like every other parameter. Both legs must
-        # key to that ONE address: move this and the HIT leg misses the committed
+        # key to that ONE address: move this and the HIT leg misses the frozen
         # record, so the demo silently re-derives at live OpenAlex and Anthropic
         # cost (~50 minutes, ~1,100 LLM draws) and proves nothing about replay.
         current_year=2026,

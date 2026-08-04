@@ -81,6 +81,7 @@ from crispr_freeze_trigger import (  # noqa: E402  (scripts/demos is on sys.path
 )
 
 from idiograph.core.logging_config import get_logger
+from idiograph.demo import REGISTRY_ROOT, frozen_crispr_address
 from idiograph.domains.arxiv import cache as cache_module
 from idiograph.domains.arxiv.cache import cached_run_arxiv_pipeline
 from idiograph.domains.arxiv.models import PipelineResult
@@ -98,43 +99,36 @@ _log = get_logger("demos.crispr_hit_leg")
 # name only these; anything else is a finding.
 _RESUPPLIED_FIELDS = {"seeds", "seed_failures"}
 
-# The demo artifact's content address — a KNOWABLE CONSTANT because the corpus,
-# seeds, and parameters are fixed (the freeze reproduces to the same address). It
-# is exactly the filename the freeze wrote and the one committed under
-# demo/registry/. We key XDG-presence on THIS address, not a blunt non-empty glob:
-# an operator whose XDG holds a DIFFERENT artifact is, for THIS demo, a stranger
-# and must fall through to the committed blob — a glob would instead pin them to
-# XDG and MISS. Checking a constant path costs ZERO OpenAlex GETs, so the measured
-# 2-GET boundary is untouched: no early seed re-resolution (cf. residual fb93ee61).
-_DEMO_ARTIFACT_ADDRESS = (
-    "4e368a767b8778a9b5487abc449c6dbdf37815da60783110eead60ee1d9b7200"
-)
-
-# The committed fallback registry, resolved from THIS file's location (never CWD)
-# so it works from any invocation directory:
-#   scripts/demos/crispr_hit_leg.py -> parents[2] == repo root -> demo/registry.
-_REPO_REGISTRY_ROOT = Path(__file__).resolve().parents[2] / "demo" / "registry"
-
-
 def _warm_registry_root() -> tuple[Path, str]:
-    """Select the registry root the warm leg reads — XDG-FIRST, committed repo
-    dir as FALLBACK — and a short label for which source won.
+    """Select the registry root the warm leg reads — XDG-FIRST, packaged registry
+    as FALLBACK — and a short label for which source won.
 
     When the operator's XDG durable root already holds the demo artifact (their own
     cold->warm loop), use XDG unchanged so they replay THEIR freeze. Only when XDG
-    lacks it — the stranger who just cloned — fall through to the committed
-    ``demo/registry`` blob. Presence is keyed on the demo's known content address, a
-    bare file-existence check: no resolve, no network, ZERO OpenAlex GETs, so the
-    warm leg's measured 2-GET boundary is never inflated by root selection.
+    lacks it — the stranger who just cloned — fall through to the record packaged
+    under :data:`idiograph.demo.REGISTRY_ROOT`.
+
+    Presence is keyed on the demo's ONE content address, not a blunt non-empty
+    glob: an operator whose XDG holds a DIFFERENT artifact is, for THIS demo, a
+    stranger and must fall through to the packaged record — a glob would instead
+    pin them to XDG and MISS. That address is now read off the packaged record's
+    own filename via ``frozen_crispr_address()`` rather than restated here, so it
+    can no longer fall behind a re-freeze the way a hand-authored copy did.
+
+    Both checks are bare local filesystem reads — a glob of the packaged registry
+    and one file-existence test. No resolve, no network, ZERO OpenAlex GETs, so
+    the warm leg's measured 2-GET boundary is never inflated by root selection
+    (cf. residual fb93ee61).
 
     The redirect lives HERE, at the warm construction site, and NEVER in the shared
     ``_durable_registry_root`` — that helper is shared with the COLD freeze, whose
-    write target must stay XDG and must never land in the committed repo tree.
+    write target must stay XDG and must never land in the package tree.
     """
+    address = frozen_crispr_address()
     xdg_root = _durable_registry_root()
-    if (xdg_root / f"{_DEMO_ARTIFACT_ADDRESS}.json").exists():
+    if (xdg_root / f"{address}.json").exists():
         return xdg_root, "XDG durable root"
-    return _REPO_REGISTRY_ROOT, "committed demo/registry (clone fallback)"
+    return REGISTRY_ROOT, "packaged idiograph.demo registry (clone fallback)"
 
 
 def _openalex_key() -> str:
@@ -197,7 +191,7 @@ async def _diagnose_miss(openalex_key: str) -> str:
 async def _main() -> int:
     openalex_key = _openalex_key()
     parameters = _parameters()
-    # XDG-first, committed-repo-dir fallback. The COLD path's shared
+    # XDG-first, packaged-registry fallback. The COLD path's shared
     # _durable_registry_root() is left untouched (still XDG-writing); this is the
     # ONLY redirect, and it happens at construction, not in the shared helper.
     registry_root, registry_source = _warm_registry_root()
@@ -225,10 +219,10 @@ async def _main() -> int:
     # pipeline.py:1308–1409), and only THEN raise the Node 5.5 guard. The whole
     # selling point is "replays in seconds"; a no-artifact root must fail in one,
     # not after a MISS traversal. Because the root was chosen XDG-first with the
-    # committed demo/registry as fallback, an empty root here means NEITHER source
-    # holds the artifact — which post-commit should not happen (a stranger clone
-    # carries the committed blob), so this now flags a broken checkout, not a
-    # never-frozen operator.
+    # packaged registry as fallback, an empty root here means NEITHER source holds
+    # the artifact — which should not happen, since the record ships inside the
+    # package (a stranger clone and an installed wheel both carry it), so this now
+    # flags a broken checkout or install, not a never-frozen operator.
     present = (
         sorted(p.name for p in registry_root.glob("*.json"))
         if registry_root.exists()
@@ -240,14 +234,15 @@ async def _main() -> int:
         print("-" * 72)
         print(f"  registry root : {registry_root}")
         print(f"                  ({registry_source})")
-        print("  Neither the XDG durable root nor the committed demo/registry held a")
-        print("  frozen artifact, so there is nothing to hit. This script REPLAYS a")
-        print("  record; it does not create one, and it will not enter the pipeline")
-        print("  just to discover the record is absent.")
+        print("  Neither the XDG durable root nor the packaged idiograph.demo registry")
+        print("  held a frozen artifact, so there is nothing to hit. This script")
+        print("  REPLAYS a record; it does not create one, and it will not enter the")
+        print("  pipeline just to discover the record is absent.")
         print()
-        print("  On a fresh clone the committed blob should be present already; if it")
-        print("  is missing, the checkout is incomplete. Otherwise record it with the")
-        print("  COLD path — ~$2 and ~50 minutes of live calls, run ONCE, ever:")
+        print("  The record ships inside the package, so it should be present already;")
+        print("  if it is missing, the checkout or install is incomplete. Otherwise")
+        print("  record it with the COLD path — ~$2 and ~50 minutes of live calls,")
+        print("  run ONCE, ever:")
         print()
         print("      uv run python scripts/demos/crispr_freeze_trigger.py")
         print()

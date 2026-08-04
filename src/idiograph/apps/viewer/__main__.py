@@ -17,11 +17,8 @@ viewer into the top-level typer CLI (out of scope). Argument parsing uses stdlib
 import argparse
 from pathlib import Path
 
-from idiograph.apps.viewer.generate import (
-    DEFAULT_REGISTRY_ROOT,
-    FROZEN_CRISPR_ADDRESS,
-    render_viewer,
-)
+from idiograph.apps.viewer.generate import render_viewer
+from idiograph.demo import REGISTRY_ROOT
 
 _DEFAULT_OUT = (
     Path(__file__).resolve().parents[4]
@@ -43,17 +40,20 @@ def main(argv: list[str] | None = None) -> int:
         default=_DEFAULT_OUT,
         help=f"Output HTML path (default: {_DEFAULT_OUT}).",
     )
+    # Both selectors pass None through so render_viewer stays the single place
+    # that decides what "default" means; the help text only DESCRIBES the rule.
     parser.add_argument(
         "--registry-root",
         type=Path,
-        default=DEFAULT_REGISTRY_ROOT,
-        help=f"Registry root to read from (default: {DEFAULT_REGISTRY_ROOT}).",
+        default=None,
+        help=f"Registry root to read from (default: the packaged demo "
+             f"registry, {REGISTRY_ROOT}).",
     )
     parser.add_argument(
         "--address",
-        default=FROZEN_CRISPR_ADDRESS,
-        help="Content address of the artifact to render "
-             "(default: the frozen CRISPR artifact).",
+        default=None,
+        help="Content address of the artifact to render (default: the sole "
+             "record in the registry root — the frozen CRISPR artifact).",
     )
     args = parser.parse_args(argv)
 
