@@ -247,8 +247,15 @@ def _build_nodes(
         # paths byte-identical through `content_address`. It also makes the
         # predicate read correctly with no special case — an LLM-free run puts
         # `None` here, which is falsy, exactly as the direct path's `is not
-        # None` test decides. See ASSUMPTIONS in the run summary for the
-        # serializability trade-off this takes on.
+        # None` test decides. Serializability is NOT the cost this looks
+        # like: pydantic walks the nested model through `dict[str, Any]`, so
+        # the graph round-trips `model_dump(mode="json")` -> `json.dumps` ->
+        # `Graph.model_validate` with `validate_integrity` still green, the
+        # round-tripped dict still truthy for the predicate, and
+        # `_AnnotateRelationshipsParams` still accepting it and rebuilding an
+        # equal `LLMConfig`. IDG-079's serializability objection was to
+        # resolved `PaperRecord`s — network-fetched domain data — and does not
+        # reach a frozen config model.
         Node(
             id=ANNOTATE,
             type="AnnotateRelationships",
