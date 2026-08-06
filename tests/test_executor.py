@@ -5,10 +5,12 @@
 # https://github.com/idiograph/idiograph
 
 import pytest
-from idiograph.core.models import Node, Edge, Graph
+from idiograph.core.models import Node, Edge, Graph, PortDeclaration
 from idiograph.core.executor import (
     HANDLERS,
+    InjectedOutputError,
     UnregisteredNodeTypeError,
+    UnsuppliedResourceError,
     execute_graph,
     register_handler,
 )
@@ -195,3 +197,327 @@ class TestCycleDetection:
         import asyncio
         with pytest.raises(ValueError, match="cycle"):
             asyncio.run(execute_graph(cyclic_graph))
+
+
+# ── Per-node output injection ────────────────────────────────────────────────
+#
+# `execute_graph(graph, resources, outputs)` lets a run hand in an output it
+# already computed for a head node instead of re-running it. The parameter is
+# run-owned in the same sense `resources` is — the value belongs to the
+# invocation, never to the graph, and never enters a content address.
+
+
+def _port(name: str) -> PortDeclaration:
+    return PortDeclaration(name=name, port_type="untyped")
+
+
+def _head_graph(**head_kwargs) -> Graph:
+    """A bound two-node graph whose head declares `input_ports=[]`.
+
+    The empty list is a DECLARATION — the head reads nothing, which is what
+    makes it injectable — and the tail binds its one declared port to the
+    head's output, so an injected payload is observable downstream rather than
+    only in the results dict.
+    """
+    return Graph(
+        name="injection_test",
+        version="1.0",
+        nodes=[
+            Node(
+                id="head",
+                type="StubHead",
+                params={},
+                input_ports=[],
+                output_ports=[_port("value")],
+                **head_kwargs,
+            ),
+            Node(
+                id="tail",
+                type="StubTail",
+                params={},
+                input_ports=[_port("value")],
+                output_ports=[_port("seen")],
+            ),
+        ],
+        edges=[
+            Edge(source="head", target="tail", from_port="value", to_port="value"),
+        ],
+    )
+
+
+class TestOutputInjection:
+    def test_injected_node_is_not_dispatched(self):
+        """The supplied output stands in for the handler: it is never called."""
+        import asyncio
+
+        async def must_not_run(_params, _inputs):
+            raise AssertionError("injected node's handler was dispatched")
+
+        async def tail(_params, inputs):
+            return {"seen": inputs["value"]}
+
+        register_handler("StubHead", must_not_run)
+        register_handler("StubTail", tail)
+
+        results = asyncio.run(
+            execute_graph(_head_graph(), None, {"head": {"value": 7}})
+        )
+
+        assert results["head"]["value"] == 7
+        assert results["head"]["status"] == "SUCCESS"
+        assert results["head"]["injected"] is True
+        assert results["head"]["node_id"] == "head"
+
+    def test_injected_output_flows_downstream(self):
+        """A downstream bound node reads the injected payload off the declared
+        port exactly as it would a computed one — injection is invisible to it."""
+        import asyncio
+
+        async def unused(_params, _inputs):
+            raise AssertionError("should not run")
+
+        async def tail(_params, inputs):
+            return {"seen": inputs["value"]}
+
+        register_handler("StubHead", unused)
+        register_handler("StubTail", tail)
+
+        results = asyncio.run(
+            execute_graph(_head_graph(), None, {"head": {"value": "x"}})
+        )
+
+        assert results["tail"]["seen"] == "x"
+        assert results["tail"]["status"] == "SUCCESS"
+
+    def test_injected_node_status_is_success(self):
+        """Node status is graph state and the graph is the source of truth: an
+        injected node's output is present, so it reads SUCCESS, not PENDING."""
+        import asyncio
+
+        async def unused(_params, _inputs):
+            raise AssertionError("should not run")
+
+        async def tail(_params, inputs):
+            return {"seen": inputs["value"]}
+
+        register_handler("StubHead", unused)
+        register_handler("StubTail", tail)
+
+        graph = _head_graph()
+        asyncio.run(execute_graph(graph, None, {"head": {"value": 1}}))
+
+        assert {n.id: n.status for n in graph.nodes}["head"] == "SUCCESS"
+
+    def test_bookkeeping_keys_win_over_supplied_ones(self):
+        """The stamp is applied AFTER the splat. A supplied dict carrying a
+        bookkeeping key cannot forge its own status — which is the collision
+        `RESERVED_PORT_NAMES` rejects at declaration time."""
+        import asyncio
+
+        async def unused(_params, _inputs):
+            raise AssertionError("should not run")
+
+        async def tail(_params, inputs):
+            return {"seen": inputs["value"]}
+
+        register_handler("StubHead", unused)
+        register_handler("StubTail", tail)
+
+        results = asyncio.run(
+            execute_graph(
+                _head_graph(),
+                None,
+                {"head": {"value": 1, "status": "FAILED", "node_id": "forged"}},
+            )
+        )
+
+        assert results["head"]["status"] == "SUCCESS"
+        assert results["head"]["node_id"] == "head"
+
+    def test_unnamed_nodes_execute_normally(self):
+        """Injection is per-node: a node the mapping does not name is dispatched."""
+        import asyncio
+
+        async def head(_params, _inputs):
+            return {"value": "computed"}
+
+        async def tail(_params, inputs):
+            return {"seen": inputs["value"]}
+
+        register_handler("StubHead", head)
+        register_handler("StubTail", tail)
+
+        results = asyncio.run(execute_graph(_head_graph(), None, {}))
+
+        assert results["head"]["value"] == "computed"
+        assert "injected" not in results["head"]
+
+    def test_default_none_keeps_existing_calls_exact(self):
+        """The parameter is ADDITIVE: a caller supplying nothing keeps the exact
+        call it had, and no result carries the injection marker."""
+        import asyncio
+
+        async def head(_params, _inputs):
+            return {"value": 1}
+
+        async def tail(_params, inputs):
+            return {"seen": inputs["value"]}
+
+        register_handler("StubHead", head)
+        register_handler("StubTail", tail)
+
+        results = asyncio.run(execute_graph(_head_graph()))
+
+        assert all("injected" not in r for r in results.values())
+
+
+class TestInjectionRestriction:
+    """Only `input_ports == []` is injectable — the fence fails closed."""
+
+    def test_node_with_declared_inputs_raises(self):
+        """A bound node with real input ports has upstream bindings that an
+        injection would silently discard, so it raises rather than executing a
+        graph whose dataflow is partly fiction."""
+        import asyncio
+
+        async def head(_params, _inputs):
+            return {"value": 1}
+
+        async def tail(_params, inputs):
+            return {"seen": inputs["value"]}
+
+        register_handler("StubHead", head)
+        register_handler("StubTail", tail)
+
+        with pytest.raises(InjectedOutputError) as excinfo:
+            asyncio.run(
+                execute_graph(_head_graph(), None, {"tail": {"seen": "forged"}})
+            )
+
+        assert "'tail'" in str(excinfo.value)
+
+    def test_legacy_none_input_ports_raises(self):
+        """`None` is the LEGACY regime, not an empty declaration. It is not
+        injectable: the node receives every upstream payload keyed by source id,
+        and nothing declares that it reads none of them."""
+        import asyncio
+
+        async def stub(_params, _inputs):
+            return {}
+
+        register_handler("StubFetch", stub)
+        register_handler("StubProcess", stub)
+        register_handler("StubOutput", stub)
+
+        graph = Graph(
+            name="legacy_injection",
+            version="1.0",
+            nodes=[Node(id="a", type="StubFetch", params={})],
+            edges=[],
+        )
+
+        with pytest.raises(InjectedOutputError) as excinfo:
+            asyncio.run(execute_graph(graph, None, {"a": {"value": 1}}))
+
+        assert "'a'" in str(excinfo.value)
+
+    def test_disabled_by_config_outranks_injection(self):
+        """A node both disabled and named in the mapping is SKIPPED and its
+        supplied output DISCARDED — ruled precedence, not accident. The disable
+        branch sits above the injection branch and returns first."""
+        import asyncio
+
+        async def unused(_params, _inputs):
+            raise AssertionError("should not run")
+
+        async def tail(_params, inputs):
+            return {"seen": inputs["value"]}
+
+        register_handler("StubHead", unused)
+        register_handler("StubTail", tail)
+
+        graph = _head_graph(
+            enabled_when="on",
+            disabled_passthrough={},
+        )
+        graph.get_node("head").params = {"on": False}
+
+        results = asyncio.run(
+            execute_graph(graph, None, {"head": {"value": "discarded"}})
+        )
+
+        assert results["head"]["status"] == "SKIPPED"
+        assert results["head"]["skip_reason"] == "disabled_by_config"
+        assert "value" not in results["head"]
+        assert "injected" not in results["head"]
+
+    def test_injection_does_not_waive_resource_supply(self):
+        """`_check_resource_supply` is DELIBERATELY unchanged: it runs over the
+        whole graph before the loop, so an injected node still requires the
+        resources it declares. Supply is a fact about the run, and injecting an
+        output does not make the run capable."""
+        import asyncio
+
+        async def unused(_params, _inputs, *, resources):
+            raise AssertionError("should not run")
+
+        async def tail(_params, inputs):
+            return {"seen": inputs["value"]}
+
+        register_handler("StubHead", unused)
+        register_handler("StubTail", tail)
+
+        graph = _head_graph(resources=["http_client"])
+
+        with pytest.raises(UnsuppliedResourceError):
+            asyncio.run(execute_graph(graph, None, {"head": {"value": 1}}))
+
+
+class TestFailedResultCarriesTheException:
+    def test_exception_object_alongside_error_string(self):
+        """IDG-063 clause 3, additive. The `error` string stays exactly what it
+        was; the OBJECT rides alongside so a caller that halts on FAILED can
+        re-raise with the original type and traceback intact."""
+        import asyncio
+
+        boom = RuntimeError("Simulated failure")
+
+        async def failing(_params, _inputs):
+            raise boom
+
+        async def stub(_params, _inputs):
+            return {}
+
+        register_handler("StubFetch", failing)
+        register_handler("StubProcess", stub)
+        register_handler("StubOutput", stub)
+
+        graph = Graph(
+            name="one_node",
+            version="1.0",
+            nodes=[Node(id="a", type="StubFetch", params={})],
+            edges=[],
+        )
+        results = asyncio.run(execute_graph(graph))
+
+        assert results["a"]["error"] == "Simulated failure"
+        assert results["a"]["exception"] is boom
+
+    def test_successful_result_carries_no_exception(self):
+        """Only the failure path carries it — a SUCCESS result is unchanged."""
+        import asyncio
+
+        async def stub(_params, _inputs):
+            return {"ok": True}
+
+        register_handler("StubFetch", stub)
+
+        graph = Graph(
+            name="one_node",
+            version="1.0",
+            nodes=[Node(id="a", type="StubFetch", params={})],
+            edges=[],
+        )
+        results = asyncio.run(execute_graph(graph))
+
+        assert "exception" not in results["a"]
