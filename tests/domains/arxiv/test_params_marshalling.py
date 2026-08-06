@@ -6,39 +6,54 @@
 #
 # IDG-076 clause 3 — the params-marshalling coverage test.
 #
-# WHY THIS EXISTS. A converted stage's direct call site in `run_traversal`
-# spells out its params keys BY HAND. If a field is later added to a parameters
-# model and the call site is not updated, the handler silently takes the model's
-# default while `content_address` — which hashes `PipelineParameters` WHOLE —
-# MOVES. The result is a stored record keyed to a configuration that was never
-# applied. For the three defaulted models (CoCitationParameters,
-# PageRankParameters, CommunitiesParameters) that divergence is silent; for
-# BackwardParameters, whose fields are all required, it raises. This test makes
-# both loud at authoring time instead.
+# WHY THIS EXISTS. A converted stage's params keys are spelled out BY HAND. If a
+# field is later added to a parameters model and that spelling is not updated,
+# the handler silently takes the model's default while `content_address` — which
+# hashes `PipelineParameters` WHOLE — MOVES. The result is a stored record keyed
+# to a configuration that was never applied. For the three defaulted models
+# (CoCitationParameters, PageRankParameters, CommunitiesParameters) that
+# divergence is silent; for BackwardParameters, whose fields are all required, it
+# raises. This test makes both loud at authoring time instead. THE HAZARD IS
+# UNCHANGED BY THE FLIP — address/behavior desync, ending in a false HIT — only
+# the address of the hand-spelling moved.
 #
-# WHAT IT ASSERTS. For each converted stage carrying a parameters model, with P
-# the set of params keys the direct call site passes and F the model's field
-# set:
+# WHAT IT ASSERTS. The hand-spelling used to live at each stage's direct call
+# site inside `run_traversal`. The executor flip (IDG-075 clause 4e) deleted
+# those call sites: `run_traversal` now builds the declared graph and executes
+# it, so the ONE place each stage's params are spelled out is its `Node` in
+# `build_pipeline_graph`. That is what this file reads now (IDG-076 clause 4 as
+# implemented by IDG-089). For each converted stage carrying a parameters model,
+# with P the key set of `build_pipeline_graph(...).get_node(node_id).params` and
+# F the model's field set:
 #
 #     F ⊆ P ⊆ F ∪ extras
 #
-# The LOWER bound catches a configured field the call site dropped. The UPPER
-# bound keeps a typo from hiding in the extras gap — `extras` is named
-# explicitly per stage, never inferred.
+# The LOWER bound catches a configured field the graph dropped. The UPPER bound
+# keeps a typo from hiding in the extras gap — `extras` is named explicitly per
+# stage, never inferred.
 #
-# HOW — STATIC PARSE, not runtime capture. Both were defensible; this route was
-# chosen because the property under test is a property OF THE CALL SITE'S
-# SOURCE, and reading the source tests it directly with no harness, no fixtures
-# and no network fakes. The decisive point against runtime capture is Node 3
-# itself: every existing harness that drives `run_traversal` end-to-end MOCKS
-# `backward_traverse` (it is network-bound), so a recorder monkeypatched over it
-# would observe the params of a stand-in — and un-mocking it to observe the real
-# marshalling would mean rebuilding the OpenAlex fakes here purely to read back
-# a dict of keys. The static parse reads what `run_traversal` actually writes.
+# WHY THE TRIANGULATION IS STILL REAL. The bounds are only worth asserting if the
+# two sides are independent, and they are: `models.py` imports nothing from
+# `pipeline_graph`, so the config models cannot be deriving their fields from the
+# graph or the graph its params from them. A field added to one genuinely does
+# not reach the other, which is the whole hazard.
 #
-# `compute_depth_metrics`, `clean_cycles` and `assemble_graph` carry no
-# parameters model (they are called with `{}`) and are out of scope. So is the
-# enrichment comprehension — not yet converted.
+# HOW — a BUILT GRAPH, not a static parse. The predecessor read `run_traversal`'s
+# source with `ast`, because the property was a property of that function's
+# SOURCE and the stage it most needed to cover (Node 3) is network-bound, so
+# every harness mocks it and a runtime recorder would have observed a stand-in.
+# Neither objection survives the flip: `build_pipeline_graph` is a pure function
+# of its two arguments — no I/O, no network, no event loop, no client — so its
+# params can be read by CALLING it, with no harness and nothing mocked. Reading
+# the real object is strictly better than parsing a rendering of it: a params
+# value that is computed rather than literal is now in scope, where the parser
+# had to require literal keys and would have raised rather than decide.
+#
+# `compute_depth_metrics`, `clean_cycles`, `assemble_graph` and `enrich_nodes`
+# carry no parameters model (their nodes declare `params={}`) and are out of
+# scope. So is `resolve_seeds`, whose seed set is request data rather than
+# configuration; Node 0 keeps a second spelling at its own direct call site in
+# `run_arxiv_pipeline` and is checked there, in test_pipeline_graph.py.
 #
 # THE HANDLER-LOCAL MIRROR (finding 6e77cbfb). A converted stage may also carry a
 # handler-local params model (`_BackwardTraverseParams`, `_ForwardTraverseParams`)
@@ -53,9 +68,6 @@
 # mangling rule that failed to resolve would skip the stage silently, which is
 # the failure mode this guard exists to prevent.
 
-import ast
-from pathlib import Path
-
 import pytest
 
 from idiograph.domains.arxiv import pipeline
@@ -65,7 +77,9 @@ from idiograph.domains.arxiv.models import (
     CommunitiesParameters,
     ForwardParameters,
     PageRankParameters,
+    PipelineParameters,
 )
+from idiograph.domains.arxiv.pipeline_graph import build_pipeline_graph
 
 #: (handler name as called in `run_traversal`, its parameters model, the params
 #: keys that are legitimately NOT model fields, the handler-local params model or
@@ -138,58 +152,77 @@ EXTRA_REASONS: dict[tuple[str, str], str] = {
 }
 
 
-def _run_traversal_ast() -> ast.AsyncFunctionDef:
-    """The parsed `run_traversal` body — the single site every converted stage
-    is called from on the direct path."""
-    source = Path(pipeline.__file__).read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    for node in ast.walk(tree):
-        if isinstance(node, ast.AsyncFunctionDef) and node.name == "run_traversal":
-            return node
-    raise AssertionError(
-        "run_traversal not found in pipeline.py — this test is pointed at the "
-        "wrong function and would otherwise pass vacuously."
-    )
+#: Which node in the declared graph carries each stage's params. Written out as
+#: literal strings rather than imported from `pipeline_graph`: this file has to
+#: be able to disagree with the module it reads, and a node id imported from the
+#: subject would agree with a rename by construction. A rename that does not
+#: reach this table makes `get_node` return None, which fails loudly below.
+STAGE_NODE_IDS: dict[str, str] = {
+    "backward_traverse": "backward",
+    "forward_traverse": "forward",
+    "compute_co_citations": "co",
+    "compute_pagerank": "pagerank",
+    "detect_communities": "communities",
+}
 
 
-def _params_keys(handler_name: str) -> set[str]:
-    """The params keys the direct call site passes to `handler_name`.
+def _graph_params_keys(handler_name: str) -> set[str]:
+    """The params keys the declared graph puts on `handler_name`'s node.
 
-    The params mapping is the call's FIRST POSITIONAL argument, per the handler
-    convention `(params, inputs, ...)`. Every key must be a literal string:
-    a computed key would mean this property is no longer statically decidable,
-    and silently returning fewer keys would weaken the assertion rather than
-    fail it, so it raises.
+    P in `F ⊆ P ⊆ F ∪ extras`. Read off a BUILT graph rather than parsed out of
+    source: `build_pipeline_graph` is pure, so calling it is cheap, needs no
+    harness, and yields the actual mapping the executor will hand the handler
+    rather than a rendering of it.
+
+    The parameters passed in are fully populated — every optional field
+    explicitly set — so that a key cannot be missing from P merely because this
+    fixture left its value unset. The bound must fail on a graph that DROPS a
+    field, not on a fixture that never asked for it.
     """
-    calls = [
-        node
-        for node in ast.walk(_run_traversal_ast())
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == handler_name
-    ]
-    assert len(calls) == 1, (
-        f"expected exactly one call to {handler_name}() in run_traversal, "
-        f"found {len(calls)} — the marshalling this test checks is no longer "
-        f"at a single site."
+    node_id = STAGE_NODE_IDS[handler_name]
+    graph = build_pipeline_graph(_seeds(), _parameters())
+    node = graph.get_node(node_id)
+    assert node is not None, (
+        f"the declared graph has no node '{node_id}' for {handler_name}(). "
+        f"Either the node was renamed and STAGE_NODE_IDS was not updated, or "
+        f"the stage left the graph — in which case its params are no longer "
+        f"spelled out anywhere this file checks, and the bounds below would "
+        f"pass vacuously."
     )
-    (call,) = calls
+    return set(node.params)
 
-    assert call.args, f"{handler_name}() called with no positional params mapping"
-    params_arg = call.args[0]
-    assert isinstance(params_arg, ast.Dict), (
-        f"{handler_name}()'s params argument is not a dict literal, so its keys "
-        f"cannot be read statically."
+
+def _seeds() -> list[dict]:
+    """Seed request dicts. Node 0's params only; no stage read here takes them."""
+    return [{"arxiv_id": "2401.00001"}, {"doi": "10.1000/xyz123"}]
+
+
+def _parameters() -> PipelineParameters:
+    """A FULLY POPULATED `PipelineParameters`.
+
+    Every nested config model is constructed explicitly, including the three that
+    would otherwise default (`co_citation`, `pagerank`, `communities`). The point
+    is the lower bound `F ⊆ P`: if this fixture omitted a sub-model, the graph
+    would still read its fields off the default instance and P would be complete,
+    so the omission would not be detectable. Populating them means P is the graph
+    marshalling a real configuration, which is the case the hazard lives in.
+    """
+    return PipelineParameters(
+        backward=BackwardParameters(n_backward=10, lambda_decay=0.1),
+        forward=ForwardParameters(
+            n_forward=10,
+            lambda_decay=0.1,
+            alpha=1.0,
+            beta=1.0,
+            sort="cited_by_count:desc",
+        ),
+        # Stated, never read from the clock: it enters the content address, so a
+        # wall-clock value would move every address in this file on New Year.
+        current_year=2026,
+        co_citation=CoCitationParameters(min_strength=2, max_edges=None),
+        pagerank=PageRankParameters(damping=0.85),
+        communities=CommunitiesParameters(),
     )
-
-    keys: set[str] = set()
-    for key in params_arg.keys:
-        assert isinstance(key, ast.Constant) and isinstance(key.value, str), (
-            f"{handler_name}() passes a non-literal params key; this test can "
-            f"only decide the property over literal keys."
-        )
-        keys.add(key.value)
-    return keys
 
 
 @pytest.mark.parametrize(
@@ -200,23 +233,23 @@ def _params_keys(handler_name: str) -> set[str]:
 def test_call_site_passes_every_model_field(
     handler_name, model, extras, handler_params_model
 ) -> None:
-    """F ⊆ P — the call site passes every field its parameters model declares.
+    """F ⊆ P — the graph puts every field its parameters model declares on the node.
 
-    The lower bound. A field added to the model but not to the call site is the
+    The lower bound. A field added to the model but not to the node is the
     silent-default hazard: the handler runs on the model default while
     `content_address` moves, storing a record keyed to a configuration that was
     never applied.
     """
-    passed = _params_keys(handler_name)
+    passed = _graph_params_keys(handler_name)
     fields = set(model.model_fields)
 
     missing = fields - passed
     assert not missing, (
-        f"{handler_name}() does not pass {sorted(missing)} from "
+        f"{handler_name}()'s node does not carry {sorted(missing)} from "
         f"{model.__name__}. The handler would take the model default while "
         f"content_address hashes the configured value — a stored record keyed "
-        f"to a configuration that was never applied. Add the key to the "
-        f"run_traversal call site."
+        f"to a configuration that was never applied. Add the key to the node's "
+        f"params in build_pipeline_graph."
     )
 
 
@@ -228,23 +261,23 @@ def test_call_site_passes_every_model_field(
 def test_call_site_passes_no_unaccounted_keys(
     handler_name, model, extras, handler_params_model
 ) -> None:
-    """P ⊆ F ∪ extras — every key the call site passes is either a model field
-    or a per-stage extra named in this file.
+    """P ⊆ F ∪ extras — every key on the node is either a model field or a
+    per-stage extra named in this file.
 
     The upper bound, and the reason `extras` is enumerated rather than inferred:
     without it a typo'd key (`n_backwards`) would satisfy the lower bound only
     by accident of the real key also being present, and would otherwise hide in
     the gap. A new extra is a deliberate edit to STAGES above, with a reason.
     """
-    passed = _params_keys(handler_name)
+    passed = _graph_params_keys(handler_name)
     allowed = set(model.model_fields) | extras
 
     unaccounted = passed - allowed
     assert not unaccounted, (
-        f"{handler_name}() passes {sorted(unaccounted)}, which are neither "
-        f"{model.__name__} fields nor declared extras. Either it is a typo, or "
-        f"the key is a deliberate non-address param and belongs in this "
-        f"stage's `extras` set with a reason."
+        f"{handler_name}()'s node carries {sorted(unaccounted)}, which are "
+        f"neither {model.__name__} fields nor declared extras. Either it is a "
+        f"typo, or the key is a deliberate non-address param and belongs in "
+        f"this stage's `extras` set with a reason."
     )
 
 

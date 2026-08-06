@@ -32,6 +32,22 @@ class UnregisteredNodeTypeError(RuntimeError):
     """
 
 
+class InjectedOutputError(RuntimeError):
+    """A run supplied an output for a node that is not injectable.
+
+    Only a node declaring `input_ports == []` may have its output injected: an
+    empty list is a declaration that the node reads nothing from upstream, so
+    handing it a precomputed output replaces work that depended on nothing in
+    the graph. A node with declared inputs (or one in the legacy `None` regime)
+    has upstream bindings that injection would silently discard, so this fails
+    closed rather than executing a graph whose dataflow is partly fiction.
+
+    Detectable the moment the node is reached and before its handler runs, so it
+    propagates out of `execute_graph` rather than becoming one node's FAILED
+    result — the same side of the line as an unregistered type.
+    """
+
+
 class UnsuppliedResourceError(RuntimeError):
     """A node declared a resource the run did not supply.
 
@@ -62,6 +78,7 @@ def register_handler(node_type: str, fn: Callable) -> None:
 async def execute_graph(
     graph: Graph,
     resources: Mapping[str, Any] | None = None,
+    outputs: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """
     Execute all nodes in topological order.
@@ -73,6 +90,17 @@ async def execute_graph(
     credentials, anything the run owns rather than the graph. It is additive:
     callers that supply nothing keep the exact single-argument call they had,
     and only nodes that declare `resources` ever see any of it.
+
+    `outputs` maps node id -> that node's output dict and is run-owned in the
+    same sense: a value this run already computed, handed in so the node is
+    recorded rather than re-run. Only a node declaring `input_ports == []` is
+    injectable, because only such a node reads nothing an injection could
+    discard; anything else raises `InjectedOutputError`. Config-disable
+    OUTRANKS injection — a node both disabled and named here is SKIPPED with
+    `disabled_by_config` and its supplied output is dropped, since the graph
+    says that node produces nothing on this run. Supply is NOT waived:
+    `_check_resource_supply` runs over the whole graph before the loop, so an
+    injected node still requires the resources it declares.
 
     Where a defect surfaces decides how it is reported. A defect detectable
     BEFORE any handler runs RAISES: a cycle makes the order undefined, a node
@@ -168,6 +196,26 @@ async def execute_graph(
                 "skip_reason": DISABLED_BY_CONFIG,
                 "disabled_by": node.enabled_when,
             }
+            continue
+
+        if outputs is not None and node_id in outputs:
+            # Below the config gate, deliberately: a disabled node is already
+            # SKIPPED above, so config OUTRANKS injection and the supplied
+            # output is discarded. Reaching here means the node would have been
+            # dispatched, and the run has its output already.
+            if node.input_ports != []:
+                raise InjectedOutputError(
+                    f"Node '{node_id}' was supplied an output but declares "
+                    f"input_ports={node.input_ports!r}; only a node declaring "
+                    f"an empty list is injectable."
+                )
+            results[node_id] = {
+                **outputs[node_id],
+                "status": "SUCCESS",
+                "node_id": node_id,
+                "injected": True,
+            }
+            _update_node_status(node, "SUCCESS")
             continue
 
         results[node_id] = await _execute_node(node, inputs, supplied)
@@ -380,6 +428,12 @@ async def _execute_node(
             "status": "FAILED",
             "node_id": node.id,
             "error": str(e),
+            # Additive alongside the `error` string, which stays the reported
+            # surface every existing reader uses. The OBJECT is carried so a
+            # caller that halts on a FAILED result can re-raise with
+            # `raise ... from`, preserving the original type and traceback that
+            # `str(e)` throws away.
+            "exception": e,
         }
 
 

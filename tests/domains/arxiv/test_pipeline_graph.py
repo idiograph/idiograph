@@ -39,15 +39,6 @@ from pathlib import Path
 
 import pytest
 
-# The verified static-parse helper from the params-marshalling suite, reused
-# rather than reimplemented: it already decides "what params keys does this
-# stage's direct call site pass", and a second copy of that parser here could
-# drift from it and quietly answer a different question. It is scoped to
-# `run_traversal` by construction, which covers ten of the eleven stages —
-# `resolve_seeds` is called from `run_arxiv_pipeline` and gets its own reader
-# below. The import path is the one pytest's rootdir insertion gives this
-# package (`tests/` has no `__init__.py`, `tests/domains/arxiv/` does).
-from domains.arxiv.test_params_marshalling import _params_keys
 from idiograph.core.executor import HANDLERS
 from idiograph.core.models import Graph
 from idiograph.core.query import validate_integrity
@@ -470,31 +461,44 @@ def _resolve_seeds_params_keys() -> set[str]:
     return keys
 
 
-@pytest.mark.parametrize(
-    "node_id", sorted(NODE_TO_HANDLER), ids=sorted(NODE_TO_HANDLER)
-)
+#: The ONE node still checked here. The other ten cases of this test were
+#: deleted, not lost: they compared each node's params against a second spelling
+#: at that stage's direct call site inside `run_traversal`, and the executor flip
+#: (IDG-075 clause 4e) deleted those call sites — `run_traversal` now executes
+#: this graph instead of restating it, so there is no longer a second place for
+#: the node to disagree with, and the bounds that DO still apply to those ten
+#: (F ⊆ P ⊆ F ∪ extras against the config models) moved to
+#: test_params_marshalling.py, which re-founded them on this graph.
+#:
+#: Node 0 is the exception and keeps its case: `run_arxiv_pipeline` still calls
+#: `resolve_seeds` directly — resolution is held outside the traversal core so
+#: the read-through cache can short-circuit traversal alone — so the `resolve`
+#: node genuinely retains a second site to agree with.
+_SECOND_SITE_NODES = ["resolve"]
+
+
+@pytest.mark.parametrize("node_id", _SECOND_SITE_NODES, ids=_SECOND_SITE_NODES)
 def test_node_params_match_the_direct_call_site(graph: Graph, node_id: str) -> None:
     """Each node's params keys are exactly the keys its direct call site passes.
 
-    This PR introduces a SECOND place every stage's params are spelled out. The
-    graph literal and the hand-written call site in `run_traversal` must agree,
-    and nothing else checks that they do: a key the graph passes and the call
-    site does not means the declared graph describes a configuration production
-    never runs, and a key the call site passes and the graph does not means the
-    graph would run the stage on a model default while `content_address` hashes
-    the configured value.
+    For every node whose stage STILL has a direct call site — post-flip, only
+    Node 0. The graph literal and the hand-written call site must agree, and
+    nothing else checks that they do: a key the graph passes and the call site
+    does not means the declared graph describes a configuration production never
+    runs, and a key the call site passes and the graph does not means the graph
+    would run the stage on a model default while `content_address` hashes the
+    configured value.
 
-    Keys, not values — the values are `PipelineParameters` reads on both sides
-    and comparing them would require executing the call site. The key set is
-    what a static parse can decide, and it is where the drift shows up: a field
-    added to a parameters model reaches one site and not the other.
+    Keys, not values — the values are reads on both sides and comparing them
+    would require executing the call site. The key set is what a static parse can
+    decide, and it is where the drift shows up.
     """
     handler = NODE_TO_HANDLER[node_id]
-    call_site = (
-        _resolve_seeds_params_keys()
-        if handler == "resolve_seeds"
-        else _params_keys(handler)
+    assert handler == "resolve_seeds", (
+        f"'{node_id}' is listed as retaining a direct call site, but only "
+        f"resolve_seeds does post-flip and only it has a reader here."
     )
+    call_site = _resolve_seeds_params_keys()
     node = graph.get_node(node_id)
     assert node is not None, f"no node '{node_id}' in the graph"
     declared = set(node.params)

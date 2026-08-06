@@ -450,7 +450,7 @@ def test_run_traversal_witness_binds_to_nodes_port(
     CycleCleanResult reconstruction would raise "orphaned ... A". Passing proves
     the witness tracked the port binding instead.
     """
-    from idiograph.domains.arxiv import pipeline
+    from idiograph.domains.arxiv import pipeline, relationship_annotation
     from idiograph.domains.arxiv.models import (
         BackwardParameters,
         CoCitationParameters,
@@ -472,24 +472,29 @@ def test_run_traversal_witness_binds_to_nodes_port(
     )
     n4 = Node4Result(papers=[], edges=[])
 
+    from idiograph.core.executor import HANDLERS
+    from idiograph.domains.arxiv.handlers import register_arxiv_handlers
+
     # Nodes 3 and 4 are port-declared handlers — their stand-ins return the
-    # declared output ports, not a bare Node3Result/Node4Result.
-    monkeypatch.setattr(
-        pipeline,
-        "backward_traverse",
-        AsyncMock(return_value={"backward": n3, "failed_batches": n3.failed_batches}),
+    # declared output ports, not a bare Node3Result/Node4Result. Each goes in
+    # BOTH places as the SAME object (IDG-089 rider 1): post-flip `run_traversal`
+    # dispatches through the HANDLERS registry, and the module attribute is what
+    # any surviving direct path reads.
+    register_arxiv_handlers()  # populate HANDLERS before overriding entries
+    backward = AsyncMock(
+        return_value={"backward": n3, "failed_batches": n3.failed_batches}
     )
-    monkeypatch.setattr(
-        pipeline,
-        "forward_traverse",
-        AsyncMock(
-            return_value={
-                "forward": n4,
-                "failed_seeds": n4.failed_seeds,
-                "truncated_seeds": n4.truncated_seeds,
-            }
-        ),
+    forward = AsyncMock(
+        return_value={
+            "forward": n4,
+            "failed_seeds": n4.failed_seeds,
+            "truncated_seeds": n4.truncated_seeds,
+        }
     )
+    monkeypatch.setattr(pipeline, "backward_traverse", backward)
+    monkeypatch.setitem(HANDLERS, "BackwardTraverse", backward)
+    monkeypatch.setattr(pipeline, "forward_traverse", forward)
+    monkeypatch.setitem(HANDLERS, "ForwardTraverse", forward)
 
     async def _annotate_dropping_a(params, inputs, *, resources):
         """Stands in for the converted Node 5.5 handler, in its own contract:
@@ -506,8 +511,20 @@ def test_run_traversal_witness_binds_to_nodes_port(
         )
         return {"nodes": result.nodes, "provenance": result.provenance}
 
+    # Node 5.5 takes a THIRD binding, and only Node 5.5 does. `run_traversal`
+    # re-invokes `register_arxiv_handlers()` per run, which re-reads the ten
+    # pipeline stages off `pipeline` — so rebinding the module attribute above is
+    # enough for those. It reads Node 5.5 off `relationship_annotation` instead,
+    # so without this the re-registration would quietly restore the REAL handler
+    # over the setitem and the stand-in would never run.
     monkeypatch.setattr(
         pipeline, "annotate_relationships", _annotate_dropping_a
+    )
+    monkeypatch.setattr(
+        relationship_annotation, "annotate_relationships", _annotate_dropping_a
+    )
+    monkeypatch.setitem(
+        HANDLERS, "AnnotateRelationships", _annotate_dropping_a
     )
 
     params = PipelineParameters(
@@ -528,6 +545,7 @@ def test_run_traversal_witness_binds_to_nodes_port(
     result = asyncio.run(
         pipeline.run_traversal(
             seeds, params,
+            seed_requests=[{"arxiv_id": "S"}],
             client=object(), api_key="k", anthropic_client=object(),
         )
     )

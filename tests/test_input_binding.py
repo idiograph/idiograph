@@ -20,6 +20,7 @@ import pytest
 
 from idiograph.core.executor import HANDLERS, execute_graph, register_handler
 from idiograph.core.models import Edge, Graph, Node, PortDeclaration
+from idiograph.core.query import RESERVED_PORT_NAMES, validate_integrity
 
 
 @pytest.fixture(autouse=True)
@@ -461,3 +462,181 @@ class TestMixedGraph:
         for node in graph.nodes:
             upstreams = {e.source for e in graph.edges if e.target == node.id}
             assert set(seen[node.id]) == upstreams
+
+
+# ── The reserved-port fence ──────────────────────────────────────────────────
+#
+# `_execute_node` returns `{**output, "status": ..., "node_id": ...}` and the
+# injection branch adds `"injected": True`. The stamp is applied AFTER the
+# splat, so a port sharing one of those names is unreadable — the consumer
+# binds the port and silently receives the executor's bookkeeping value instead
+# of the payload. That is a WRONG VALUE rather than a crash, which is why it is
+# rejected at declaration time by `validate_integrity` instead of being left to
+# surface at run time as a puzzling downstream failure.
+
+
+class TestReservedPortNames:
+    def test_the_reserved_set_is_what_the_executor_stamps(self):
+        """The fence's word list, pinned against the keys the executor actually
+        writes. Spelled out literally rather than imported from the executor: a
+        list derived from the thing it guards would agree with a wrong executor
+        by being wrong in the same way."""
+        assert RESERVED_PORT_NAMES == {"status", "node_id", "injected"}
+
+    @pytest.mark.parametrize("reserved", sorted(RESERVED_PORT_NAMES))
+    def test_reserved_output_port_is_rejected(self, reserved):
+        """An output port named for a bookkeeping key would be overwritten by
+        the stamp before any consumer could read it."""
+        graph = Graph(
+            name="reserved_out", version="1.0",
+            nodes=[
+                Node(id="s", type="Source", params={},
+                     output_ports=[_port(reserved)]),
+                Node(id="t", type="Sink", params={},
+                     input_ports=[_port("value")]),
+            ],
+            edges=[
+                Edge(source="s", target="t", type="DATA",
+                     from_port=reserved, to_port="value"),
+            ],
+        )
+
+        report = validate_integrity(graph)
+
+        assert not report["valid"]
+        offending = [e for e in report["errors"] if reserved in e]
+        assert offending, report["errors"]
+        assert any("'s'" in e and "output port" in e for e in offending)
+
+    @pytest.mark.parametrize("reserved", sorted(RESERVED_PORT_NAMES))
+    def test_reserved_input_port_is_rejected(self, reserved):
+        """The input side is fenced too. A bound node reading `inputs[to_port]`
+        for a reserved name is declaring a port whose producer can never emit a
+        readable value for it."""
+        graph = Graph(
+            name="reserved_in", version="1.0",
+            nodes=[
+                Node(id="s", type="Source", params={},
+                     output_ports=[_port("value")]),
+                Node(id="t", type="Sink", params={},
+                     input_ports=[_port(reserved)]),
+            ],
+            edges=[
+                Edge(source="s", target="t", type="DATA",
+                     from_port="value", to_port=reserved),
+            ],
+        )
+
+        report = validate_integrity(graph)
+
+        assert not report["valid"]
+        assert any(
+            "'t'" in e and "input port" in e and reserved in e
+            for e in report["errors"]
+        ), report["errors"]
+
+    def test_error_names_node_port_and_reserved_word(self):
+        """The message has to be actionable on its own: which node, which port,
+        and which reserved word it collided with."""
+        graph = Graph(
+            name="reserved_msg", version="1.0",
+            nodes=[
+                Node(id="producer", type="Source", params={},
+                     output_ports=[_port("status")]),
+            ],
+            edges=[],
+        )
+
+        (error,) = validate_integrity(graph)["errors"]
+
+        assert "producer" in error
+        assert "status" in error
+        assert "reserved" in error.lower()
+
+    def test_unbound_reserved_port_is_still_rejected(self):
+        """The collision is a property of the DECLARATION, not of any edge — a
+        port no edge binds yet is reported all the same, so the defect is caught
+        when the port is written rather than when it is first wired."""
+        graph = Graph(
+            name="reserved_dangling", version="1.0",
+            nodes=[
+                Node(id="s", type="Source", params={},
+                     output_ports=[_port("value"), _port("injected")]),
+            ],
+            edges=[],
+        )
+
+        report = validate_integrity(graph)
+
+        assert not report["valid"]
+        assert any("injected" in e for e in report["errors"])
+
+    def test_ordinary_port_names_still_validate(self):
+        """The fence is exactly three words wide. A graph naming none of them is
+        untouched — including near-misses, which are not reserved."""
+        graph = Graph(
+            name="reserved_clean", version="1.0",
+            nodes=[
+                Node(id="s", type="Source", params={},
+                     output_ports=[_port("statuses"), _port("node_ids")]),
+                Node(id="t", type="Sink", params={},
+                     input_ports=[_port("statuses"), _port("node_ids")]),
+            ],
+            edges=[
+                Edge(source="s", target="t", type="DATA",
+                     from_port="statuses", to_port="statuses"),
+                Edge(source="s", target="t", type="DATA",
+                     from_port="node_ids", to_port="node_ids"),
+            ],
+        )
+
+        assert validate_integrity(graph)["errors"] == []
+
+    def test_legacy_nodes_declare_no_ports_and_are_unaffected(self):
+        """A legacy node declares `None` on both sides, so it has no port names
+        to collide — the fence iterates nothing for it."""
+        graph = Graph(
+            name="reserved_legacy", version="1.0",
+            nodes=[
+                Node(id="a", type="Source", params={}),
+                Node(id="b", type="Sink", params={}),
+            ],
+            edges=[Edge(source="a", target="b", type="DATA")],
+        )
+
+        assert validate_integrity(graph)["errors"] == []
+
+    def test_the_declared_pipeline_graph_clears_the_fence(self):
+        """The eleven-stage citation-traversal graph names no reserved port.
+
+        The fence lands on a repo that already has one large port-declared
+        graph; this is the statement that it was not retroactively invalidated.
+        """
+        from idiograph.domains.arxiv.models import (
+            BackwardParameters,
+            ForwardParameters,
+            PipelineParameters,
+        )
+        from idiograph.domains.arxiv.pipeline_graph import build_pipeline_graph
+
+        graph = build_pipeline_graph(
+            [{"arxiv_id": "x"}],
+            PipelineParameters(
+                backward=BackwardParameters(n_backward=10, lambda_decay=0.1),
+                forward=ForwardParameters(
+                    n_forward=10, lambda_decay=0.1, alpha=1.0, beta=1.0,
+                    sort="cited_by_count:desc",
+                ),
+                current_year=2026,
+            ),
+        )
+
+        declared = {
+            port.name
+            for node in graph.nodes
+            for ports in (node.input_ports, node.output_ports)
+            for port in ports or ()
+        }
+
+        assert not declared & RESERVED_PORT_NAMES
+        assert validate_integrity(graph)["errors"] == []

@@ -528,16 +528,50 @@ def test_llm_free_run_skips_node(monkeypatch: pytest.MonkeyPatch) -> None:
             "annotate_relationships must not be called on an LLM-free run"
         )
 
+    # BOTH PLACES, the SAME object in each (IDG-089 rider 1): post-flip
+    # `run_traversal` dispatches through the HANDLERS registry, while the module
+    # attribute is what any surviving direct path reads. The annotate spy is the
+    # assertion of this test, so installing it in only one place would let it
+    # pass vacuously — the node could dispatch down the other path and the spy
+    # would never know.
+    from idiograph.core.executor import HANDLERS
+    from idiograph.domains.arxiv.handlers import register_arxiv_handlers
+
+    register_arxiv_handlers()  # populate HANDLERS before overriding entries
     monkeypatch.setattr(pipeline, "backward_traverse", _fake_backward)
+    monkeypatch.setitem(HANDLERS, "BackwardTraverse", _fake_backward)
     monkeypatch.setattr(pipeline, "forward_traverse", _fake_forward)
+    monkeypatch.setitem(HANDLERS, "ForwardTraverse", _fake_forward)
+    # Node 5.5 takes a THIRD binding, and only Node 5.5 does. `run_traversal`
+    # re-invokes `register_arxiv_handlers()` per run, which re-reads the ten
+    # pipeline stages off `pipeline` but reads Node 5.5 off
+    # `relationship_annotation` — so without this the re-registration would
+    # quietly restore the REAL handler over the setitem, and this spy would be
+    # asserting about a function nothing could have called.
+    from idiograph.domains.arxiv import relationship_annotation
+
     monkeypatch.setattr(pipeline, "annotate_relationships", _spy_annotate)
+    monkeypatch.setattr(
+        relationship_annotation, "annotate_relationships", _spy_annotate
+    )
+    monkeypatch.setitem(HANDLERS, "AnnotateRelationships", _spy_annotate)
 
     result = asyncio.run(
         pipeline.run_traversal(
-            resolved, _params(llm=None), client=object(), api_key="k"
+            resolved,
+            _params(llm=None),
+            seed_requests=[{"arxiv_id": "S"}],
+            client=object(),
+            api_key="k",
         )
     )
 
+    # Post-flip this holds through the node's declared `enabled_when="llm"`
+    # predicate rather than through an `if` in the orchestrator — the SAME
+    # decision, made by the executor from the declaration instead of by hand. An
+    # LLM-free run leaves Node 5.5 SKIPPED with `disabled_by_config`, which does
+    # not cascade: the passthrough forwards the pre-annotation node set and the
+    # downstream tail runs on, which is why there is still a result to assert on.
     assert called["annotate"] is False
     assert all(n.relationship_type is None for n in result.nodes)
 

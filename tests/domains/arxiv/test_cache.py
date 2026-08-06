@@ -17,8 +17,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from idiograph.core.executor import HANDLERS
 from idiograph.domains.arxiv import pipeline
 from idiograph.domains.arxiv.cache import cached_run_arxiv_pipeline
+from idiograph.domains.arxiv.handlers import register_arxiv_handlers
 from idiograph.domains.arxiv.models import (
     BackwardParameters,
     CitationEdge,
@@ -163,9 +165,25 @@ def _install_stages(
             "truncated_seeds": n4.truncated_seeds,
         }
     )
+    # BOTH PLACES, the SAME object in each (IDG-089 rider 1). Post-flip,
+    # `run_traversal` dispatches every stage through the HANDLERS registry; the
+    # module attribute is what any surviving direct path reads. The spies below
+    # are the point of this harness — `backward.assert_not_called()` is how the
+    # hit/miss tests prove a cache HIT issues no traversal call — and a spy
+    # installed in only one place would answer for only one path, passing
+    # vacuously while the real handler ran down the other.
+    #
+    # `run_traversal` re-invokes `register_arxiv_handlers()` per run, which
+    # re-reads these module attributes, so the two would agree even without the
+    # setitem. It is written out anyway: relying on that would make the harness
+    # depend on WHEN registration happens, and monkeypatch's setitem is also what
+    # restores HANDLERS afterwards instead of leaking a mock into later tests.
     monkeypatch.setattr(pipeline, "fetch_seeds", fetch)
+    register_arxiv_handlers()  # populate HANDLERS before overriding entries
     monkeypatch.setattr(pipeline, "backward_traverse", backward)
+    monkeypatch.setitem(HANDLERS, "BackwardTraverse", backward)
     monkeypatch.setattr(pipeline, "forward_traverse", forward)
+    monkeypatch.setitem(HANDLERS, "ForwardTraverse", forward)
     return fetch, backward, forward
 
 
