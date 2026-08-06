@@ -60,6 +60,15 @@ def find_cycles(graph: Graph) -> list[list[str]]:
 
 # ── Integrity ────────────────────────────────────────────────────────────────
 
+#: The bookkeeping keys `execute_graph` stamps onto every result dict, AFTER
+#: splatting the handler's output into it. A port sharing one of these names is
+#: therefore unreadable: the stamp wins, and the consumer bound to that port
+#: silently reads the executor's bookkeeping value instead of the payload. Not a
+#: run-time failure — a wrong value, which is worse — so it is rejected at
+#: declaration time, where the name is visible without executing anything.
+RESERVED_PORT_NAMES = frozenset({"status", "node_id", "injected"})
+
+
 def _dataflow_errors(graph: Graph) -> list[str]:
     """
     Check that every port-declared edge names ports its endpoints actually declare.
@@ -81,9 +90,30 @@ def _dataflow_errors(graph: Graph) -> list[str]:
     the wiring, reported here rather than silently resolved at run time.
 
     Ports are untyped: `port_type` and `Graph.type_registry` are not consulted.
+
+    A port named for one of the executor's bookkeeping keys
+    (`RESERVED_PORT_NAMES`) is rejected outright, independently of any edge —
+    the collision is a property of the DECLARATION, so a port that no edge
+    binds yet is still reported.
     """
     node_map = {node.id: node for node in graph.nodes}
     errors: list[str] = []
+
+    for node in graph.nodes:
+        for side, declared in (
+            ("input", node.input_ports),
+            ("output", node.output_ports),
+        ):
+            for port in declared or ():
+                if port.name in RESERVED_PORT_NAMES:
+                    errors.append(
+                        f"Node '{node.id}': {side} port '{port.name}' uses the "
+                        f"reserved word '{port.name}' — the executor stamps it "
+                        f"onto every result dict, so the port's value would be "
+                        f"silently overwritten. Reserved: "
+                        f"{sorted(RESERVED_PORT_NAMES)}."
+                    )
+
     # (target id, to_port) → the `source.from_port` of every edge claiming it.
     port_claims: dict[tuple[str, str], list[str]] = {}
     # Targets with an already-reported defect on an incoming edge. Such a node
