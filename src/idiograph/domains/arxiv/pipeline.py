@@ -15,8 +15,10 @@ from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
 from pydantic import BaseModel
 
+from idiograph.core.executor import execute_graph
 from idiograph.core.logging_config import get_logger
 from idiograph.core.models import Graph, Node, Edge, PortDeclaration
+from idiograph.core.query import validate_integrity
 from idiograph.domains.arxiv.models import (
     CitationEdge,
     CoCitationParameters,
@@ -41,7 +43,15 @@ from idiograph.domains.arxiv.models import (
     TruncatedSeed,
     make_node_id,
 )
-from idiograph.domains.arxiv.relationship_annotation import annotate_relationships
+# Node 5.5's handler, RE-EXPORTED rather than called. The flip moved every stage
+# dispatch onto the HANDLERS registry, so nothing in this module calls it any
+# more — but `pipeline.annotate_relationships` is the module attribute every
+# harness that stands in for Node 5.5 binds to (`monkeypatch.setattr` requires
+# the attribute to exist), and dropping it would silently turn those stand-ins
+# into AttributeErrors. Kept deliberately; the noqa is the record of that.
+from idiograph.domains.arxiv.relationship_annotation import (  # noqa: F401
+    annotate_relationships,
+)
 
 load_dotenv()
 
@@ -2156,10 +2166,127 @@ async def resolve_seeds(params: dict, inputs: dict, *, resources: dict) -> dict:
     return {"seeds": resolved, "seed_failures": seed_failures}
 
 
+class PipelineHaltError(RuntimeError):
+    """A node of the declared graph FAILED, so the run has no result to return.
+
+    ``run_traversal`` drives the pipeline through ``execute_graph``, which
+    SWALLOWS a raising handler and reports it as ``{"status": "FAILED", ...}``
+    rather than letting it out. That swallow-and-report policy belongs to the
+    executor and is deliberately kept there (IDG-063 clauses 2-3): a graph
+    runner reports on the graph. It is NOT this function's contract —
+    ``run_traversal`` promises a complete ``PipelineResult`` or nothing at all,
+    and every caller above it is written against that promise. This exception is
+    the adapter turning the executor's reported failure back into the halt the
+    caller was always given.
+
+    THE PREDICATE IS EXACTLY "ANY FAILED", with no per-node exemption. Scanning
+    for FAILED alone is sufficient because a cascade-SKIPPED result always traces
+    to a FAILED root, which is itself in the same results dict. And it is
+    necessary that SKIPPED not be matched: a node the graph gates off with
+    ``enabled_when`` is also SKIPPED, and that is legitimate declared state — an
+    LLM-free run halting because Node 5.5 is configured off would be absurd.
+
+    Carries the whole failure: ``node_id`` (the FIRST node to fail in topological
+    order, which is the root rather than a downstream casualty), ``error`` (the
+    string the executor reported) and ``results`` (the entire results dict, so a
+    caller can see exactly how far the run got and which nodes cascaded). The
+    ORIGINAL exception is the ``__cause__`` — this is raised ``from`` the
+    exception OBJECT the executor carried on the FAILED result, so the type and
+    the traceback that ``str(e)`` throws away both survive the round trip.
+
+    Deliberately a ``RuntimeError`` subclass, matching the core executor's own
+    error family (``PortBindingError``, ``UnregisteredNodeTypeError``,
+    ``UnsuppliedResourceError``): a halt is a failure of the run, not of the
+    caller's arguments. And deliberately defined HERE rather than in ``core/``:
+    swallow-and-report is the executor's policy, and the decision to halt on it
+    is this domain's (IDG-075 clause 2). Pre-handler defects — cycles,
+    unregistered node types, unsupplied resources — already raise out of
+    ``execute_graph`` on their own and are NOT re-wrapped in this.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        node_id: str,
+        error: str,
+        results: dict[str, object],
+    ) -> None:
+        super().__init__(message)
+        self.node_id = node_id
+        self.error = error
+        self.results = results
+
+
+def _halt_if_any_node_failed(results: dict) -> None:
+    """Raise ``PipelineHaltError`` on the FIRST failed node, or return.
+
+    ``results`` is populated in topological order, so the first FAILED entry is
+    the EARLIEST failure — the root cause, not one of the nodes that cascaded
+    behind it. Reporting the root is the whole reason to scan in order rather
+    than collect and pick arbitrarily.
+
+    The re-raise is ``from`` the exception OBJECT the executor recorded, which is
+    what makes the original type and traceback survive: a caller catching this
+    still reaches the ``RuntimeError`` (or whatever the handler actually raised)
+    through ``__cause__``, where ``str(e)`` alone would have flattened it to a
+    message. A FAILED result with no ``exception`` — a port binding that failed
+    once the upstream payload existed — carries None, and the halt simply has no
+    cause.
+    """
+    for node_id, node_result in results.items():
+        if node_result.get("status") != "FAILED":
+            continue
+        error = node_result.get("error", "")
+        raise PipelineHaltError(
+            f"pipeline halted: node '{node_id}' failed — {error}",
+            node_id=node_id,
+            error=error,
+            results=results,
+        ) from node_result.get("exception")
+
+
+def _declared_producer_output(
+    graph: Graph,
+    results: dict,
+    target: str,
+    to_port: str,
+) -> object:
+    """The value the GRAPH declares as feeding ``target``'s ``to_port``.
+
+    Reads the wiring rather than restating it: find the edge the graph declares
+    into that input port, then read the producer's output at the ``from_port``
+    that edge names. The alternative — naming the producer here — would put a
+    second copy of the topology in this module, free to disagree with
+    ``_build_edges`` silently while both still validate green.
+
+    Used for the ``cycle_clean`` witness, which is the one piece of the result
+    that is NOT carried on a port (``input_node_ids`` is ``exclude=True``
+    structural metadata) and so must be rebuilt from the node set that fed
+    ``CleanCycles``. Getting it from any free variable is the live defect: Node
+    5.5 rebinds the node set downstream, so a witness built from "the nodes" and
+    a witness built from "the nodes CleanCycles was given" differ exactly when
+    5.5 changes the node set — and only the second one is right.
+
+    ``validate_integrity`` ran before execution and requires exactly one edge per
+    declared input port, so the loop finds one; the raise is the unreachable
+    guard that says so rather than returning None into the result.
+    """
+    for edge in graph.edges:
+        if edge.target == target and edge.to_port == to_port:
+            return results[edge.source][edge.from_port]
+    raise PipelineError(
+        f"the declared graph feeds no edge into '{target}'.'{to_port}', so the "
+        f"value cannot be read off its producer. validate_integrity should have "
+        f"caught this before execution."
+    )
+
+
 async def run_traversal(
     resolved: list[PaperRecord],
     parameters: PipelineParameters,
     *,
+    seed_requests: list[dict],
     client: httpx.AsyncClient,
     api_key: str,
     anthropic_client: AsyncAnthropic | None = None,
@@ -2168,354 +2295,186 @@ async def run_traversal(
     pure compute core of the pipeline, extracted so the read-through cache can
     short-circuit exactly this and nothing before it.
 
-    Takes the resolved seeds (never the request dicts): it performs no Node 0
-    resolution and every OpenAlex call it issues is a traversal call, so a cache
-    hit that skips this function issues none. It delegates every domain operation
-    to an existing per-stage function and is responsible only for composition:
-    graph merge, dataflow, failure-provenance aggregation, end-of-pipeline
-    enrichment, and result assembly.
+    AN ADAPTER, NOT AN ORCHESTRATOR (IDG-075 clause 4e). This function no longer
+    calls the eleven stages by hand. It builds the declared ``Graph`` from
+    ``build_pipeline_graph`` and hands it to ``execute_graph``; the dataflow that
+    used to be locals threaded from one ``await`` to the next is now the graph's
+    edges, executed. What is left here is exactly what is NOT dataflow: the
+    argument guard, the integrity gate, the halt decision, and reassembling a
+    ``PipelineResult`` from the results dict. ``pipeline_graph`` was a second
+    description of this pipeline that nothing ran; it is now the only one.
+
+    Takes the resolved seeds (never as the graph's dataflow head): it performs no
+    Node 0 resolution and every OpenAlex call it issues is a traversal call, so a
+    cache hit that skips this function issues none. Resolution already happened
+    above, so the ResolveSeeds node's output is INJECTED rather than recomputed —
+    the node declares ``input_ports == []``, which is what makes it injectable,
+    and the executor records it SUCCESS without dispatching the handler.
+
+    ``seed_requests`` is the request identifier dicts (``{"arxiv_id": ...}`` /
+    ``{"doi": ...}``) that produced ``resolved``, and it is REQUIRED with no
+    default (IDG-088; IDG-089 rider 3). It is the seed set Node 0 carries as
+    CONFIGURATION on its params, so it enters the declared graph. A default would
+    let a caller build a graph whose RESOLVE params silently disagreed with the
+    request set that produced the injected records — a graph describing one run
+    while executing another.
 
     Returns a complete ``PipelineResult`` EXCEPT the request-derived
     ``seed_failures``, which it leaves empty for the composition layer
     (``run_arxiv_pipeline`` or the cache) to re-supply from the current resolve
-    output — so a cache hit provably equals a fresh miss on that field.
+    output — so a cache hit provably equals a fresh miss on that field. The
+    injected ResolveSeeds output carries an empty ``seed_failures`` for the same
+    reason: the port exists, nothing in the graph consumes it, and the value is
+    not this function's to state.
 
-    Halts (raises, no partial result) when any whole-graph stage (Node
-    4.5/5/6/7) raises. Otherwise proceeds — partial Node 3/4 failures and empty
-    backward/forward results still produce a valid (possibly seeds-only) graph.
+    Halts (raises, no partial result) when any node FAILS — see
+    ``PipelineHaltError``, which also explains why the predicate is FAILED alone
+    and never SKIPPED. Otherwise proceeds: partial Node 3/4 failures ride
+    provenance ports rather than failing their node, and empty backward/forward
+    results still produce a valid (possibly seeds-only) graph.
     """
-    # 2. Traversal (one batch call each, over the full resolved-seed list).
-    #    Failures are read off the results, never caught per seed.
-    _log.info("Pipeline: starting backward traversal")
-    # Node 3 is BOUND and DECLARING: it declares BACKWARD_TRAVERSE_INPUT_PORTS, so
-    # the executor builds its `inputs` from the port-declared edges into it keyed
-    # by `to_port`, and it declares the http_client and openalex_api_key resources,
-    # which the run supplies. Marshal this direct call into that same contract —
-    # one key per declared input port, the client and the credential through the
-    # resource channel — so the direct and executor-driven paths agree. The
-    # n_backward/lambda_decay config keeps its home in PipelineParameters and is
-    # read here; `sleep_ms` is pacing rather than output-determining config, so it
-    # comes from BACKWARD_SLEEP_MS and is passed EXPLICITLY — the call site states
-    # what the stage is configured with rather than leaning on a default.
-    # `current_year` is output-determining and comes from PipelineParameters
-    # top-level, marshalled explicitly here exactly as it is for Node 4 below: one
-    # stated year for the run, so the two stages cannot disagree and neither reads
-    # a clock.
+    # THE GUARD, FIRST — before the graph is built, before it is validated,
+    # before anything executes. Node 5.5 declares `anthropic_client` as a
+    # resource, so an LLM run that supplied none would otherwise be caught by the
+    # executor's `_check_resource_supply` and surface as an
+    # `UnsuppliedResourceError` — a graph-level defect, which is not what
+    # happened. What happened is that the CALLER did not supply a client it was
+    # contracted to supply, and callers are written against this ValueError.
+    # Letting the executor report it instead would be a silent contract change,
+    # and letting it become a FAILED node would degrade it into a halt.
+    if parameters.llm is not None and anthropic_client is None:
+        raise ValueError(
+            "run_traversal: parameters.llm is set but anthropic_client is "
+            "None — Node 5.5 requires an injected AsyncAnthropic client "
+            "(IDG-024 keyword-only injection)."
+        )
+
+    # FUNCTION-LOCAL, both of them, and for one reason: this module is what they
+    # import. `pipeline_graph` imports the port constants declared here (it must
+    # never transcribe them), and `register_arxiv_handlers` imports the ten stage
+    # functions defined here. Either import at module level would close the cycle
+    # at load time. `handlers.py` already uses this idiom for the same reason.
+    from idiograph.domains.arxiv.handlers import register_arxiv_handlers
+    from idiograph.domains.arxiv.pipeline_graph import (
+        ASSEMBLE,
+        BACKWARD,
+        CLEAN,
+        CO_CITATIONS,
+        COMMUNITIES,
+        DEPTH,
+        ENRICH,
+        FORWARD,
+        PAGERANK,
+        RESOLVE,
+        build_pipeline_graph,
+    )
+
+    # Registration is INVOKED, never reimplemented: the domain has exactly one
+    # boot site naming the eleven node types, and a second mapping here could
+    # bind a different handler under the same type. Called per run rather than
+    # once, so this function is self-sufficient instead of depending on some
+    # earlier caller having booted the domain.
     #
-    # The returned mapping is unwrapped so `n3` stays the Node3Result the rest of
-    # this function consumes unchanged.
-    n3_ports = await backward_traverse(
-        {
-            "n_backward": parameters.backward.n_backward,
-            "lambda_decay": parameters.backward.lambda_decay,
-            "sleep_ms": BACKWARD_SLEEP_MS,
-            "current_year": parameters.current_year,
+    # WHAT THIS MEANS FOR STAND-INS, because it is not obvious and the test suite
+    # rests on it: `register_arxiv_handlers` imports the stage functions FROM
+    # THIS MODULE at call time, so it re-reads `pipeline.<stage>` on every run.
+    # A harness that rebinds the module attribute therefore has its stand-in
+    # picked up here automatically. The one stage that does NOT work that way is
+    # Node 5.5 — the registrar reads it from `relationship_annotation`, not from
+    # here — so a harness standing in for it must rebind the attribute on THAT
+    # module, which is the one place this re-registration reads it from.
+    register_arxiv_handlers()
+    graph = build_pipeline_graph(seed_requests, parameters)
+
+    # BEFORE execution, deliberately. A dataflow defect — an input port fed by no
+    # edge, or by two — is knowable from the graph alone and without running
+    # anything, and discovering it halfway through means having already spent the
+    # OpenAlex traversal calls that are the expensive part of this pipeline.
+    # `validate_integrity` reads only the graph and knows nothing about the run,
+    # so it is a pure gate: it passes, or the run never starts.
+    integrity = validate_integrity(graph)
+    if not integrity["valid"]:
+        raise PipelineError(
+            "the declared citation-traversal graph does not validate, so it was "
+            "not executed: " + "; ".join(integrity["errors"])
+        )
+
+    _log.info("Pipeline: executing the declared graph (%d nodes)", len(graph.nodes))
+    results = await execute_graph(
+        graph,
+        resources={
+            "http_client": client,
+            "openalex_api_key": api_key,
+            # Supplied unconditionally, including as None. On an LLM run the
+            # guard above has already established it is not None; on an LLM-free
+            # run Node 5.5 is disabled by its config predicate, so
+            # `_check_resource_supply` skips it and nothing is ever dispatched
+            # that could draw against it.
+            "anthropic_client": anthropic_client,
         },
-        {"seeds": resolved},
-        resources={"http_client": client, "openalex_api_key": api_key},
+        # Node 0 already ran, ABOVE this function — that separation is what lets
+        # the read-through cache short-circuit traversal alone. Injecting its
+        # output is what keeps that true here: `resolved` is threaded in as the
+        # RESOLVE node's result rather than the handler being dispatched to fetch
+        # the same seeds a second time. The node declares `input_ports == []`,
+        # which is what makes it injectable at all. `seed_failures` rides the
+        # port EMPTY because it is request-derived and the composition layer
+        # re-supplies it — the same reason this function returns it empty.
+        outputs={RESOLVE: {"seeds": resolved, "seed_failures": []}},
     )
-    n3 = n3_ports["backward"]
-    _log.info("Pipeline: backward traversal complete")
-    # Failure provenance is read off its OWN declared port, not dug out of the
-    # `backward` payload — that port is the canonical carrier.
-    n3_failed_batches = n3_ports["failed_batches"]
-    if n3_failed_batches:
-        _log.warning(
-            "Pipeline: Node 3 recorded %d failed batch(es)", len(n3_failed_batches)
-        )
+    _halt_if_any_node_failed(results)
 
-    _log.info("Pipeline: starting forward traversal")
-    # Node 4 is BOUND and DECLARING, exactly as Node 3 above: it declares
-    # FORWARD_TRAVERSE_INPUT_PORTS, so the executor builds its `inputs` from the
-    # port-declared edges into it keyed by `to_port`, and it declares the
-    # http_client and openalex_api_key resources, which the run supplies. Marshal
-    # this direct call into that same contract — one key per declared input port,
-    # the client and the credential through the resource channel — so the direct
-    # and executor-driven paths agree. The n_forward/lambda_decay/alpha/beta/sort
-    # config keeps its home in PipelineParameters and is read here;
-    # `acceleration_method` is not output-determining (one admissible method), so
-    # it comes from FORWARD_ACCELERATION_METHOD and is passed EXPLICITLY rather
-    # than leaning on a default; `current_year` is output-determining and comes
-    # from PipelineParameters top-level — the SAME value Node 3 was handed above.
-    #
-    # The returned mapping is unwrapped so `n4` stays the Node4Result the rest of
-    # this function consumes unchanged.
-    n4_ports = await forward_traverse(
-        {
-            "n_forward": parameters.forward.n_forward,
-            "lambda_decay": parameters.forward.lambda_decay,
-            "alpha": parameters.forward.alpha,
-            "beta": parameters.forward.beta,
-            "sort": parameters.forward.sort,
-            "acceleration_method": FORWARD_ACCELERATION_METHOD,
-            "current_year": parameters.current_year,
-        },
-        {"seeds": resolved},
-        resources={"http_client": client, "openalex_api_key": api_key},
-    )
-    n4 = n4_ports["forward"]
-    _log.info("Pipeline: forward traversal complete")
-    # Failure provenance is read off its OWN declared ports, not dug out of the
-    # `forward` payload — those ports are the canonical carriers.
-    n4_failed_seeds = n4_ports["failed_seeds"]
-    n4_truncated_seeds = n4_ports["truncated_seeds"]
-    if n4_failed_seeds or n4_truncated_seeds:
-        _log.warning(
-            "Pipeline: Node 4 recorded %d failed seed(s), %d truncated",
-            len(n4_failed_seeds),
-            len(n4_truncated_seeds),
-        )
+    # Everything below reads the results dict AT DECLARED OUTPUT PORTS. Failure
+    # provenance especially: `failed_batches` is read off the port that carries
+    # it, never dug out of the `backward` payload that also happens to hold the
+    # same list. BACKWARD_TRAVERSE_OUTPUT_PORTS calls that port canonical, and
+    # reading it here is what makes the claim true of production rather than only
+    # of the handler.
+    cleaned_edges = results[CLEAN]["cleaned_edges"]
+    co_citation_edges = results[CO_CITATIONS]["co_citation_edges"]
 
-    # 3. Graph merge.
-    _log.info("Pipeline: starting graph merge")
-    # The merge stage is BOUND: it declares ASSEMBLE_GRAPH_INPUT_PORTS, so the
-    # executor builds its `inputs` from the port-declared edges into it, keyed by
-    # `to_port`. Marshal this direct call into that same contract — one key per
-    # declared input port — so the direct and executor-driven paths agree. It
-    # takes no configuration, so `params` is empty. The returned mapping is
-    # unpacked into the three locals the rest of this function consumes
-    # unchanged, in the order the pre-binding 3-tuple carried them.
-    merged = await assemble_graph(
-        {},
-        {"seeds": resolved, "backward": n3, "forward": n4},
-    )
-    unified_nodes = merged["nodes"]
-    unified_cites = merged["cites"]
-    mismatches = merged["mismatches"]
-    _log.info(
-        "Pipeline: graph merge complete — %d nodes, %d cites edges, %d mismatch(es)",
-        len(unified_nodes),
-        len(unified_cites),
-        len(mismatches),
-    )
-
-    # 4. Whole-graph stages (exceptions propagate; orchestrator does not catch).
-    _log.info("Pipeline: starting cycle cleaning")
-    # The cycle-cleaning stage is BOUND: it declares CLEAN_CYCLES_INPUT_PORTS, so
-    # the executor builds its `inputs` from the port-declared edges into it, keyed
-    # by `to_port`. Marshal this direct call into that same contract — one key per
-    # declared input port — so the direct and executor-driven paths agree. It takes
-    # no configuration, so `params` is empty.
-    #
-    # The bound mapping is held in a local because the `nodes` port binding is
-    # also what the result-assembly witness is built from (see step 7). Node 5.5
-    # below rebinds `unified_nodes` to annotated copies, so the witness must come
-    # from what was bound HERE, not from that free variable later.
-    clean_inputs = {"nodes": unified_nodes, "cites": unified_cites}
-    cleaned = await clean_cycles({}, clean_inputs)
-    # all_cites (cleaned + suppressed) -> co-citation + communities: co-occurrence
-    # and clustering keep real-but-suppressed citations. depth + pagerank ->
-    # cleaned_edges only (they need the acyclic graph). The split is deliberate.
-    # The concatenation itself now lives in the handler and arrives on its own
-    # declared port.
-    cleaned_edges = cleaned["cleaned_edges"]
-    cycle_log = cleaned["cycle_log"]
-    all_cites = cleaned["all_cites"]
-    _log.info("Pipeline: cycle cleaning complete")
-
-    _log.info("Pipeline: starting co-citation")
-    # Node 5 co-citation is BOUND: it declares CO_CITATIONS_INPUT_PORTS, so the
-    # executor builds its `inputs` from the port-declared edges into it, keyed by
-    # `to_port`. Marshal this direct call into that same contract — one key per
-    # declared input port — so the direct and executor-driven paths agree. The
-    # min_strength/max_edges config keeps its home in PipelineParameters and is
-    # read here. The returned mapping is unwrapped into the two locals the rest of
-    # this function consumes, under the same names PipelineResult carries them by.
-    #
-    # The `nodes` port binds `unified_nodes` HERE, before the Node 5.5 block below
-    # may rebind that free variable to annotated copies. The stage order is
-    # load-bearing: this call does not move past 5.5.
-    co = await compute_co_citations(
-        {
-            "min_strength": parameters.co_citation.min_strength,
-            "max_edges": parameters.co_citation.max_edges,
-        },
-        {"nodes": unified_nodes, "all_cites": all_cites},
-    )
-    co_citation_edges = co["co_citation_edges"]
-    co_citation_warnings = co["co_citation_warnings"]
-    _log.info("Pipeline: co-citation complete")
-
-    # --- Node 5.5 insertion (spec-node5.5-semantic-relationship) ---
-    # Build-time, miss-gated (this function runs only on a cache MISS): classify
-    # each non-seed paper's relationship to the seed set.
-    #
-    # The `parameters.llm is not None` test is the DIRECT-CALL MIRROR of the
-    # node's declared config predicate: the node declares
-    # ANNOTATE_RELATIONSHIPS_ENABLED_WHEN ("llm") and the executor tests the same
-    # param's truthiness before dispatch, so the two paths gate identically. An
-    # LLM-free run skips it entirely here exactly as the executor never
-    # dispatches it there — a pure no-op, address unchanged. Its disabled
-    # passthrough ({"nodes": "nodes"}) is what `unified_nodes` keeping its
-    # pre-annotation binding below already does by hand.
-    #
-    # Node 5.5 is BOUND and DECLARING: it declares
-    # ANNOTATE_RELATIONSHIPS_INPUT_PORTS, so the executor builds its `inputs`
-    # from the port-declared edges into it keyed by `to_port`, and it declares
-    # the anthropic_client resource, which the run supplies. Marshal this direct
-    # call into that same contract — one key per declared input port, the client
-    # through the resource channel — so the direct and executor-driven paths
-    # agree. The llm config keeps its home in PipelineParameters and is read here.
-    #
-    # relationship_type is a leaf; the downstream stages below do not read it, so
-    # reassigning unified_nodes to the annotated copies is safe. Only the `nodes`
-    # port is consumed — the `provenance` port is dropped here, as it always has
-    # been (a known stray: this function does not persist it).
-    if parameters.llm is not None:
-        if anthropic_client is None:
-            raise ValueError(
-                "run_traversal: parameters.llm is set but anthropic_client is "
-                "None — Node 5.5 requires an injected AsyncAnthropic client "
-                "(IDG-024 keyword-only injection)."
-            )
-        ann = await annotate_relationships(
-            {"llm": parameters.llm},
-            {"nodes": unified_nodes, "resolved": resolved},
-            resources={"anthropic_client": anthropic_client},
-        )
-        unified_nodes = ann["nodes"]
-    else:
-        _log.debug("Node 5.5: skipped (llm config None)")
-    # --- end Node 5.5 ---
-
-    _log.info("Pipeline: starting depth metrics")
-    # Node 6 depth is BOUND: it declares COMPUTE_DEPTH_METRICS_INPUT_PORTS, so the
-    # executor builds its `inputs` from the port-declared edges into it, keyed by
-    # `to_port`. Marshal this direct call into that same contract — one key per
-    # declared input port — so the direct and executor-driven paths agree. It takes
-    # no configuration, so `params` is empty. The returned mapping is unwrapped so
-    # `depth` stays the `{node_id: DepthMetrics}` dict the rest of this function
-    # consumes unchanged.
-    #
-    # `cleaned_edges`, not `all_cites`: depth needs the acyclic view. The `nodes`
-    # port binds whichever `unified_nodes` is in scope HERE — the Node 5.5 block
-    # above may have rebound it to the annotated copies, and depth is a consumer of
-    # that rebinding. The stage order is load-bearing: this call does not move
-    # ahead of 5.5.
-    depth = (
-        await compute_depth_metrics(
-            {},
-            {
-                "nodes": unified_nodes,
-                "cleaned_edges": cleaned_edges,
-            },
-        )
-    )["depth_metrics"]
-    _log.info("Pipeline: depth metrics complete")
-
-    _log.info("Pipeline: starting pagerank")
-    # Node 6 pagerank is BOUND: it declares COMPUTE_PAGERANK_INPUT_PORTS, so the
-    # executor builds its `inputs` from the port-declared edges into it, keyed by
-    # `to_port`. Marshal this direct call into that same contract — one key per
-    # declared input port — so the direct and executor-driven paths agree. The
-    # damping config keeps its home in PipelineParameters and is read here. The
-    # returned mapping is unwrapped so `prank` stays the `{node_id: pagerank}`
-    # dict the rest of this function consumes unchanged.
-    prank = (
-        await compute_pagerank(
-            {"damping": parameters.pagerank.damping},
-            {
-                "nodes": unified_nodes,
-                "cleaned_edges": cleaned_edges,
-            },
-        )
-    )["pagerank"]
-    _log.info("Pipeline: pagerank complete")
-
-    _log.info("Pipeline: starting community detection")
-    # Node 7 is BOUND: it declares DETECT_COMMUNITIES_INPUT_PORTS, so the executor
-    # builds its `inputs` from the port-declared edges into it, keyed by `to_port`.
-    # Marshal this direct call into that same contract — one key per declared input
-    # port — so the direct and executor-driven paths agree. The community-detection
-    # config keeps its home in PipelineParameters and is read here. The returned
-    # mapping is unwrapped so `communities` stays the `CommunityResult` the rest of
-    # this function consumes unchanged.
-    #
-    # `all_cites`, not `cleaned_edges`: clustering keeps the real-but-suppressed
-    # citations, the same view Node 5 takes. The `nodes` port binds whichever
-    # `unified_nodes` is in scope HERE — Node 5.5 above may have rebound it to the
-    # annotated copies.
-    communities = (
-        await detect_communities(
-            {
-                "infomap_seed": parameters.communities.infomap_seed,
-                "infomap_trials": parameters.communities.infomap_trials,
-                "infomap_teleportation": parameters.communities.infomap_teleportation,
-                "leiden_seed": parameters.communities.leiden_seed,
-                "community_count_min": parameters.communities.community_count_min,
-                "community_count_max": parameters.communities.community_count_max,
-            },
-            {
-                "nodes": unified_nodes,
-                "all_cites": all_cites,
-            },
-        )
-    )["communities"]
-    _log.info("Pipeline: community detection complete")
-
-    # 5. End-of-pipeline enrichment is BOUND: it declares ENRICH_NODES_INPUT_PORTS,
-    #    so the executor builds its `inputs` from the port-declared edges into it,
-    #    keyed by `to_port`. Marshal this direct call into that same contract — one
-    #    key per declared input port — so the direct and executor-driven paths
-    #    agree. It takes no configuration, so `params` is empty. The returned
-    #    mapping is unwrapped so `enriched_nodes` stays the `list[PaperRecord]` the
-    #    rest of this function consumes unchanged.
-    #
-    #    The merge is an immutable write path (model_copy) and Node 6 owns the
-    #    canonical hop_depth_per_root / traversal_direction. The `nodes` port binds
-    #    whichever `unified_nodes` is in scope HERE — Node 5.5 above may have
-    #    rebound it to the annotated copies, and the enrichment is a consumer of
-    #    that rebinding: the annotations ride into `enriched_nodes` through it.
-    enriched_nodes = (
-        await enrich_nodes(
-            {},
-            {
-                "nodes": unified_nodes,
-                "depth_metrics": depth,
-                "pagerank": prank,
-                "communities": communities,
-            },
-        )
-    )["enriched_nodes"]
-
-    # 6. Merged edge view. Suppressed originals are NOT in `edges` — they live in
-    #    cycle_log.suppressed_edges for audit.
+    # The merged edge view, which stays HERE rather than becoming a stage:
+    # suppressed originals are deliberately NOT in `edges` (they live in
+    # cycle_log.suppressed_edges for audit), and no node declares this
+    # concatenation because it is result assembly, not dataflow.
     merged_edges = cleaned_edges + co_citation_edges
 
-    # 7. Construct and return. ``seed_failures`` is request-derived (a function
-    #    of the requested seed set, not the resolved set that keys the cache);
-    #    the composition layer re-supplies it from the current resolve output,
-    #    so it is left empty here (see run_arxiv_pipeline / cache re-supply).
-    #
-    #    ``cycle_clean`` is reassembled from the ports the bound stage returned.
-    #    The witness is NOT a port (it is exclude=True structural metadata), so
-    #    it is rebuilt here from the node set bound to the `nodes` port — the
-    #    `clean_inputs` binding above, deliberately not the `unified_nodes` free
-    #    variable, which Node 5.5 may since have rebound to annotated copies.
-    #    Re-running the validator on the same edges and the same node set it
-    #    already passed inside the handler is a no-op by construction.
     cycle_clean = CycleCleanResult(
         cleaned_edges=cleaned_edges,
-        cycle_log=cycle_log,
-        input_node_ids=frozenset(n.node_id for n in clean_inputs["nodes"]),
+        cycle_log=results[CLEAN]["cycle_log"],
+        # The witness is not a port (it is exclude=True structural metadata), so
+        # it is rebuilt — from the node set the GRAPH DECLARES as feeding
+        # CleanCycles' `nodes` port, read off that producer's own output port.
+        # Not from a local: Node 5.5 rebinds the node set downstream, so "the
+        # nodes" and "the nodes CleanCycles was given" are different lists on any
+        # run where 5.5 changes the set, and only the second is the witness.
+        # Re-running the validator over the same edges and the same node set it
+        # already passed inside the handler is a no-op by construction.
+        input_node_ids=frozenset(
+            n.node_id
+            for n in _declared_producer_output(graph, results, CLEAN, "nodes")
+        ),
     )
 
+    # `seed_failures` is request-derived (a function of the requested seed set,
+    # not the resolved set that keys the cache); the composition layer re-supplies
+    # it from the current resolve output, so it is left empty here.
     result = PipelineResult(
-        nodes=enriched_nodes,
+        nodes=results[ENRICH]["enriched_nodes"],
         edges=merged_edges,
-        seeds=[s.node_id for s in resolved],
+        seeds=[s.node_id for s in results[RESOLVE]["seeds"]],
         cycle_clean=cycle_clean,
         co_citation_edges=co_citation_edges,
-        co_citation_warnings=co_citation_warnings,
-        depth_metrics=depth,
-        pagerank=prank,
-        communities=communities,
+        co_citation_warnings=results[CO_CITATIONS]["co_citation_warnings"],
+        depth_metrics=results[DEPTH]["depth_metrics"],
+        pagerank=results[PAGERANK]["pagerank"],
+        communities=results[COMMUNITIES]["communities"],
         parameters=parameters,
         seed_failures=[],
-        backward_failed_batches=n3.failed_batches,
-        forward_failed_seeds=n4.failed_seeds,
-        truncated_seeds=n4.truncated_seeds,
-        data_integrity_warnings=mismatches,
+        backward_failed_batches=results[BACKWARD]["failed_batches"],
+        forward_failed_seeds=results[FORWARD]["failed_seeds"],
+        truncated_seeds=results[FORWARD]["truncated_seeds"],
+        data_integrity_warnings=results[ASSEMBLE]["mismatches"],
     )
     _log.info(
         "Pipeline: traversal complete — %d nodes, %d edges",
@@ -2570,6 +2529,7 @@ async def run_arxiv_pipeline(
     result = await run_traversal(
         resolved,
         parameters,
+        seed_requests=seeds,
         client=client,
         api_key=api_key,
         anthropic_client=anthropic_client,

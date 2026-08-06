@@ -169,6 +169,7 @@ async def cached_run_arxiv_pipeline(
     result = await run_traversal(
         resolved,
         parameters,
+        seed_requests=seeds,
         client=client,
         api_key=api_key,
         anthropic_client=anthropic_client,

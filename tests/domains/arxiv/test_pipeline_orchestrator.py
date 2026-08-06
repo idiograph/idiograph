@@ -7,11 +7,14 @@ from unittest.mock import AsyncMock
 import networkx as nx
 import pytest
 
+from idiograph.core.executor import HANDLERS
 from idiograph.domains.arxiv import pipeline
+from idiograph.domains.arxiv.handlers import register_arxiv_handlers
 from idiograph.domains.arxiv.models import (
     BackwardParameters,
     CitationEdge,
     CoCitationParameters,
+    CycleCleanResult,
     EdgeMetadataMismatch,
     FailedBatch,
     FailedSeed,
@@ -25,6 +28,7 @@ from idiograph.domains.arxiv.models import (
 )
 from idiograph.domains.arxiv.pipeline import (
     PipelineError,
+    PipelineHaltError,
     assemble_graph,
     run_arxiv_pipeline,
 )
@@ -94,6 +98,31 @@ def _params(
     )
 
 
+def _install_stage(
+    monkeypatch: pytest.MonkeyPatch,
+    attr: str,
+    node_type: str,
+    stand_in: object,
+) -> object:
+    """Install one stand-in in BOTH places, as the SAME object (IDG-089 rider 1).
+
+    Post-flip, `run_traversal` dispatches every stage through the HANDLERS
+    registry; the module attribute is what any surviving direct path — and the
+    pre-flip reference implementation this suite differences against — still
+    reads. A harness that patched only one of the two would silently drive the
+    real handler down the other path, which for a network-bound stage means an
+    OpenAlex call against a sentinel client.
+
+    ONE object in both slots, never two equal ones: every spy assertion in this
+    suite (`assert_not_called`, call counts) has to answer for the whole run
+    regardless of which path invoked the stage.
+    """
+    register_arxiv_handlers()  # populate HANDLERS before overriding an entry
+    monkeypatch.setattr(pipeline, attr, stand_in)
+    monkeypatch.setitem(HANDLERS, node_type, stand_in)
+    return stand_in
+
+
 def _install_stages(
     monkeypatch: pytest.MonkeyPatch,
     resolved: list[PaperRecord],
@@ -106,23 +135,28 @@ def _install_stages(
     The orchestrator is a composer; tests inject constructed node outputs rather
     than exercising OpenAlex. The pure whole-graph stages (4.5/5/6/7) run for
     real over the injected graph.
+
+    Node 0 is patched at `fetch_seeds`, INSIDE the `resolve_seeds` handler,
+    rather than at the handler itself: resolution runs above `run_traversal` on
+    the direct path, and `run_traversal` injects its output into the graph rather
+    than dispatching the node. Patching the network call underneath serves both.
     """
     monkeypatch.setattr(
         pipeline, "fetch_seeds", AsyncMock(return_value=(resolved, failures))
     )
-    # Node 3 is a port-declared handler: it returns its declared output ports,
-    # not a bare Node3Result. The stand-in returns the same mapping the real
-    # handler does, so run_traversal's unwrap is exercised for real.
-    monkeypatch.setattr(
-        pipeline,
+    # Nodes 3 and 4 are port-declared handlers: they return their declared output
+    # ports, not a bare Node3Result/Node4Result. The stand-ins return the same
+    # mappings the real handlers do, so the port reads are exercised for real.
+    _install_stage(
+        monkeypatch,
         "backward_traverse",
+        "BackwardTraverse",
         AsyncMock(return_value={"backward": n3, "failed_batches": n3.failed_batches}),
     )
-    # Node 4 likewise: the stand-in returns the same three-port mapping the real
-    # handler does, so run_traversal's unwrap is exercised for real.
-    monkeypatch.setattr(
-        pipeline,
+    _install_stage(
+        monkeypatch,
         "forward_traverse",
+        "ForwardTraverse",
         AsyncMock(
             return_value={
                 "forward": n4,
@@ -488,19 +522,60 @@ def test_enrichment_depth_matches_per_stage(
 
 
 def test_node_4_5_failure_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Node 4.5 raises → orchestrator does not catch; no PipelineResult."""
+    """Node 4.5 raises → orchestrator does not catch; no PipelineResult.
+
+    Post-flip the executor SWALLOWS the raise and records the node FAILED; what
+    keeps this assertion true is `run_traversal`'s halt scan, which re-raises as
+    `PipelineHaltError` (a RuntimeError) `from` the original. The promise the
+    test pins — a raising whole-graph stage yields no partial result — is
+    unchanged; only who re-raises it moved.
+    """
     s = _seed("S")
     n3 = Node3Result(papers=[], edges=[])
     n4 = Node4Result(papers=[], edges=[])
     _install_stages(monkeypatch, [s], [], n3, n4)
 
-    def _boom(*_args, **_kwargs):
+    async def _boom(*_args, **_kwargs):
         raise RuntimeError("cycle cleaning blew up")
 
-    monkeypatch.setattr(pipeline, "clean_cycles", _boom)
+    _install_stage(monkeypatch, "clean_cycles", "CleanCycles", _boom)
 
     with pytest.raises(RuntimeError):
         _run()
+
+
+def test_node_4_5_failure_preserves_the_original_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The halt carries the failing node and the ORIGINAL exception as __cause__.
+
+    `execute_graph` reports a raising handler as a FAILED result rather than
+    letting it out, so without deliberate care the type and traceback would be
+    flattened to `str(e)` on the way through. This is what says they are not:
+    the raised `PipelineHaltError` names the node that failed and chains the
+    original object.
+    """
+    s = _seed("S")
+    n3 = Node3Result(papers=[], edges=[])
+    n4 = Node4Result(papers=[], edges=[])
+    _install_stages(monkeypatch, [s], [], n3, n4)
+
+    boom = RuntimeError("cycle cleaning blew up")
+
+    async def _raise(*_args, **_kwargs):
+        raise boom
+
+    _install_stage(monkeypatch, "clean_cycles", "CleanCycles", _raise)
+
+    with pytest.raises(PipelineHaltError) as excinfo:
+        _run()
+
+    assert excinfo.value.node_id == "clean"
+    assert "cycle cleaning blew up" in excinfo.value.error
+    # The original object, not a re-creation: type and traceback survive.
+    assert excinfo.value.__cause__ is boom
+    # The whole results dict rides along, so a caller can see how far it got.
+    assert excinfo.value.results["clean"]["status"] == "FAILED"
 
 
 def test_node_7_missing_extra_propagates(
@@ -512,10 +587,10 @@ def test_node_7_missing_extra_propagates(
     n4 = Node4Result(papers=[], edges=[])
     _install_stages(monkeypatch, [s], [], n3, n4)
 
-    def _boom(*_args, **_kwargs):
+    async def _boom(*_args, **_kwargs):
         raise RuntimeError("Neither infomap nor leidenalg is installed.")
 
-    monkeypatch.setattr(pipeline, "detect_communities", _boom)
+    _install_stage(monkeypatch, "detect_communities", "DetectCommunities", _boom)
 
     with pytest.raises(RuntimeError):
         _run()
@@ -611,3 +686,362 @@ def test_run_arxiv_pipeline_is_pure_composer(
 
     with pytest.raises(PipelineError):
         _run()
+
+
+# ── The differential: flipped run_traversal vs. the hand-written reference ────
+#
+# THE LOAD-BEARING CHECK on the executor flip (IDG-075 clause 4e). `run_traversal`
+# used to call the eleven stages by hand; it now builds the declared
+# `build_pipeline_graph` and drives it through `execute_graph`. Nothing in the
+# type system says the two produce the same pipeline — the graph could wire a
+# port to the wrong producer, marshal a params value onto the wrong stage, or
+# read a provenance field off the wrong node, and every one of those still
+# validates green and still returns a well-formed `PipelineResult`. Only running
+# both and comparing the results catches it.
+#
+# So the PRE-FLIP orchestrator is kept alive here as a reference implementation
+# and the two are run over the same fixtures. This is a scaffold with a stated
+# expiry, not a permanent second orchestrator: delete
+# `_reference_run_traversal` and `test_flip_matches_the_reference_implementation`
+# once the flip has held.
+
+
+async def _reference_run_traversal(
+    resolved: list[PaperRecord],
+    parameters: PipelineParameters,
+    *,
+    client: object,
+    api_key: str,
+    anthropic_client: object | None = None,
+) -> PipelineResult:
+    """The PRE-FLIP `run_traversal`, copied from
+    `src/idiograph/domains/arxiv/pipeline.py::run_traversal` at 5294945.
+
+    DELETE WHEN THE FLIP HAS HELD. This exists only to be differenced against
+    the post-flip implementation; it is not a second production path and nothing
+    but the differential test below may call it.
+
+    The executable body is the original verbatim. Two deliberate differences,
+    both mechanical:
+
+      - Every stage is reached as `pipeline.<name>` rather than as a bare name,
+        so a `monkeypatch.setattr(pipeline, ...)` stand-in is picked up here. The
+        flipped path reads the HANDLERS registry instead, which is why every
+        harness in this suite installs the same mock object in both places — that
+        is what lets one fixture drive both legs of the differential.
+      - The `_log` calls, and the three provenance locals read only to log them
+        (`n3_failed_batches`, `n4_failed_seeds`, `n4_truncated_seeds`), are
+        dropped. Logging is not output-determining, and the differential compares
+        results. The long per-call comments justifying each hand-marshalled
+        params/inputs mapping go with them: they argued that the direct call
+        agreed with the node's declared contract, and post-flip that agreement is
+        not argued but executed. Every comment carrying a LOAD-BEARING ordering
+        or binding fact — the Node 5.5 rebinding, the witness — is kept.
+    """
+    n3_ports = await pipeline.backward_traverse(
+        {
+            "n_backward": parameters.backward.n_backward,
+            "lambda_decay": parameters.backward.lambda_decay,
+            "sleep_ms": pipeline.BACKWARD_SLEEP_MS,
+            "current_year": parameters.current_year,
+        },
+        {"seeds": resolved},
+        resources={"http_client": client, "openalex_api_key": api_key},
+    )
+    n3 = n3_ports["backward"]
+
+    n4_ports = await pipeline.forward_traverse(
+        {
+            "n_forward": parameters.forward.n_forward,
+            "lambda_decay": parameters.forward.lambda_decay,
+            "alpha": parameters.forward.alpha,
+            "beta": parameters.forward.beta,
+            "sort": parameters.forward.sort,
+            "acceleration_method": pipeline.FORWARD_ACCELERATION_METHOD,
+            "current_year": parameters.current_year,
+        },
+        {"seeds": resolved},
+        resources={"http_client": client, "openalex_api_key": api_key},
+    )
+    n4 = n4_ports["forward"]
+
+    merged = await pipeline.assemble_graph(
+        {},
+        {"seeds": resolved, "backward": n3, "forward": n4},
+    )
+    unified_nodes = merged["nodes"]
+    unified_cites = merged["cites"]
+    mismatches = merged["mismatches"]
+
+    # The bound mapping is held in a local because the `nodes` port binding is
+    # also what the result-assembly witness is built from. Node 5.5 below rebinds
+    # `unified_nodes` to annotated copies, so the witness must come from what was
+    # bound HERE, not from that free variable later.
+    clean_inputs = {"nodes": unified_nodes, "cites": unified_cites}
+    cleaned = await pipeline.clean_cycles({}, clean_inputs)
+    cleaned_edges = cleaned["cleaned_edges"]
+    cycle_log = cleaned["cycle_log"]
+    all_cites = cleaned["all_cites"]
+
+    # The `nodes` port binds `unified_nodes` HERE, before the Node 5.5 block
+    # below may rebind that free variable. The stage order is load-bearing: this
+    # call does not move past 5.5.
+    co = await pipeline.compute_co_citations(
+        {
+            "min_strength": parameters.co_citation.min_strength,
+            "max_edges": parameters.co_citation.max_edges,
+        },
+        {"nodes": unified_nodes, "all_cites": all_cites},
+    )
+    co_citation_edges = co["co_citation_edges"]
+    co_citation_warnings = co["co_citation_warnings"]
+
+    if parameters.llm is not None:
+        if anthropic_client is None:
+            raise ValueError(
+                "run_traversal: parameters.llm is set but anthropic_client is "
+                "None — Node 5.5 requires an injected AsyncAnthropic client "
+                "(IDG-024 keyword-only injection)."
+            )
+        ann = await pipeline.annotate_relationships(
+            {"llm": parameters.llm},
+            {"nodes": unified_nodes, "resolved": resolved},
+            resources={"anthropic_client": anthropic_client},
+        )
+        unified_nodes = ann["nodes"]
+
+    # `cleaned_edges`, not `all_cites`: depth needs the acyclic view. `nodes`
+    # binds whichever `unified_nodes` is in scope HERE — 5.5 above may have
+    # rebound it, and depth is a consumer of that rebinding.
+    depth = (
+        await pipeline.compute_depth_metrics(
+            {},
+            {"nodes": unified_nodes, "cleaned_edges": cleaned_edges},
+        )
+    )["depth_metrics"]
+
+    prank = (
+        await pipeline.compute_pagerank(
+            {"damping": parameters.pagerank.damping},
+            {"nodes": unified_nodes, "cleaned_edges": cleaned_edges},
+        )
+    )["pagerank"]
+
+    # `all_cites`, not `cleaned_edges`: clustering keeps the real-but-suppressed
+    # citations, the same view Node 5 takes.
+    communities = (
+        await pipeline.detect_communities(
+            {
+                "infomap_seed": parameters.communities.infomap_seed,
+                "infomap_trials": parameters.communities.infomap_trials,
+                "infomap_teleportation": parameters.communities.infomap_teleportation,
+                "leiden_seed": parameters.communities.leiden_seed,
+                "community_count_min": parameters.communities.community_count_min,
+                "community_count_max": parameters.communities.community_count_max,
+            },
+            {"nodes": unified_nodes, "all_cites": all_cites},
+        )
+    )["communities"]
+
+    enriched_nodes = (
+        await pipeline.enrich_nodes(
+            {},
+            {
+                "nodes": unified_nodes,
+                "depth_metrics": depth,
+                "pagerank": prank,
+                "communities": communities,
+            },
+        )
+    )["enriched_nodes"]
+
+    # Suppressed originals are NOT in `edges` — they live in
+    # cycle_log.suppressed_edges for audit.
+    merged_edges = cleaned_edges + co_citation_edges
+
+    # The witness is NOT a port, so it is rebuilt from the node set bound to the
+    # `nodes` port — the `clean_inputs` binding above, deliberately not the
+    # `unified_nodes` free variable, which 5.5 may since have rebound.
+    cycle_clean = CycleCleanResult(
+        cleaned_edges=cleaned_edges,
+        cycle_log=cycle_log,
+        input_node_ids=frozenset(n.node_id for n in clean_inputs["nodes"]),
+    )
+
+    return PipelineResult(
+        nodes=enriched_nodes,
+        edges=merged_edges,
+        seeds=[s.node_id for s in resolved],
+        cycle_clean=cycle_clean,
+        co_citation_edges=co_citation_edges,
+        co_citation_warnings=co_citation_warnings,
+        depth_metrics=depth,
+        pagerank=prank,
+        communities=communities,
+        parameters=parameters,
+        seed_failures=[],
+        backward_failed_batches=n3.failed_batches,
+        forward_failed_seeds=n4.failed_seeds,
+        truncated_seeds=n4.truncated_seeds,
+        data_integrity_warnings=mismatches,
+    )
+
+
+#: (label, resolved seeds, Node 0 failures, n3, n4, parameters) — the fixtures
+#: both legs of the differential are run over. Deliberately NOT just the minimal
+#: one: a wrong graph is most likely to still agree on a single seed with an
+#: empty traversal, and to diverge exactly where the pipeline has structure —
+#: several seeds, real cycles to clean, co-citation edges that pass the strength
+#: filter, and every provenance list non-empty.
+def _differential_cases() -> list[tuple]:
+    s = _seed("S")
+    s1, s2 = _seed("S1"), _seed("S2")
+    a, b, c = _rec("A", root_ids=["S"]), _rec("B", root_ids=["S"]), _rec("C", root_ids=["S"])
+
+    return [
+        (
+            "single-seed-minimal",
+            [s],
+            [],
+            Node3Result(papers=[_rec("B1", root_ids=["S"])], edges=[_edge("S", "B1")]),
+            Node4Result(papers=[_rec("F1", root_ids=["S"])], edges=[_edge("F1", "S")]),
+            _params(),
+        ),
+        (
+            "multi-seed-disjoint",
+            [s1, s2],
+            [],
+            Node3Result(
+                papers=[_rec("B1", root_ids=["S1"]), _rec("B2", root_ids=["S2"])],
+                edges=[_edge("S1", "B1"), _edge("S2", "B2")],
+            ),
+            Node4Result(papers=[], edges=[]),
+            _params(),
+        ),
+        (
+            "multi-seed-shared-paper",
+            [s1, s2],
+            [],
+            Node3Result(
+                papers=[_rec("P", root_ids=["S1", "S2"])],
+                edges=[_edge("S1", "P"), _edge("S2", "P")],
+            ),
+            Node4Result(papers=[], edges=[]),
+            _params(min_strength=1),
+        ),
+        (
+            # Every provenance carrier non-empty at once, plus a cycle to clean
+            # and a metadata mismatch — the case where reading a field off the
+            # wrong node's output port shows up.
+            "partial-failure-and-cycles",
+            [s],
+            [{"seed": {"doi": "bad"}, "reason": "no results"}],
+            Node3Result(
+                papers=[a, b, c],
+                edges=[
+                    _edge("S", "C"),
+                    _edge("C", "A"),
+                    _edge("C", "B"),
+                    # A ↔ C 2-cycle, so cycle cleaning does real work.
+                    _edge("A", "C"),
+                ],
+                failed_batches=[
+                    FailedBatch(requested_ids=["W9"], stage="depth_2", reason="timeout")
+                ],
+            ),
+            Node4Result(
+                papers=[],
+                # Same (C, A, cites) key as backward, different metadata → mismatch.
+                edges=[_edge("C", "A", citing_paper_year=1999)],
+                failed_seeds=[FailedSeed(seed_id="S", reason="http_error: 503")],
+                truncated_seeds=[
+                    TruncatedSeed(seed_id="S", returned_count=200, total_count=500)
+                ],
+            ),
+            _params(min_strength=1),
+        ),
+        (
+            # A DIRECTED 3-cycle S→X→Y→S, which is the case that makes the
+            # cleaned/all_cites split OBSERVABLE downstream. The split is the one
+            # piece of this wiring that a wrong graph gets wrong while still
+            # validating green — `cleaned_edges` and `all_cites` are both real
+            # declared ports of `clean`, so feeding depth or pagerank the wrong
+            # one is a legal graph describing a different pipeline.
+            #
+            # It has to be a directed cycle of length ≥ 3. A reciprocal pair
+            # (A→C plus C→A) suppresses an edge too, but `hop_depth_per_root` is
+            # computed over the UNDIRECTED view, where removing one direction of
+            # a reciprocal pair changes nothing — so a fixture built on one would
+            # leave depth's binding untested and this differential would pass
+            # over a mis-wired graph.
+            "directed-cycle-splits-cleaned-from-all",
+            [s],
+            [],
+            Node3Result(
+                papers=[_rec("X", root_ids=["S"]), _rec("Y", root_ids=["S"])],
+                edges=[_edge("S", "X"), _edge("X", "Y"), _edge("Y", "S")],
+            ),
+            Node4Result(papers=[], edges=[]),
+            _params(min_strength=1),
+        ),
+        (
+            "seeds-only-empty-traversal",
+            [s],
+            [],
+            Node3Result(papers=[], edges=[]),
+            Node4Result(papers=[], edges=[]),
+            _params(),
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("resolved", "failures", "n3", "n4", "parameters"),
+    [case[1:] for case in _differential_cases()],
+    ids=[case[0] for case in _differential_cases()],
+)
+def test_flip_matches_the_reference_implementation(
+    monkeypatch: pytest.MonkeyPatch,
+    resolved: list[PaperRecord],
+    failures: list[dict],
+    n3: Node3Result,
+    n4: Node4Result,
+    parameters: PipelineParameters,
+) -> None:
+    """The executor-driven `run_traversal` equals the hand-written original.
+
+    Field-level equality on the DUMPED models, not identity: the two legs build
+    separate object graphs from the same inputs, so identity would fail on
+    equal-and-correct output. `model_dump()` is also what `content_address`
+    consumes, so agreement here is agreement on what gets stored.
+
+    Both legs run over the SAME `_install_stages` fixture. That is only possible
+    because the harness installs each stand-in on the module attribute (which the
+    reference reads) AND in the HANDLERS registry (which the flipped path reads),
+    as the same object — so neither leg is running against a different Node 3/4
+    than the other.
+    """
+    _install_stages(monkeypatch, resolved, failures, n3, n4)
+
+    flipped = asyncio.run(
+        pipeline.run_traversal(
+            resolved,
+            parameters,
+            seed_requests=[{"arxiv_id": "x"}],
+            client=_CLIENT,
+            api_key="k",
+        )
+    )
+    reference = asyncio.run(
+        _reference_run_traversal(
+            resolved, parameters, client=_CLIENT, api_key="k"
+        )
+    )
+
+    assert flipped.model_dump() == reference.model_dump(), (
+        "the executor-driven run_traversal and the pre-flip reference disagree. "
+        "The declared graph describes a different pipeline than the one "
+        "run_traversal used to run by hand — check the port wiring, the params "
+        "marshalled onto each node, and which node each provenance field is "
+        "read off."
+    )
