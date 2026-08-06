@@ -8,7 +8,7 @@ import networkx as nx
 import pytest
 
 from idiograph.core.executor import HANDLERS
-from idiograph.domains.arxiv import pipeline
+from idiograph.domains.arxiv import pipeline, pipeline_graph
 from idiograph.domains.arxiv.handlers import register_arxiv_handlers
 from idiograph.domains.arxiv.models import (
     BackwardParameters,
@@ -32,6 +32,7 @@ from idiograph.domains.arxiv.pipeline import (
     assemble_graph,
     run_arxiv_pipeline,
 )
+from idiograph.domains.arxiv.pipeline_graph import build_pipeline_graph
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -686,6 +687,77 @@ def test_run_arxiv_pipeline_is_pure_composer(
 
     with pytest.raises(PipelineError):
         _run()
+
+
+# ── The pre-execution integrity gate ─────────────────────────────────────────
+
+
+def test_a_graph_that_does_not_validate_is_never_executed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dataflow defect halts BEFORE any handler runs.
+
+    `validate_integrity` reads the graph and knows nothing about the run, so an
+    input port fed by no edge is knowable without executing anything. Running the
+    reachable prefix first and discovering it at the unfed node would mean having
+    already spent the OpenAlex traversal calls, which are the expensive part of
+    this pipeline — so the gate is placed before `execute_graph`, and this is
+    what says so. The spy is the assertion: not merely that it raised, but that
+    nothing was dispatched.
+    """
+    s = _seed("S")
+    _install_stages(
+        monkeypatch, [s], [], Node3Result(papers=[], edges=[]),
+        Node4Result(papers=[], edges=[]),
+    )
+
+    # The real graph minus one edge — `depth`'s `cleaned_edges` port is left
+    # unfed. Derived from the real builder rather than hand-built, so this stays
+    # a test of the GATE and cannot drift into a test of a bespoke fixture.
+    real = build_pipeline_graph([{"arxiv_id": "x"}], _params())
+    broken = real.model_copy(
+        update={
+            "edges": [
+                e
+                for e in real.edges
+                if not (e.target == "depth" and e.to_port == "cleaned_edges")
+            ]
+        }
+    )
+    monkeypatch.setattr(
+        pipeline_graph, "build_pipeline_graph", lambda *_a, **_k: broken
+    )
+
+    with pytest.raises(PipelineError, match="does not validate"):
+        _run()
+
+    pipeline.backward_traverse.assert_not_called()
+    pipeline.forward_traverse.assert_not_called()
+
+
+def test_witness_rebuild_refuses_a_graph_with_no_declared_producer() -> None:
+    """The witness helper raises rather than returning None into the result.
+
+    Unreachable through `run_traversal` — the gate above rejects such a graph
+    first — which is exactly why the guard is asserted here directly. A helper
+    that silently returned None for a missing edge would put `None` where the
+    node set belongs and fail much later, somewhere that does not name the cause.
+    """
+    real = build_pipeline_graph([{"arxiv_id": "x"}], _params())
+    without_clean_nodes = real.model_copy(
+        update={
+            "edges": [
+                e
+                for e in real.edges
+                if not (e.target == "clean" and e.to_port == "nodes")
+            ]
+        }
+    )
+
+    with pytest.raises(PipelineError, match="feeds no edge into"):
+        pipeline._declared_producer_output(
+            without_clean_nodes, {}, "clean", "nodes"
+        )
 
 
 # ── The differential: flipped run_traversal vs. the hand-written reference ────
