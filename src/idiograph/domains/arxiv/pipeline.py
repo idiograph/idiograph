@@ -1346,7 +1346,7 @@ async def compute_co_citations(params: dict, inputs: dict) -> dict:
 #: checks the edges against them without reading this handler's source.
 #:
 #: The input port names are deliberately name-identical to the two upstream
-#: stages' output ports, so a wiring reads ``assemble.nodes -> depth.nodes`` and
+#: stages' output ports, so a wiring reads ``annotate.nodes -> depth.nodes`` and
 #: ``clean.cleaned_edges -> depth.cleaned_edges`` with no adapter node between
 #: them. The ``cleaned_edges`` name is load-bearing on its own: depth takes the
 #: ACYCLIC view, deliberately NOT ``all_cites``, because a suppressed edge would
