@@ -237,6 +237,59 @@ def validate_integrity(graph: Graph) -> dict:
 
 # ── Intent Summary ───────────────────────────────────────────────────────────
 
+def _outranks(chain: list[str], incumbent: list[str]) -> bool:
+    """
+    True if `chain` beats `incumbent`: longer, or the same length and
+    lexicographically smaller. This is the whole tie-break rule, in one place
+    because `_longest_chain` applies it twice.
+    """
+    if len(chain) != len(incumbent):
+        return len(chain) > len(incumbent)
+    return chain < incumbent
+
+
+def _longest_chain(dg: nx.DiGraph) -> list[str]:
+    """
+    Return the longest chain of nodes in `dg`, measured in node count.
+
+    Longest, not shortest. A branching graph can carry a shortcut edge that
+    reaches a sink in a couple of hops while the work the pipeline exists to do
+    runs the long way round; the shortest route between the same endpoints
+    understates how deep the pipeline is, and is what a per-(source, sink)
+    `nx.shortest_path` scan selects.
+
+    A CYCLIC graph has no longest chain — a chain that enters a cycle can go
+    round it any number of times, so there is no maximum to report. This returns
+    [] there rather than raising: `summarize_intent` describes a graph, and has
+    to stay callable on a malformed one to describe it. `find_cycles` is what
+    reports the cycle itself. (`nx.dag_longest_path` raises `NetworkXUnfeasible`
+    here, which is why it is not called directly.)
+
+    Ties are broken toward the lexicographically smallest node-id sequence, so
+    the answer is fixed by the graph alone — not by node insertion order, dict
+    iteration order, or the networkx version.
+    """
+    if not nx.is_directed_acyclic_graph(dg):
+        return []
+
+    # Longest chain ending at each node. Topological order is what makes the
+    # single pass sufficient: every predecessor is final before the node that
+    # reads it.
+    best: dict[str, list[str]] = {}
+    for node in nx.topological_sort(dg):
+        prefix: list[str] = []
+        for pred in dg.predecessors(node):
+            if _outranks(best[pred], prefix):
+                prefix = best[pred]
+        best[node] = [*prefix, node]
+
+    longest: list[str] = []
+    for chain in best.values():
+        if _outranks(chain, longest):
+            longest = chain
+    return longest
+
+
 def summarize_intent(graph: Graph, node_ids: list[str] | None = None) -> dict:
     """
     Return a structured semantic description of the graph or a subgraph.
@@ -289,20 +342,9 @@ def summarize_intent(graph: Graph, node_ids: list[str] | None = None) -> dict:
     else:
         domain = "unknown"
 
-    # Critical path — longest chain by node count
+    # Critical path — longest chain by node count; [] if the scope is cyclic
     dg = _build_nx_graph(Graph(name=graph.name, version=graph.version, nodes=nodes, edges=edges))
-    sources = [n for n in dg.nodes if dg.in_degree(n) == 0]
-    sinks   = [n for n in dg.nodes if dg.out_degree(n) == 0]
-
-    critical_path: list[str] = []
-    for source in sources:
-        for sink in sinks:
-            try:
-                path = nx.shortest_path(dg, source, sink)
-                if len(path) > len(critical_path):
-                    critical_path = path
-            except nx.NetworkXNoPath:
-                continue
+    critical_path = _longest_chain(dg)
 
     # Failure points — CONTROL edges are gates; their source nodes are chokepoints
     control_gates = [e.source for e in edges if e.type == "CONTROL"]
