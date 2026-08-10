@@ -329,14 +329,16 @@ def _build_edges() -> list[Edge]:
       - AFTER the rebinding, consuming ``annotate.nodes``: `depth`, `pagerank`,
         `communities`, `enrich`.
 
-    Note that ``COMPUTE_DEPTH_METRICS_INPUT_PORTS``' comment illustrates this
-    with ``assemble.nodes -> depth.nodes``. That example is making a point about
-    port-NAME identity, and it predates 5.5 joining the wiring picture; the
-    producer is `annotate`, per the call order and per
-    ``ANNOTATE_RELATIONSHIPS_OUTPUT_PORTS``' own statement that its `nodes`
-    output deliberately reuses the name so "every downstream ``nodes`` consumer
-    binds HERE on the LLM path". The disabled passthrough is what makes that
-    true on the LLM-free path too, with no second topology.
+    Port-NAME identity is what makes that split invisible to a reader of names
+    alone, and is the point ``COMPUTE_DEPTH_METRICS_INPUT_PORTS``' comment makes
+    with ``annotate.nodes -> depth.nodes``: a consumer's input port carries the
+    same name as its producer's output port, so the wiring needs no adapter node
+    between them. But `assemble` and `annotate` BOTH publish a `nodes` port, so
+    the name alone never says which side of the rebinding a consumer binds —
+    only the call order does. ``ANNOTATE_RELATIONSHIPS_OUTPUT_PORTS`` reuses the
+    name deliberately, on its own statement that "every downstream ``nodes``
+    consumer binds HERE on the LLM path"; the disabled passthrough is what makes
+    that true on the LLM-free path too, with no second topology.
     """
     return [
         # Node 0 feeds the three stages whose `seeds` port is name-identical to

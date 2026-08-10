@@ -580,6 +580,84 @@ def parse_contract_hash(contract: str = PARSE_CONTRACT) -> str:
     return hashlib.sha256(contract.encode("utf-8")).hexdigest()
 
 
+TRAVERSAL_CONTRACT = """\
+node3-backward-traversal/v1
+
+How Node 3 turns its fetched population into the papers and edges every later
+stage derives from: what a record scores, which records the cap retains, in what
+order the cap and the edge filter run, and what selection does NOT happen.
+Implemented by pipeline.backward_traverse and its _node3_score helper; this
+constant is the *declaration* of that behavior, and it covers every determinant
+of derived output that is not already a PipelineParameters field.
+
+- SCORE FORMULA. A record scores
+  `citation_count × log(hop_depth + 1) / recency_weight`, where
+  `recency_weight = exp(years_since_publication × lambda_decay)`. A record with
+  `citation_count == 0` scores 0.0. A missing `year` is treated as
+  `years_since_publication = 0` — no recency penalty.
+- THE DEPTH TERM IS RULED (IDG-044), not defaulted. `log(hop_depth + 1)` is
+  monotonically INCREASING in hop depth BY DESIGN: deeper foundational works are
+  what backward traversal exists to surface, so distance from the seeds raises a
+  paper's score rather than lowering it. If that behavior is ever not desired,
+  the inversion is `log(1 / hop_depth)`. The reason is carried here beside the
+  formula because a formula stated without its reason is exactly the defect
+  IDG-044 repaired — the current shape is a declared design choice, not a
+  default nobody chose.
+- CAP RULE. The retained papers are the top `n_backward` by score DESCENDING;
+  ties break toward ASCENDING `node_id` (the sort key is `(-score, node_id)`).
+  Seeds are excluded from the scored population, so the cap counts non-seed
+  papers only.
+- ORDERING. Score-sort → truncate to `n_backward` → THEN filter edges to those
+  whose endpoints both lie in {retained papers} ∪ {seeds}, with the surviving
+  edge list sorted by `(source_id, target_id)`. The edge filter runs AFTER the
+  cap, and it filters EDGES, not papers.
+- ORPHAN RULE. Node 3 itself emits no orphan edges: the endpoint filter above
+  guarantees both endpoints of every emitted edge are in the emitted node set.
+  The pipeline's only orphan CHECK is downstream —
+  `CycleCleanResult._validate_edge_endpoints` raises on any cleaned edge whose
+  endpoint is missing from its `input_node_ids` witness — and Nodes 5-8 run no
+  defensive checks of their own.
+- SELECTION RULE — DECLARED ABSENT. No selection predicate exists. IDG-042 ruled
+  a conditional `required_root_ids` predicate; it is UNBUILT — the symbol appears
+  nowhere in the tree. Selection is the cap rule above and nothing else. This
+  absence is DECLARED rather than left unsaid so that landing the predicate moves
+  this hash.
+"""
+"""Declared Node 3 backward-traversal contract (IDG-091 clause 1 / IDG-043).
+
+Node 3 decides derived output — which papers survive the cap, in what order, and
+which edges survive the endpoint filter — through a score formula, a cap rule and
+an ordering that no ``PipelineParameters`` field spells out. ``n_backward`` and
+``lambda_decay`` are already in the address, but the formula they feed is not, so
+a silently amended score would return a different corpus under an unchanged
+address. Per IDG-032 — everything determining derived output enters the content
+address — this constant is the descriptor that carries them, and
+``traversal_contract_hash`` is how it is derived.
+
+The hash is NOT yet a ``PipelineParameters`` field. Wiring it re-addresses every
+existing run, including the frozen demo artifact, so that step is gated
+separately; until it lands this pair declares and derives without moving any
+address. Nothing here changes what ``backward_traverse`` or ``_node3_score`` do —
+the contract DECLARES their behavior, it does not implement it.
+
+Lives HERE beside ``PARSE_CONTRACT``, not in ``pipeline``, purely to keep the
+import direction one-way: ``pipeline`` imports ``models``, so the reverse import
+would be circular. Changing the traversal *rule* means editing this text — that
+is what moves the hash.
+"""
+
+
+def traversal_contract_hash(contract: str = TRAVERSAL_CONTRACT) -> str:
+    """sha256 of the declared Node 3 backward-traversal contract.
+
+    Derive, don't hardcode (IDG-032), mirroring ``parse_contract_hash`` and
+    ``relationship_annotation.prompt_template_hash``: the default is computed over
+    the module ``TRAVERSAL_CONTRACT`` constant, so amending the contract moves the
+    hash automatically (no version integer to forget).
+    """
+    return hashlib.sha256(contract.encode("utf-8")).hexdigest()
+
+
 class LLMConfig(BaseModel):
     """Node 5.5 model-configuration axis of the content address (IDG-032).
 

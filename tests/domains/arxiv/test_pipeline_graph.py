@@ -315,6 +315,35 @@ def test_edges_are_exactly_the_expected_set(graph: Graph) -> None:
     )
 
 
+def test_depth_nodes_port_is_fed_by_annotate_and_nothing_else(graph: Graph) -> None:
+    """`depth.nodes` has exactly one producer, and it is `annotate`.
+
+    A NAMED TRIPWIRE, deliberately narrower than the table comparison above and
+    deliberately not folded into it. ``COMPUTE_DEPTH_METRICS_INPUT_PORTS``' comment
+    illustrates port-name identity with a concrete wiring, and that example named
+    `assemble` while the graph declared `annotate` — a claim that lived in prose
+    for as long as prose was the only thing asserting it. Repairing the comment
+    fixes today's text; this test is what keeps a future rewiring to
+    `assemble.nodes -> depth.nodes` from making it stale again silently. Depth
+    takes the POST-5.5 node set, so binding it to `assemble` would hand the
+    metrics the pre-annotation copies and validate green either way.
+    """
+    feeders = sorted(
+        (edge.source, edge.from_port)
+        for edge in graph.edges
+        if edge.target == "depth" and edge.to_port == "nodes"
+    )
+
+    assert feeders == [("annotate", "nodes")], (
+        f"`depth.nodes` is fed by {feeders}, not by `annotate.nodes` alone. "
+        f"`depth` is called AFTER `run_traversal` rebinds `unified_nodes` to the "
+        f"annotated copies, so its node set is `annotate`'s. If this is an "
+        f"intended rewiring, the illustration in "
+        f"`COMPUTE_DEPTH_METRICS_INPUT_PORTS`' comment and the split documented "
+        f"on `_build_edges` both have to move with it."
+    )
+
+
 def test_every_edge_is_fully_port_declared(graph: Graph) -> None:
     """No edge carries a half-declaration or falls back to the legacy regime.
 
