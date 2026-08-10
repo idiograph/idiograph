@@ -112,3 +112,84 @@ class TestSummarizeIntent:
         )
         result = summarize_intent(g)
         assert result["domain"] == "ai"
+
+
+class TestSummarizeIntentCriticalPath:
+    """
+    `critical_path` is the LONGEST chain through the scope, by node count.
+
+    These run on `branching_graph`, not `sample_graph`: on a straight line
+    longest and shortest coincide, so a linear fixture cannot tell a correct
+    implementation from one that takes shortest paths.
+    """
+
+    def test_reports_the_longest_chain(self, branching_graph):
+        result = summarize_intent(branching_graph)
+        assert result["critical_path"] == ["root", "alpha", "merge", "tail", "leaf"]
+
+    def test_does_not_take_the_shortcut_edge(self, branching_graph):
+        # root → merge skips alpha/beta. The longest shortest-path in this graph
+        # is ['root', 'merge', 'tail', 'leaf'] — 4 nodes, one short, and it
+        # reports the pipeline as shallower than it is.
+        path = summarize_intent(branching_graph)["critical_path"]
+        assert path[:2] != ["root", "merge"]
+        assert len(path) == 5
+
+    def test_returns_node_ids_forming_a_real_path(self, branching_graph):
+        path = summarize_intent(branching_graph)["critical_path"]
+        declared = {(e.source, e.target) for e in branching_graph.edges}
+        hops = [(path[i], path[i + 1]) for i in range(len(path) - 1)]
+        assert all(hop in declared for hop in hops)
+
+    def test_ties_resolve_lexicographically(self, branching_graph):
+        # alpha and beta are interchangeable by length; the smaller id wins.
+        path = summarize_intent(branching_graph)["critical_path"]
+        assert "alpha" in path
+        assert "beta" not in path
+
+    def test_independent_of_declaration_order(self, branching_graph):
+        shuffled = Graph(
+            name=branching_graph.name,
+            version=branching_graph.version,
+            nodes=list(reversed(branching_graph.nodes)),
+            edges=list(reversed(branching_graph.edges)),
+        )
+        assert (
+            summarize_intent(shuffled)["critical_path"]
+            == summarize_intent(branching_graph)["critical_path"]
+        )
+
+    def test_linear_graph_is_the_whole_chain(self, sample_graph):
+        result = summarize_intent(sample_graph)
+        assert result["critical_path"] == ["n1", "n2", "n3", "n4"]
+
+    def test_subgraph_scope_is_respected(self, branching_graph):
+        result = summarize_intent(branching_graph, node_ids=["root", "alpha", "merge"])
+        assert result["critical_path"] == ["root", "alpha", "merge"]
+
+    def test_cycle_yields_empty_path_without_raising(self, cyclic_graph):
+        # A chain entering a cycle can go round it any number of times, so there
+        # is no longest chain to report. summarize_intent still describes the
+        # graph; find_cycles is what reports the cycle.
+        result = summarize_intent(cyclic_graph)
+        assert result["critical_path"] == []
+
+    def test_cycle_does_not_disturb_the_rest_of_the_summary(self, cyclic_graph):
+        result = summarize_intent(cyclic_graph)
+        assert result["node_count"] == 2
+        assert result["domain"] == "ai"
+
+    def test_cycle_anywhere_suppresses_the_path(self):
+        # An acyclic stretch alongside a cycle is still not reportable: the
+        # chain through it is not bounded once the cycle is reachable.
+        g = Graph(
+            name="partially_cyclic", version="1.0",
+            nodes=[Node(id=i, type="LLMCall", params={}) for i in ("s", "a", "b", "t")],
+            edges=[
+                Edge(source="s", target="a", type="DATA"),
+                Edge(source="a", target="b", type="DATA"),
+                Edge(source="b", target="a", type="CONTROL"),  # cycle
+                Edge(source="b", target="t", type="DATA"),
+            ],
+        )
+        assert summarize_intent(g)["critical_path"] == []
