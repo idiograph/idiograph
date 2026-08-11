@@ -24,13 +24,30 @@ under ``idiograph.demo``:
 All three are offline: the record is read from disk, the address is computed by
 ``registry.content_address``, and no network call or credential is involved.
 
-When a test here goes red on a LEGITIMATE edit to the Node 5.5 prompt
-template or the parse contract (both ride into the address via
-``prompt_template_hash`` / ``parse_contract_hash``), the remedy is a
-RE-FREEZE of the demo artifact (~50 minutes, ~1,100 live LLM draws, real
-OpenAlex and Anthropic cost) — never an update to ``FROZEN_ADDRESS``, which
-would silently convert this guard into a tautology and destroy the
+When a test here goes red on a SEMANTIC edit — one that changes what the pipeline
+would produce, such as the Node 5.5 prompt template or the parse contract (both
+ride into the address via ``prompt_template_hash`` / ``parse_contract_hash``) —
+the remedy is a RE-FREEZE of the demo artifact (~50 minutes, ~1,100 live LLM
+draws, real OpenAlex and Anthropic cost), never an update to ``FROZEN_ADDRESS``,
+which would silently convert this guard into a tautology and destroy the
 record-replay contract the demo exists to demonstrate.
+
+THE ONE EXCEPTION — IDG-094 clause 3, DECLARATION-ONLY address rebaselining. A
+new field entering the address while the derivation handlers are provably
+unchanged moves every address without changing a single derived byte, so a
+re-freeze would burn ~50 minutes and ~1,100 live draws to reproduce the artifact
+already on disk. That case is HAND RE-ADDRESSED under IDG-094's three
+conditions: (i) the handlers are byte-identical, asserted mechanically rather
+than by eye; (ii) the record's ``parameters`` block is updated to the new dump
+so the field-for-field test below keeps biting; (iii) the carve-out is named
+here, at the guard, so the next reader finds it. Applied once so far, when
+``traversal_contract_hash`` landed on ``PipelineParameters``:
+``27429df2…f064d4`` → ``1f1a583a…c2855e``, with ``_node3_score`` and
+``backward_traverse`` unchanged.
+
+The distinction is the whole carve-out: SEMANTIC change re-freezes, DECLARATION
+change re-addresses. If you cannot show condition (i) mechanically, you have a
+semantic change and you owe a re-freeze.
 """
 
 import importlib.util
@@ -54,7 +71,7 @@ from idiograph.domains.arxiv.registry import content_address
 # record whatsoever. An independent second opinion has to be independently
 # written down.
 FROZEN_ADDRESS = (
-    "27429df2e265cb7792addfdf2aa054937bc82b34988bacfe0c049618ecf064d4"
+    "1f1a583ac55e7d5b60c593292dd0da1ec471d134b649875a91f382428cc2855e"
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -107,11 +124,17 @@ def test_packaged_registry_resolves_to_the_authored_address() -> None:
     filename — becomes visible to the suite.
     """
     assert frozen_crispr_address() == FROZEN_ADDRESS, (
-        "the packaged registry no longer holds the record this file names. The "
-        "remedy is a RE-FREEZE of the demo artifact (~50 minutes, ~1,100 live "
-        "LLM draws) and repackaging the record it produces — NEVER an edit to "
-        "FROZEN_ADDRESS, which would make this test agree with whatever "
-        "happens to be on disk and destroy the guard entirely."
+        "the packaged registry no longer holds the record this file names. If "
+        "the pipeline's SEMANTICS moved — anything changing what a run would "
+        "derive — the remedy is a RE-FREEZE of the demo artifact (~50 minutes, "
+        "~1,100 live LLM draws) and repackaging the record it produces, NOT an "
+        "edit to FROZEN_ADDRESS, which would make this test agree with whatever "
+        "happens to be on disk and destroy the guard entirely. THE ONE "
+        "EXCEPTION is IDG-094 clause 3, declaration-only rebaselining: a new "
+        "field entering the content address while the derivation handlers are "
+        "provably byte-identical is hand re-addressed under IDG-094's three "
+        "conditions — see this module's docstring before concluding the guard "
+        "has rotted."
     )
 
 

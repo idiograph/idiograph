@@ -634,11 +634,15 @@ address. Per IDG-032 — everything determining derived output enters the conten
 address — this constant is the descriptor that carries them, and
 ``traversal_contract_hash`` is how it is derived.
 
-The hash is NOT yet a ``PipelineParameters`` field. Wiring it re-addresses every
-existing run, including the frozen demo artifact, so that step is gated
-separately; until it lands this pair declares and derives without moving any
-address. Nothing here changes what ``backward_traverse`` or ``_node3_score`` do —
-the contract DECLARES their behavior, it does not implement it.
+The hash IS a ``PipelineParameters`` field (see ``traversal_contract_hash``
+below). Landing it there re-addressed every existing run, including the frozen
+demo artifact; because that move was declaration-only — the field entered the
+address while ``backward_traverse`` and ``_node3_score`` stayed byte-identical —
+the frozen record was hand re-addressed under IDG-094 clause 3 rather than
+re-frozen. From here on ANY edit to the constant above, whitespace-only reflow
+included, moves the content address. Nothing here changes what
+``backward_traverse`` or ``_node3_score`` do — the contract DECLARES their
+behavior, it does not implement it.
 
 Lives HERE beside ``PARSE_CONTRACT``, not in ``pipeline``, purely to keep the
 import direction one-way: ``pipeline`` imports ``models``, so the reverse import
@@ -761,6 +765,24 @@ class PipelineParameters(BaseModel):
                     "on every derivation that parses a draw. Unlike llm, it is "
                     "always serialized.",
     )
+    traversal_contract_hash: str = Field(
+        default_factory=traversal_contract_hash,
+        description="sha256 of the module TRAVERSAL_CONTRACT constant — the "
+                    "declared Node 3 backward-traversal contract (IDG-091 clause "
+                    "1 / IDG-043). Derived via traversal_contract_hash(), never "
+                    "hand-entered. Node 3's score formula, cap rule, edge-filter "
+                    "ordering and declared-absent selection predicate all decide "
+                    "derived output, and no field spells them out — `n_backward` "
+                    "and `lambda_decay` FEED the formula, they do not STATE it — "
+                    "so per IDG-032 the descriptor that carries them enters the "
+                    "address here. Sits at this level and not on "
+                    "BackwardParameters on purpose: that model's field names match "
+                    "the `backward_traverse` kwargs exactly (see its docstring) so "
+                    "the orchestrator maps them at the call site, and a derived "
+                    "hash no caller supplies and no handler accepts would break "
+                    "that correspondence. Like parse_contract_hash and unlike llm, "
+                    "it is always serialized.",
+    )
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
@@ -774,12 +796,14 @@ class PipelineParameters(BaseModel):
         existing address. A real ``llm`` config is always serialized in full —
         only the null case is dropped, so no LLM-run provenance is lost.
 
-        ``parse_contract_hash`` is deliberately NOT popped alongside it. The
-        parser's contract governs derived output wherever a draw is parsed, so it
-        belongs in the address on every derivation; only the *null LLM config* is
-        an address non-event, not the parse rule. An LLM-free dump is therefore
-        the pre-``llm``-field baseline PLUS ``parse_contract_hash`` — the one
-        intended, uniformly-applied address input this field adds (IDG-032).
+        Neither contract hash is popped alongside it. The parser's contract
+        governs derived output wherever a draw is parsed, and the traversal
+        contract governs Node 3 on every run whether or not a draw is ever made,
+        so both belong in the address on every derivation; only the *null LLM
+        config* is an address non-event, not the contracts. An LLM-free dump is
+        therefore the pre-``llm``-field baseline PLUS ``parse_contract_hash``
+        PLUS ``traversal_contract_hash`` — the intended, uniformly-applied
+        address inputs those two fields add (IDG-032).
         """
         data = handler(self)
         if self.llm is None:
