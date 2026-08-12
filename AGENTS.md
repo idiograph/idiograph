@@ -13,13 +13,37 @@ total).
 
 ## Linting
 
-ruff is not a project dependency. Run it via:
+ruff is pinned in the `dev` dependency-group at an exact version and locked in
+`uv.lock`. Run it via:
 
 ```
-uvx ruff check
+uv run ruff check
 ```
 
-Do not add ruff to pyproject.toml as part of implementation work.
+Not `uvx ruff` — that path is retired. `uvx` resolves whatever ruff version is
+current at the moment you invoke it, so two agents on the same commit can see
+different violation sets. The pin is what makes a lint result reproducible.
+
+The ruleset is declared in `[tool.ruff.lint]` in pyproject.toml: the pinned
+version's default enabled set, transcribed verbatim, code by code (IDG-096).
+It is not compressed to family prefixes — most families are only partially
+enabled by default, so a bare prefix would silently widen the standard.
+
+The working discipline for implementation agents is **zero new violations**.
+Record your own base count before you edit:
+
+```
+uv run ruff check --output-format=concise | tail -1
+```
+
+then confirm the count has not risen after. Do not predict the base count and
+do not carry one forward from an earlier run — measure it in the tree you are
+about to change. Pre-existing violations are not yours to fix as a side effect
+of unrelated work; they are retired under their own ruling.
+
+Do not modify the ruff pin or the `[tool.ruff.lint]` table as part of
+implementation work. Changes to the lint standard take their own ruling and
+their own PR.
 
 ## Specs and prompt pairs
 
