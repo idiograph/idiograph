@@ -62,6 +62,32 @@ def content_address(
     return hashlib.sha256(encoded).hexdigest()
 
 
+#: Suffix marking a SIDECAR — a file that DESCRIBES a record rather than being
+#: one. A record is ``<address>.json``; its derivation-manifest baseline is
+#: ``<address>.manifest.json``, named from the same address so the pair cannot
+#: drift apart. Declared here, in the module that owns what a registry root's
+#: filenames mean, and read by :func:`is_record` and by
+#: ``derivation_manifest.sidecar_path_for``.
+#:
+#: Named suffix rather than a non-``.json`` extension ON PURPOSE: the sidecar IS
+#: JSON and should read as JSON to every tool that opens it, so the exclusion is
+#: stated explicitly below rather than relying on an extension that happens to
+#: fall outside a glob.
+MANIFEST_SIDECAR_SUFFIX = ".manifest.json"
+
+
+def is_record(path: Path) -> bool:
+    """Whether ``path`` is a stored record, as opposed to a sidecar beside one.
+
+    The predicate a registry root is enumerated by. A record is a ``*.json``
+    named by its content address; anything carrying a known sidecar suffix
+    describes a record and must never be counted as one, or a root holding one
+    record plus its baseline manifest would read as holding two records.
+    """
+    path = Path(path)
+    return path.suffix == ".json" and not path.name.endswith(MANIFEST_SIDECAR_SUFFIX)
+
+
 def sole_record_address(root: Path) -> str:
     """The content address of the ONE record stored under ``root``.
 
@@ -70,6 +96,12 @@ def sole_record_address(root: Path) -> str:
     the filename. Reading it back off disk is therefore strictly better than
     hand-authoring the hex beside the file: the two cannot drift, because there
     is only one of them.
+
+    SIDECARS ARE NOT RECORDS. A root may also hold files that DESCRIBE a record —
+    today, ``<address>.manifest.json`` derivation baselines — and :func:`is_record`
+    excludes them explicitly. Without that exclusion a record with a baseline
+    attached would raise here as "two records", which is how an observation
+    channel breaks the thing it observes.
 
     Deliberately generic. It knows nothing about which record it finds and
     resolves no root of its own — ``root`` is always the caller's parameter, so
@@ -80,7 +112,7 @@ def sole_record_address(root: Path) -> str:
     the count: those two facts are what locate the fault.
     """
     root = Path(root)
-    records = sorted(root.glob("*.json"))
+    records = sorted(path for path in root.glob("*.json") if is_record(path))
     if len(records) != 1:
         raise ValueError(
             f"expected exactly one *.json record under {root}, found "
