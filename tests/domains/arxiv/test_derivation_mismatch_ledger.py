@@ -29,6 +29,20 @@ The ruling these tests pin is that the observation is an OBSERVATION:
   before this channel existed, with no ledger write at all. Every fixture
   registry in the pre-existing suite is in that position and must stay green.
 
+  AGREEMENT IS NOT DRIFT EITHER — the other half, and the easier one to leave
+  untested. A sidecar that is PRESENT and MATCHES writes nothing, and that is the
+  path a healthy tree takes on nearly every HIT once baselines are attached at
+  write time. It is not reachable from the absence fixtures (which return before
+  any comparison) nor from the drift fixtures (which are manufactured to
+  disagree), so it needs a baseline derived from the live tree to be exercised at
+  all.
+
+  A DAMAGED LEDGER STILL DEDUPES. The file is append-only and unlocked, so a
+  killed process leaves a truncated last line. Blank and undecodable lines are
+  skipped with a warning; the intact lines above them still carry their drift
+  states. Reading past damage is what keeps one torn write from re-recording
+  every state the ledger already holds.
+
   THE CHANNEL NEVER BREAKS THE SERVE. Any failure in the manifest machinery — a
   sidecar that will not parse, an unwritable ledger — degrades to serving the
   artifact with a logged warning. A cache that stops answering because its audit
@@ -49,6 +63,7 @@ outside its own fixture.
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -438,4 +453,113 @@ def test_an_unwritable_ledger_degrades_to_serving(populated) -> None:
         "a mismatch whose ledger write failed did not serve the stored artifact. "
         "The observation channel must never break the thing it observes: an "
         "unwritable audit trail costs an observation, never a serve."
+    )
+
+
+# ── Agreement ────────────────────────────────────────────────────────────────
+
+
+def test_a_baseline_that_matches_the_live_tree_writes_no_ledger_at_all(
+    populated,
+) -> None:
+    """Pins AGREEMENT IS NOT DRIFT — the quiet path, and the one nothing else pins.
+
+    Every other test in this file drives a sidecar that is either ABSENT or
+    manufactured to disagree. Neither reaches the case where a baseline is
+    present and AGREES, which is the state a healthy tree is in and therefore the
+    path that runs on almost every HIT once baselines are attached at write time.
+    An implementation that appended an entry for every agreeing record — a diff
+    that reported unchanged rows, an emptiness check that never fired — passes
+    every other test here and turns the ledger into one line per cache read.
+
+    The baseline is DERIVED from the live tree rather than doctored, which is
+    what makes this the agreement case rather than a second absence case: it
+    carries the tree's real rows, and the gate must compare them and find nothing.
+    A ledger that is never CREATED is the assertion, not one that is created
+    empty — the distinction matters to an operator, for whom a file's existence
+    is the signal that something was once worth recording.
+    """
+    registry, address, parameters, ledger = populated
+    write_sidecar(
+        sidecar_path_for(registry.root, address),
+        derive_manifest(_SEED_REQUEST, parameters),
+    )
+
+    result = _hit(registry, parameters, ledger)
+
+    assert result.seeds == [_SEED_ID]
+    assert not ledger.exists(), (
+        f"a ledger was created at {ledger} for a record whose committed baseline "
+        f"MATCHES the live tree. An empty diff is not drift: the derivation code "
+        f"is unmoved, there is nothing to witness, and a channel that writes on "
+        f"agreement writes on every HIT of every healthy record."
+    )
+
+
+# ── A torn ledger still dedupes ──────────────────────────────────────────────
+
+
+def test_a_torn_last_line_does_not_cost_the_ledger_its_dedupe(
+    populated, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A partial write at the end of the file is skipped; the lines before it hold.
+
+    The ledger is append-only and written without a lock, so a process killed
+    mid-append leaves a truncated final line. Two behaviors meet here and both
+    are deliberate. The torn line is SKIPPED rather than raised on: refusing to
+    read the ledger would lose the dedupe entirely and re-append every drift
+    state already in it, and refusing to SERVE over it would be far worse than
+    either. And the intact lines BEFORE it must still dedupe — that is the whole
+    reason to keep reading past damage instead of discarding the file.
+
+    Both halves are asserted because they are not distinguishable by outcome
+    alone. If the torn line raised, the fence in `_observe_derivation_mismatch`
+    would catch it, serve the artifact, and append nothing — leaving the ledger
+    byte-identical, exactly as a clean skip does. The `undecodable` warning is
+    what separates "read past the damage" from "fell over and was caught", and
+    the absence of the fence's own warning is what says no exception was thrown.
+    """
+    registry, address, parameters, ledger = populated
+    write_sidecar(
+        sidecar_path_for(registry.root, address),
+        _drifted_baseline(parameters, "0" * 64),
+    )
+
+    _hit(registry, parameters, ledger)
+    assert len(_entries(ledger)) == 1
+    intact = ledger.read_text(encoding="utf-8")
+
+    # A blank line and a half-written entry, as an interrupted append leaves them.
+    with ledger.open("a", encoding="utf-8") as handle:
+        handle.write('\n{"v": 1, "record_address": "')
+
+    with caplog.at_level(logging.WARNING, logger="idiograph.arxiv.cache"):
+        result = _hit(registry, parameters, ledger)
+
+    assert result.seeds == [_SEED_ID]
+
+    torn = '\n{"v": 1, "record_address": "'
+    assert ledger.read_text(encoding="utf-8") == f"{intact}{torn}", (
+        "a HIT against a ledger with a torn final line appended a duplicate "
+        "entry. The intact line above the damage still carries the drift state, "
+        "so it still dedupes; a reader that gave up on the whole file at the "
+        "first bad line would re-record every state the ledger already holds."
+    )
+
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelname == "WARNING"
+    ]
+    assert any("undecodable" in message for message in warnings), (
+        f"the torn line was not reported as skipped: {warnings}. One unreadable "
+        f"line is a blemish worth a warning — it deduplicates nothing, so the "
+        f"drift state it was meant to record may be appended a second time."
+    )
+    assert not any("observation failed" in message for message in warnings), (
+        f"the torn line propagated an exception and was caught by the fence "
+        f"instead of being skipped by the reader: {warnings}. The serve survived "
+        f"either way, which is exactly why this is asserted — a fence catching "
+        f"what the reader should have skipped means the ledger stopped "
+        f"deduplicating at its first damaged line, and nothing else would show it."
     )

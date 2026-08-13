@@ -30,20 +30,58 @@ twice. A test that derived both sides from the subject would agree with whatever
 the subject does — including doing nothing — so the expected rows are written out
 independently, the way `test_traversal_contract_binding.py` transcribes a formula
 rather than calling the function it is measuring.
+
+THE RESOLVERS ARE TESTED DIRECTLY, and the last sections of this file descend to
+them: the small pure functions deciding what a module name resolves to, what a
+relative import means, and what happens at each boundary the closure stops at.
+They are reached directly because their failure mode is SILENCE. Every one of
+them fails closed — into a `None`, an empty set, a skipped row — so a resolver
+that quietly stopped resolving would subtract anchors from the manifest while
+leaving it a well-formed manifest that parses, diffs, and reports agreement. The
+determinism and first-party tests above would all stay green over a descriptor
+that had gone half blind, because they assert over the rows that ARE there.
+
+WHERE THESE TESTS MOCK, AND WHY — the discipline
+`test_derivation_mismatch_ledger.py` states, restated here because these tests
+reach further in. Exactly two things are patched: `subprocess.run`, for the
+`_git_head` failures no fixture can induce (there is no way to un-install git),
+and `sys.modules` membership, for the `find_spec` fallback that is unreachable
+while a module is already imported. Nothing installs a handler into `HANDLERS`.
+A mock handler left in that registry would anchor a later manifest to
+`unittest.mock`, so the handler tests below build a `Graph` naming a type that
+was never registered rather than registering a fake one.
 """
 
+import ast
 import json
+import logging
+import subprocess
+import sys
 
+import pytest
+
+from idiograph.core.models import Graph, Node
 from idiograph.demo import REGISTRY_ROOT, frozen_crispr_address
+from idiograph.domains.arxiv import derivation_manifest
 from idiograph.domains.arxiv.derivation_manifest import (
     DERIVATION_MANIFEST_VERSION,
     FIRST_PARTY_ROOT,
     UV_LOCK_ANCHOR,
     DerivationManifest,
     ModuleAnchor,
+    _git_head,
+    _imported_names,
+    _module_file,
+    _package_of,
+    _relative_path,
+    _resolve_relative,
     derive_manifest,
     diff_hash,
+    handler_modules,
     manifest_diff,
+    module_anchors,
+    package_parent,
+    project_root,
     read_sidecar,
     sidecar_path_for,
     write_sidecar,
@@ -411,3 +449,414 @@ def test_the_committed_sidecar_parses_as_a_manifest() -> None:
         sidecar_path_for(REGISTRY_ROOT, address).read_text(encoding="utf-8")
     )
     assert sorted(payload) == ["baseline_commit", "modules", "uv_lock_sha256", "v"]
+
+
+# ── Tree location ────────────────────────────────────────────────────────────
+
+
+def test_a_lone_lock_file_does_not_make_a_project_root(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pins BOTH FILES, NOT EITHER — and ``None`` when neither is found.
+
+    A stray `uv.lock` above an installed wheel belongs to whatever project owns
+    that directory. Accepting it would digest a STRANGER's dependency set into
+    this manifest, and every release of that unrelated project would then read as
+    derivation drift in this one — a diff row pointing at a file the operator
+    cannot connect to anything they did.
+
+    The `None` half is the ordinary installed-wheel answer and not an error: it
+    yields a null lock digest and a null baseline commit, both values the
+    manifest carries deliberately. `package_parent` is redirected at a tmp
+    directory because the real one sits inside this checkout, where a root always
+    exists — the no-root case cannot be reached from here any other way.
+    """
+    monkeypatch.setattr(derivation_manifest, "package_parent", lambda: tmp_path)
+
+    assert project_root() is None, (
+        f"a project root was found above {tmp_path}, which holds neither "
+        f"uv.lock nor pyproject.toml. No root is the installed-wheel answer and "
+        f"must stay reachable; inventing one digests a directory nobody named."
+    )
+
+    (tmp_path / "uv.lock").write_text("", encoding="utf-8")
+    assert project_root() is None, (
+        "a lone uv.lock was accepted as a project root. BOTH files are required: "
+        "a lock file without a pyproject.toml beside it belongs to some other "
+        "project, and digesting it reports drift in a stranger's dependencies."
+    )
+
+    (tmp_path / "pyproject.toml").write_text("", encoding="utf-8")
+    assert project_root() == tmp_path
+
+
+def test_whatever_the_project_root_is_it_holds_both_project_files() -> None:
+    """The un-redirected control: the real answer satisfies its own definition.
+
+    Stated as an invariant rather than as a fixed path so it holds in a source
+    checkout (where a root exists) and in an installed wheel (where it does not)
+    alike — the same reason `ModuleAnchor.path` is relative to the package parent.
+    """
+    root = project_root()
+    assert root is None or (
+        (root / "uv.lock").is_file() and (root / "pyproject.toml").is_file()
+    )
+
+
+# ── Provenance ───────────────────────────────────────────────────────────────
+
+
+def test_a_tree_git_cannot_answer_for_carries_a_null_provenance_stamp(
+    tmp_path,
+) -> None:
+    """Pins BASELINE_COMMIT IS PROVENANCE on its failure side: no root, no stamp.
+
+    Two of the ways git declines to answer, both un-mocked: there is no checkout
+    to ask about, and there is a directory that is not one. The stamp is metadata
+    the diff never reads, so neither may become an error — a manifest that
+    refused to be computed off a checkout could not be derived from a wheel at
+    all, and the HIT gate would degrade on every record in an installed
+    deployment.
+    """
+    assert _git_head(None) is None, (
+        "no checkout produced something other than None. There is nothing to ask "
+        "git about, and the stamp is optional metadata: the answer is a null."
+    )
+    assert _git_head(tmp_path) is None, (
+        f"{tmp_path} is not a git checkout, so `git rev-parse HEAD` exits "
+        f"non-zero. A non-zero exit is an ABSENT stamp, never a raise — the "
+        f"observation it decorates does not depend on it."
+    )
+
+
+def test_no_git_failure_escapes_the_provenance_stamp(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pins the fence around the stamp: every failure mode collapses to ``None``.
+
+    A missing git binary raises `OSError`; an invocation that outlives its
+    timeout raises `TimeoutExpired`. Both are caught, because the alternative is
+    that an optional provenance field takes down a cache serve — the manifest is
+    derived on the HIT path, and an exception here propagates into a read that
+    has nothing to do with git.
+
+    MOCKING NOTE. `subprocess.run` is patched here and nowhere else in this file.
+    Neither failure can be produced by a fixture — a test cannot un-install git
+    or hang it — and the whole claim of the function is that neither escapes, so
+    the failure has to be injected to be observed at all.
+    """
+
+    def no_git_binary(*args, **kwargs):
+        raise OSError("no git binary on PATH")
+
+    def hung_invocation(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=["git", "rev-parse", "HEAD"], timeout=1)
+
+    monkeypatch.setattr(subprocess, "run", no_git_binary)
+    assert _git_head(tmp_path) is None, (
+        "an OSError from `git` escaped the provenance stamp. A machine without "
+        "git installed must still derive a manifest; the commit is a pointer to "
+        "where the rows came from, and the rows do not need it."
+    )
+
+    monkeypatch.setattr(subprocess, "run", hung_invocation)
+    assert _git_head(tmp_path) is None, (
+        "a timed-out `git` escaped the provenance stamp. The timeout exists so a "
+        "hung invocation is answered with None rather than by holding up the "
+        "observation — catching it is the other half of that decision."
+    )
+
+
+# ── Module resolution ────────────────────────────────────────────────────────
+
+
+def test_a_module_with_no_python_source_anchors_no_file() -> None:
+    """Modules with nothing to hash resolve to ``None`` instead of to a guess.
+
+    Builtins, extension modules and namespace packages have no single `.py` file
+    to anchor, and a name the package does not contain resolves to nothing at
+    all. Both must answer `None` rather than raise: `module_anchors` turns a
+    `None` here into a null ROW, which is how the manifest witnesses "the graph
+    binds this to something outside the bytes I can see" without pretending to
+    know what.
+    """
+    assert _module_file("sys") is None, (
+        "a builtin resolved to a file. `sys` has no __file__ and its spec origin "
+        "is 'built-in', not a source path — hashing whatever came back would "
+        "anchor a row to bytes this tree does not own."
+    )
+    assert _module_file(f"{FIRST_PARTY_ROOT}.no_such_module") is None, (
+        "a module that does not exist resolved to a file. find_spec answers None "
+        "for a name its parent package does not contain, and None is a null row, "
+        "not an error."
+    )
+
+
+def test_a_module_is_resolved_without_being_imported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pins the ``find_spec`` fallback, and that it stays a fallback.
+
+    The closure walks modules the RUN never imported, so resolution must not
+    import them: importing `pipeline` alone executes a `load_dotenv()`, and an
+    observation channel that runs a module's side effects to describe it has
+    stopped observing. `find_spec` resolves a name without executing it.
+
+    MOCKING NOTE. `sys.modules` membership is the one thing patched here. The
+    fallback runs only for a module not already imported, and by the time this
+    file's tests run the whole arxiv package is loaded — so the entry is removed
+    for the duration to reach the branch at all. `monkeypatch` restores it.
+    """
+    name = f"{FIRST_PARTY_ROOT}.domains.arxiv.cache"
+    monkeypatch.delitem(sys.modules, name, raising=False)
+
+    resolved = _module_file(name)
+
+    assert resolved is not None and resolved.name == "cache.py", (
+        f"a module absent from sys.modules did not resolve through find_spec; "
+        f"got {resolved}. Every module in the closure that the run did not "
+        f"happen to import would then anchor nothing."
+    )
+    assert name not in sys.modules, (
+        "resolving a module IMPORTED it. The closure must be computable without "
+        "executing what it walks — module-level side effects (load_dotenv, "
+        "registry mutation) would otherwise fire from inside a cache read."
+    )
+
+
+def test_a_module_outside_the_package_directory_has_no_stated_path(tmp_path) -> None:
+    """A path that cannot be stated relative to the package parent is null.
+
+    `ModuleAnchor.path` is relative so a manifest generated in a source checkout
+    and compared in an installed wheel diffs on CONTENT rather than on where the
+    tree sits. A path outside that directory has no such form; the row keeps its
+    HASH — the load-bearing half — and nulls only the cosmetic field, rather than
+    dropping an anchor and silently shrinking the closure.
+    """
+    inside = package_parent() / FIRST_PARTY_ROOT / "core" / "models.py"
+    assert _relative_path(inside) == f"{FIRST_PARTY_ROOT}/core/models.py"
+
+    outside = tmp_path / "stranger.py"
+    outside.write_text("", encoding="utf-8")
+    assert _relative_path(outside) is None, (
+        f"{outside} is not under {package_parent()} and cannot be stated "
+        f"relative to it. The answer is a null path, not a raise and not an "
+        f"absolute path — an absolute one would diff on the checkout location "
+        f"and report drift for every machine the manifest is read on."
+    )
+
+
+# ── The import closure ───────────────────────────────────────────────────────
+
+
+def test_source_that_cannot_be_read_or_parsed_contributes_no_imports(
+    tmp_path,
+) -> None:
+    """An unreadable module subtracts itself from the closure, not the manifest.
+
+    The closure is computed by AST over files on disk, and a file can be
+    unparseable (a syntax error mid-edit) or absent (a stale `.pyc`, a path that
+    moved). Answering with the empty set costs the imports of ONE module; raising
+    would cost the whole manifest, and the fence at the HIT gate would turn that
+    into every record on this tree serving with a warning and no observation.
+    """
+    broken = tmp_path / "broken.py"
+    broken.write_text("import idiograph\ndef (\n", encoding="utf-8")
+    assert _imported_names(broken, FIRST_PARTY_ROOT) == set(), (
+        "a file that does not parse yielded something other than an empty set. "
+        "A SyntaxError inside one module must not propagate out of the closure "
+        "walk — it would take the entire manifest down with it."
+    )
+
+    assert _imported_names(tmp_path / "absent.py", FIRST_PARTY_ROOT) == set(), (
+        "a file that does not exist yielded something other than an empty set. "
+        "The OSError is answered the same way, and for the same reason."
+    )
+
+
+def test_a_relative_import_reaching_past_the_package_root_is_skipped(
+    tmp_path,
+) -> None:
+    """A malformed relative import is dropped; the rest of the file still counts.
+
+    The skip is what keeps one bad import statement from costing a module its
+    OTHER imports. The control in the same body is the point: an absolute import
+    beside the malformed one must still land, and a `from X import y` must still
+    offer both `X` and `X.y` — only `_module_file` can tell which of the two is a
+    module, so both are offered and the non-module one resolves to nothing.
+    """
+    source = tmp_path / "module.py"
+    source.write_text(
+        "import idiograph.core.models\nfrom ... import runaway\n", encoding="utf-8"
+    )
+
+    assert _imported_names(source, FIRST_PARTY_ROOT) == {"idiograph.core.models"}, (
+        "a relative import walking past the root of the package either raised or "
+        "contributed a name. It resolves to nothing and is skipped, and the "
+        "absolute import beside it must survive that skip."
+    )
+
+    both = tmp_path / "both.py"
+    both.write_text("from idiograph.core import models\n", encoding="utf-8")
+    assert _imported_names(both, FIRST_PARTY_ROOT) == {
+        "idiograph.core",
+        "idiograph.core.models",
+    }
+
+
+def _import_from(source: str) -> ast.ImportFrom:
+    """The single ``ImportFrom`` statement in ``source``, as the walker sees it.
+
+    Parsed rather than hand-constructed so ``level`` and ``module`` carry exactly
+    what Python's own parser reads out of the dots — a hand-built node could
+    encode a level the language never produces.
+    """
+    node = ast.parse(source).body[0]
+    assert isinstance(node, ast.ImportFrom)
+    return node
+
+
+def test_the_relative_import_resolver_walks_one_package_per_leading_dot() -> None:
+    """Pins the resolver the closure's reach depends on, level by level.
+
+    Off-by-one here is invisible and expensive. A resolver one level too shallow
+    anchors a module that does not exist — the name resolves to nothing, the row
+    never appears, and the real module goes unwitnessed while the manifest still
+    looks complete. One level too deep does the same thing from the other side.
+    Nothing else in this file would catch either: the closure is walked from
+    absolute imports today, so this resolver's output is compared against no
+    expectation at all until a first-party module acquires a relative import.
+
+    The malformed case closes it out. A level that walks past the root yields the
+    empty string, which is the caller's signal to skip rather than a name to
+    resolve.
+    """
+    package = f"{FIRST_PARTY_ROOT}.domains.arxiv"
+
+    # Level 0 is already absolute — the package is not consulted at all.
+    assert (
+        _resolve_relative(_import_from("from idiograph.core import models"), package)
+        == "idiograph.core"
+    )
+
+    # One dot IS the package; two its parent; three its grandparent.
+    assert _resolve_relative(_import_from("from . import cache"), package) == package
+    assert (
+        _resolve_relative(_import_from("from .cache import x"), package)
+        == "idiograph.domains.arxiv.cache"
+    )
+    assert (
+        _resolve_relative(_import_from("from ..models import y"), package)
+        == "idiograph.domains.models"
+    )
+    assert (
+        _resolve_relative(_import_from("from ... import z"), package)
+        == FIRST_PARTY_ROOT
+    )
+
+    # Past the root, and from no package at all: malformed, and skipped.
+    assert _resolve_relative(_import_from("from .... import w"), package) == "", (
+        "a relative import four levels up from a three-package root resolved to "
+        "a name. It refers to nothing; the empty string is what the caller skips "
+        "on, and any name here would be fabricated."
+    )
+    assert _resolve_relative(_import_from("from . import w"), "") == ""
+
+
+def test_a_package_init_is_its_own_package() -> None:
+    """What relative imports resolve AGAINST, decided by file name.
+
+    An `__init__.py` IS its package, while every other module's package is its
+    parent — get this wrong for `__init__.py` and every relative import in every
+    package initializer resolves one level too high, silently pulling the wrong
+    modules into the closure or none at all.
+
+    Read off the file name rather than out of `sys.modules`, so the answer is the
+    same whether or not the module has been imported — the same discipline that
+    lets the closure walk modules the run never loaded.
+    """
+    arxiv = package_parent() / FIRST_PARTY_ROOT / "domains" / "arxiv"
+    package = f"{FIRST_PARTY_ROOT}.domains.arxiv"
+
+    assert _package_of(package, arxiv / "__init__.py") == package, (
+        "a package's __init__.py was assigned its PARENT as its package. Every "
+        "relative import in an initializer would then resolve one level too "
+        "high."
+    )
+    assert _package_of(f"{package}.cache", arxiv / "cache.py") == package
+
+
+# ── Handler resolution ───────────────────────────────────────────────────────
+
+
+def test_a_node_type_no_handler_implements_anchors_nothing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Pins THE MANIFEST IS NOT A VALIDATOR: an unregistered type warns and skips.
+
+    `validate_integrity` and the executor already fail on a type nothing
+    implements, and they are the right places for it. Failing HERE would fail on
+    the HIT path — a cache serve broken by a defect the serve does not depend on,
+    over an artifact already loaded and already correct.
+
+    Stated as an equality against the same graph WITHOUT the unregistered node,
+    so it pins "anchors nothing" exactly: not a null row, not an
+    `<unresolved-handler-module>` row, nothing. That anchor is for a handler that
+    EXISTS and cannot be located; a type with no handler at all is a different
+    fact and gets no row.
+
+    No handler is registered to reach this. Installing a fake into `HANDLERS`
+    would anchor whatever manifest a later test derives to `unittest.mock`.
+    """
+    registered = Node(id="0", type="ResolveSeeds")
+    unregistered = Node(id="1", type="NoSuchNodeTypeExists")
+
+    with caplog.at_level(
+        logging.WARNING, logger="idiograph.arxiv.derivation_manifest"
+    ):
+        with_unknown = handler_modules(
+            Graph(name="probe", version="1", nodes=[registered, unregistered])
+        )
+
+    assert with_unknown == handler_modules(
+        Graph(name="probe", version="1", nodes=[registered])
+    ), (
+        f"a node type nothing implements changed what the manifest anchors: "
+        f"{with_unknown}. It resolves to no handler and so to no module, and the "
+        f"registered node beside it must still anchor exactly what it did alone."
+    )
+
+    assert any(
+        "NoSuchNodeTypeExists" in record.getMessage()
+        for record in caplog.records
+        if record.levelname == "WARNING"
+    ), (
+        "the skipped node type was not named in a warning. Skipping silently "
+        "makes a graph the executor would reject look, to anyone reading the "
+        "manifest, like a graph whose every type is implemented."
+    )
+
+
+def test_a_seed_module_outside_this_tree_is_witnessed_with_a_null_row() -> None:
+    """Pins FIRST-PARTY MEANS THIS TREE, on the row that crosses the boundary.
+
+    A handler supplied from outside the `idiograph` package still gets a ROW,
+    with a null hash — the graph binds that node type to SOMETHING, and the
+    manifest says so without claiming to know its bytes. Dropping the row instead
+    would make a handler MOVING across that boundary — production code replaced
+    by a test double, or by an implementation from another distribution — read as
+    silence, which is the single change this descriptor most needs to report.
+
+    Both null shapes are the same row: a module whose file exists but is not this
+    tree's to hash, and one with no source file at all.
+    """
+    assert module_anchors(["json"]) == [ModuleAnchor(module="json")], (
+        "a seed module outside the idiograph package was not witnessed as a null "
+        "row. It has a file, but not one this repository owns: hashing it makes "
+        "every stdlib release read as derivation drift, and dropping it makes a "
+        "handler leaving this tree read as no change at all."
+    )
+    assert module_anchors(["sys"]) == [ModuleAnchor(module="sys")]
+
+    for row in module_anchors(["json"]):
+        assert row.path is None and row.sha256 is None
