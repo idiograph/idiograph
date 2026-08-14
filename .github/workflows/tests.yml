@@ -38,3 +38,28 @@ jobs:
         run: |
           uv run python scripts/gen_diagrams.py
           git diff --exit-code README.md || (echo "README diagrams are out of sync. Run scripts/gen_diagrams.py and commit the result." && exit 1)
+
+  # Lint runs as its own job, not a step in `test`, so a lint failure reads as
+  # lint and test results still report independently (IDG-099). It uses the
+  # ruff pinned in [dependency-groups].dev — never a system or setup-action
+  # ruff — which is what makes the gate reproducible against the transcribed
+  # ruleset in pyproject.toml.
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      # --only-group dev is the lightest sync that yields the pinned ruff:
+      # no project install, no runtime dependencies, no --extra community.
+      # Lint reads source, not deps.
+      - name: Install pinned ruff
+        run: uv sync --only-group dev
+
+      # --no-sync keeps `uv run` from re-syncing the full default environment
+      # that the step above deliberately narrowed.
+      - name: Run ruff
+        run: uv run --no-sync ruff check
