@@ -45,6 +45,14 @@ Do not modify the ruff pin or the `[tool.ruff.lint]` table as part of
 implementation work. Changes to the lint standard take their own ruling and
 their own PR.
 
+Inline suppressions are rulings, not annotations (IDG-098). No `# noqa` enters
+the codebase without an explicit design-seat ruling on the record, cited in the
+brief that carries it and naming the site and the reason. The zero-delta
+discipline is therefore two-part: (1) zero new unsuppressed violations against
+the base count you measured; (2) zero new inline suppressions absent a ruling
+cited in your brief. A violation whose correct resolution appears to be a
+suppression is a STOP-and-report, not a judgment call.
+
 ## Specs and prompt pairs
 
 Specs live in the vault at `projects/idiograph/specs/`. A frozen spec
