@@ -118,11 +118,11 @@ class TestLinearExecution:
             return {"value": params["value"]}
 
         async def process(params, inputs):
-            upstream = list(inputs.values())[0]
+            upstream = next(iter(inputs.values()))
             return {"value": upstream["value"] * 2}
 
         async def output(params, inputs):
-            upstream = list(inputs.values())[0]
+            upstream = next(iter(inputs.values()))
             return {"final": upstream["value"]}
 
         register_handler("StubFetch",   fetch)

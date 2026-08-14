@@ -380,11 +380,15 @@ async def _main() -> int:
             "no relationship_type survived the replay",
         ),
         (
-            "field-diff names only the re-supplied fields (subset of "
-            "{seeds, seed_failures})",
+            (
+                "field-diff names only the re-supplied fields (subset of "
+                "{seeds, seed_failures})"
+            ),
             set(differing_fields) <= _RESUPPLIED_FIELDS,
-            f"unexpected differing fields: "
-            f"{sorted(set(differing_fields) - _RESUPPLIED_FIELDS)}",
+            (
+                "unexpected differing fields: "
+                f"{sorted(set(differing_fields) - _RESUPPLIED_FIELDS)}"
+            ),
         ),
         (
             "re-supplied seeds are equal in content (order-normalized)",

@@ -33,9 +33,7 @@ def is_compatible(out_port: "Port", in_port: "Port") -> bool:
     if out_port.port_type == in_port.port_type:
         return True
     # SPEC: token_dict → token_role is allowed (Assign extracts the role)
-    if out_port.port_type == "token_dict" and in_port.port_type == "token_role":
-        return True
-    return False
+    return out_port.port_type == "token_dict" and in_port.port_type == "token_role"
 
 
 class Port(QGraphicsItem):

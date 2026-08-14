@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-from datetime import date
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -417,7 +417,7 @@ def test_strip_openalex_id_helper():
     assert _strip_openalex_id("https://openalex.org/W123") == "W123"
     assert _strip_openalex_id("W123") == "W123"
     # silence unused-import warning in minimal date usage
-    assert date.today().year >= 2026
+    assert datetime.now(UTC).date().year >= 2026
 
 
 # ── Node 3 wrapper, edges, and failure provenance (AMD-020) ────────────────
