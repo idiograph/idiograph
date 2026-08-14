@@ -421,7 +421,9 @@ async def _execute_node(
         _update_node_status(node, "SUCCESS")
         _log.info("Node '%s' completed successfully.", node.id)
         return {**output, "status": "SUCCESS", "node_id": node.id}
-    except Exception as e:
+    # The executor fence: converts ANY handler failure into a FAILED result.
+    # Catching anything narrower reintroduces crash-through (ruled, IDG-098).
+    except Exception as e:  # noqa: BLE001
         _log.error("Node '%s' failed: %s", node.id, e)
         _update_node_status(node, "FAILED")
         return {

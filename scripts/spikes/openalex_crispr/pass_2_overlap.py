@@ -61,7 +61,9 @@ def main() -> int:
     for i, wid in enumerate(sorted(union_ids), start=1):
         try:
             cache[wid] = get_work(wid)
-        except Exception as exc:
+        # Batch-fetch fence: record the per-work failure and continue.
+        # Dying on one work defeats the script (ruled, IDG-098).
+        except Exception as exc:  # noqa: BLE001
             print(f"  [{i}/{len(union_ids)}] {wid}: FAILED ({exc!r})")
             cache[wid] = {"id": wid, "_fetch_error": repr(exc)}
         if i % 10 == 0:
