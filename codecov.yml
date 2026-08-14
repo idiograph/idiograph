@@ -1,0 +1,11 @@
+# Codecov carve-out (IDG-100).
+#
+# These are the surfaces PR #72's scoring witnessed as executed by no test.
+# Ignoring them lets codecov/patch measure only coverable code, so patch stays
+# a hard signal instead of a noisy one.
+#
+# The rule: a path leaves this list by gaining tests, never by argument.
+
+ignore:
+  - "src/idiograph/apps/color_designer/**"
+  - "scripts/**"
