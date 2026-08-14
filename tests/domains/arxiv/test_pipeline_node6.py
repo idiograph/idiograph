@@ -16,7 +16,6 @@ from idiograph.domains.arxiv.pipeline import (
     compute_pagerank,
 )
 
-
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 
@@ -315,6 +314,7 @@ def test_deterministic_output() -> None:
 def test_pagerank_networkx_agreement() -> None:
     """Output matches nx.pagerank(G, alpha=damping) on hand-constructed fixture."""
     import asyncio
+
     import networkx as nx
 
     nodes = [_rec("A"), _rec("B"), _rec("C"), _rec("D")]

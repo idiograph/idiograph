@@ -16,7 +16,6 @@ from idiograph.domains.arxiv.models import (
 )
 from idiograph.domains.arxiv.pipeline import clean_cycles
 
-
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 
@@ -249,9 +248,11 @@ def test_missing_citation_node_raises(caplog: pytest.LogCaptureFixture) -> None:
     nodes = [_rec("A", 10), _rec("B", 10)]
     edges = [_edge("A", "B"), _edge("B", "C"), _edge("C", "A")]
 
-    with caplog.at_level(logging.WARNING, logger="idiograph.arxiv.pipeline"):
-        with pytest.raises(ValidationError) as exc_info:
-            _clean(nodes, edges)
+    with (
+        caplog.at_level(logging.WARNING, logger="idiograph.arxiv.pipeline"),
+        pytest.raises(ValidationError) as exc_info,
+    ):
+        _clean(nodes, edges)
 
     # Citation-count WARNING still fires before the construction-time raise.
     warnings = [r for r in caplog.records if r.levelname == "WARNING"]

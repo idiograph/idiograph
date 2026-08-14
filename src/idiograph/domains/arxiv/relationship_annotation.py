@@ -566,5 +566,7 @@ def _parse_annotation(raw: str) -> RelationshipAnnotation:
     """
     parsed = json.loads(_strip_code_fence(raw))
     if not isinstance(parsed, dict):
-        raise ValueError("model output is not a JSON object")
+        # The ValueError is load-bearing: the catch at the call site routes it to
+        # the model_output_invalid path. TypeError bypasses that fence (IDG-098).
+        raise ValueError("model output is not a JSON object")  # noqa: TRY004
     return RelationshipAnnotation.model_validate(parsed)

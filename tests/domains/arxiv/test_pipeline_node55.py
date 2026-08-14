@@ -13,6 +13,7 @@ import hashlib
 import json
 
 import pytest
+from pydantic import ValidationError
 
 from idiograph.domains.arxiv import pipeline
 from idiograph.domains.arxiv.models import (
@@ -36,7 +37,6 @@ from idiograph.domains.arxiv.relationship_annotation import (
     prompt_template_hash,
     text_route,
 )
-
 
 # ── Fake Anthropic client ────────────────────────────────────────────────────
 
@@ -381,7 +381,7 @@ def test_literal_enforced_not_bypassed_by_model_copy() -> None:
     assert bypassed.relationship_type == bad_label  # no revalidation happened
 
     # Enforcement on the typed form rejects it.
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         RelationshipAnnotation.model_validate(
             {"relationship_type": bad_label, "semantic_confidence": 0.5}
         )

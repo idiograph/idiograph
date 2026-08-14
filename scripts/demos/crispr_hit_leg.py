@@ -62,7 +62,6 @@ from collections import Counter
 from pathlib import Path
 
 import httpx
-from dotenv import load_dotenv
 
 # Import the STANDARD and — per its own docstring — the thing to reuse. Deriving
 # the parameters and seeds from the module that produced the artifact is the
@@ -70,7 +69,7 @@ from dotenv import load_dotenv
 # The durable-root helper and the measured-boundary text also live there (the
 # module of record) so this script cannot drift from them.
 # crispr_freeze_trigger guards _main() behind __main__, so importing it is inert.
-from crispr_freeze_trigger import (  # noqa: E402  (scripts/demos is on sys.path[0])
+from crispr_freeze_trigger import (
     OPENALEX_TIMEOUT_SECONDS,
     SEEDS,
     RequestCounter,
@@ -79,6 +78,7 @@ from crispr_freeze_trigger import (  # noqa: E402  (scripts/demos is on sys.path
     _durable_registry_root,
     _parameters,
 )
+from dotenv import load_dotenv
 
 from idiograph.core.logging_config import get_logger
 from idiograph.demo import REGISTRY_ROOT, frozen_crispr_address
@@ -204,10 +204,10 @@ async def _main() -> int:
     print("  registry outside /tmp. Traversal must never be entered.")
     print("=" * 72)
     print()
-    print(f"  entry point   : cached_run_arxiv_pipeline  (the real cache.py)")
+    print("  entry point   : cached_run_arxiv_pipeline  (the real cache.py)")
     print(f"  seeds         : {SEEDS[0]['doi']}  (Doudna/Charpentier 2012)")
     print(f"                  {SEEDS[1]['doi']}  (Zhang 2013)")
-    print(f"  parameters    : imported from crispr_freeze_trigger._parameters()")
+    print("  parameters    : imported from crispr_freeze_trigger._parameters()")
     print(f"  prompt hash   : {parameters.llm.prompt_template_hash[:16]}…  (derived)")
     print(f"  registry root : {registry_root}")
     print(f"                  ({registry_source})")
@@ -327,7 +327,7 @@ async def _main() -> int:
     stored = registry.read(hit_address)
 
     print(f"  traversal entered : {hit_traversals}")
-    print(f"  Anthropic calls   : 0  (structural — no client exists to draw)")
+    print("  Anthropic calls   : 0  (structural — no client exists to draw)")
     print(f"  OpenAlex requests : {hit_openalex}  (seed resolution — runs on "
           "every call, hit or miss; a HIT is not hermetic)")
     print()
@@ -349,7 +349,7 @@ async def _main() -> int:
     print()
     print(f"  returned nodes           : {len(hit.nodes)} "
           f"({non_seed_labeled} carry a replayed relationship_type)")
-    print(f"  relationship_type labels : ")
+    print("  relationship_type labels : ")
     for label, count in sorted(labels.items()):
         print(f"      {label:<26} {count}")
     print()
@@ -380,11 +380,15 @@ async def _main() -> int:
             "no relationship_type survived the replay",
         ),
         (
-            "field-diff names only the re-supplied fields (subset of "
-            "{seeds, seed_failures})",
+            (
+                "field-diff names only the re-supplied fields (subset of "
+                "{seeds, seed_failures})"
+            ),
             set(differing_fields) <= _RESUPPLIED_FIELDS,
-            f"unexpected differing fields: "
-            f"{sorted(set(differing_fields) - _RESUPPLIED_FIELDS)}",
+            (
+                "unexpected differing fields: "
+                f"{sorted(set(differing_fields) - _RESUPPLIED_FIELDS)}"
+            ),
         ),
         (
             "re-supplied seeds are equal in content (order-normalized)",

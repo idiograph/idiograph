@@ -92,3 +92,19 @@ select = [
     "UP049", "UP050", "W605", "YTT101", "YTT102", "YTT103", "YTT201", "YTT202", "YTT203", "YTT204",
     "YTT301", "YTT302", "YTT303",
 ]
+
+# B008 in the color_designer node modules is the PySide default-argument
+# idiom, not a debt (IDG-096 clause 4). These constructors take
+# `pos: QPointF = QPointF(0, 0)` — Qt geometry values are immutable in
+# practice at these call sites and the shared-mutable-default hazard B008
+# exists to catch does not arise. The seven files are listed individually
+# rather than globbed so that a genuine B008 in a new node module still
+# fails the gate.
+[tool.ruff.lint.per-file-ignores]
+"src/idiograph/apps/color_designer/nodes/array_assign_node.py" = ["B008"]
+"src/idiograph/apps/color_designer/nodes/array_node.py" = ["B008"]
+"src/idiograph/apps/color_designer/nodes/assign_node.py" = ["B008"]
+"src/idiograph/apps/color_designer/nodes/base_node.py" = ["B008"]
+"src/idiograph/apps/color_designer/nodes/schema_node.py" = ["B008"]
+"src/idiograph/apps/color_designer/nodes/swatch_node.py" = ["B008"]
+"src/idiograph/apps/color_designer/nodes/write_node.py" = ["B008"]

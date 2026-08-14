@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 from idiograph.core.executor import execute_graph
 from idiograph.core.logging_config import get_logger
-from idiograph.core.models import Graph, Node, Edge, PortDeclaration
+from idiograph.core.models import Edge, Graph, Node, PortDeclaration
 from idiograph.core.query import validate_integrity
 from idiograph.domains.arxiv.models import (
     CitationEdge,
@@ -43,6 +43,7 @@ from idiograph.domains.arxiv.models import (
     TruncatedSeed,
     make_node_id,
 )
+
 # Node 5.5's handler, RE-EXPORTED rather than called. The flip moved every stage
 # dispatch onto the HANDLERS registry, so nothing in this module calls it any
 # more — but `pipeline.annotate_relationships` is the module attribute every
@@ -68,7 +69,7 @@ _TRAVERSAL_SELECT = _WORK_SELECT + ",referenced_works"
 def _get_api_key() -> str:
     key = os.getenv("OPENALEX_API_KEY")
     if not key:
-        raise EnvironmentError(
+        raise OSError(
             "OPENALEX_API_KEY not set. Add it to .env or set it in the environment."
         )
     return key
@@ -140,9 +141,9 @@ def _work_to_record(
 
 def _seed_filter(seed: dict) -> str | None:
     """Build the OpenAlex filter expression for a single seed entry."""
-    if "arxiv_id" in seed and seed["arxiv_id"]:
+    if seed.get("arxiv_id"):
         return f"ids.arxiv:https://arxiv.org/abs/{seed['arxiv_id']}"
-    if "doi" in seed and seed["doi"]:
+    if seed.get("doi"):
         # OpenAlex rejects `ids.doi:` with HTTP 400; `doi:` accepts both the bare
         # DOI and the https://doi.org/… prefixed form.
         return f"doi:{seed['doi']}"

@@ -6,14 +6,20 @@
 
 import math
 
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QPushButton, QLineEdit, QLabel, QColorDialog,
-)
-from PySide6.QtCore import Qt, QPointF
+from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QColor
+from PySide6.QtWidgets import (
+    QColorDialog,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
-from idiograph.apps.color_designer.nodes.base_node import BaseNode, NODE_WIDTH
+from idiograph.apps.color_designer.nodes.base_node import NODE_WIDTH, BaseNode
 from idiograph.core.models import Node
 
 # ── view labels ───────────────────────────────────────────────────────────────

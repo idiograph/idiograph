@@ -4,12 +4,12 @@
 # Idiograph — deterministic semantic graph execution for production AI pipelines.
 # https://github.com/idiograph/idiograph
 
-from collections.abc import Mapping
-from typing import Callable, Any
+from collections.abc import Callable, Mapping
+from typing import Any
 
-from idiograph.core.models import Edge, Graph, Node
-from idiograph.core.query import topological_sort, find_cycles
 from idiograph.core.logging_config import get_logger
+from idiograph.core.models import Edge, Graph, Node
+from idiograph.core.query import find_cycles, topological_sort
 
 _log = get_logger("executor")
 
@@ -421,7 +421,9 @@ async def _execute_node(
         _update_node_status(node, "SUCCESS")
         _log.info("Node '%s' completed successfully.", node.id)
         return {**output, "status": "SUCCESS", "node_id": node.id}
-    except Exception as e:
+    # The executor fence: converts ANY handler failure into a FAILED result.
+    # Catching anything narrower reintroduces crash-through (ruled, IDG-098).
+    except Exception as e:  # noqa: BLE001
         _log.error("Node '%s' failed: %s", node.id, e)
         _update_node_status(node, "FAILED")
         return {

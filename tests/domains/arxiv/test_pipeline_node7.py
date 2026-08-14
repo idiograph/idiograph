@@ -16,7 +16,6 @@ from idiograph.domains.arxiv.pipeline import (
     detect_communities,
 )
 
-
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 

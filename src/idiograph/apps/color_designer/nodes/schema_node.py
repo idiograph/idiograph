@@ -6,13 +6,17 @@
 
 from pathlib import Path
 
+from PySide6.QtCore import QPointF, Qt
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QScrollArea, QFrame,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QScrollArea,
+    QVBoxLayout,
+    QWidget,
 )
-from PySide6.QtCore import Qt, QPointF
 
-from idiograph.apps.color_designer.nodes.base_node import BaseNode, NODE_WIDTH
+from idiograph.apps.color_designer.nodes.base_node import NODE_WIDTH, BaseNode
 from idiograph.apps.color_designer.token_store import TokenStore
 from idiograph.core.models import Node
 

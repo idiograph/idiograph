@@ -20,7 +20,6 @@ from idiograph.domains.arxiv.pipeline import (
     forward_traverse,
 )
 
-
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
 

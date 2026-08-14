@@ -5,8 +5,8 @@
 # https://github.com/idiograph/idiograph
 
 import networkx as nx
-from idiograph.core.models import Graph
 
+from idiograph.core.models import Graph
 
 # ── Internal helper ──────────────────────────────────────────────────────────
 

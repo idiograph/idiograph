@@ -15,7 +15,6 @@ from pydantic import (
     model_validator,
 )
 
-
 RelationshipType = Literal[
     "methodological_precursor",
     "theoretical_foundation",

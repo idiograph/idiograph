@@ -6,7 +6,8 @@
 
 import pytest
 from pydantic import ValidationError
-from idiograph.core.graph import get_node, get_edges_from, summarize, load_graph
+
+from idiograph.core.graph import get_edges_from, get_node, load_graph, summarize
 
 
 class TestGetNode:

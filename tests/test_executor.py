@@ -5,7 +5,7 @@
 # https://github.com/idiograph/idiograph
 
 import pytest
-from idiograph.core.models import Node, Edge, Graph, PortDeclaration
+
 from idiograph.core.executor import (
     HANDLERS,
     InjectedOutputError,
@@ -14,6 +14,7 @@ from idiograph.core.executor import (
     execute_graph,
     register_handler,
 )
+from idiograph.core.models import Edge, Graph, Node, PortDeclaration
 
 
 @pytest.fixture(autouse=True)
@@ -117,11 +118,11 @@ class TestLinearExecution:
             return {"value": params["value"]}
 
         async def process(params, inputs):
-            upstream = list(inputs.values())[0]
+            upstream = next(iter(inputs.values()))
             return {"value": upstream["value"] * 2}
 
         async def output(params, inputs):
-            upstream = list(inputs.values())[0]
+            upstream = next(iter(inputs.values()))
             return {"final": upstream["value"]}
 
         register_handler("StubFetch",   fetch)

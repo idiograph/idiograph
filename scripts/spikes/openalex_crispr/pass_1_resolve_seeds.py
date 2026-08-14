@@ -12,7 +12,7 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from openalex_client import get_work, search_works  # noqa: E402
+from openalex_client import get_work, search_works
 
 OUTPUT_DIR = Path(__file__).parent / "output"
 

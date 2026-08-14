@@ -5,15 +5,16 @@
 # https://github.com/idiograph/idiograph
 
 import pytest
+
+from idiograph.core.models import Edge, Graph, Node
 from idiograph.core.query import (
+    find_cycles,
     get_downstream,
     get_upstream,
-    topological_sort,
-    find_cycles,
-    validate_integrity,
     summarize_intent,
+    topological_sort,
+    validate_integrity,
 )
-from idiograph.core.models import Edge, Graph, Node
 
 
 class TestDownstream:
