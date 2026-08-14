@@ -6,11 +6,15 @@
 
 import uuid
 
-from PySide6.QtWidgets import QGraphicsItem, QGraphicsProxyWidget, QGraphicsSceneMouseEvent
-from PySide6.QtCore import Qt, QRectF, QPointF
-from PySide6.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPainterPath
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen
+from PySide6.QtWidgets import (
+    QGraphicsItem,
+    QGraphicsProxyWidget,
+    QGraphicsSceneMouseEvent,
+)
 
-from idiograph.apps.color_designer.nodes.port import Port, INPUT, OUTPUT, PORT_RADIUS
+from idiograph.apps.color_designer.nodes.port import INPUT, OUTPUT, PORT_RADIUS, Port
 
 # ── layout constants ──────────────────────────────────────────────────────────
 NODE_WIDTH = 200

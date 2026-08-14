@@ -5,7 +5,8 @@
 # https://github.com/idiograph/idiograph
 
 import pytest
-from idiograph.core.models import Node, Edge, Graph
+
+from idiograph.core.models import Edge, Graph, Node
 
 
 @pytest.fixture

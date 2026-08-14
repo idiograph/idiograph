@@ -103,6 +103,7 @@ async def discard(params: dict, inputs: dict) -> dict:
 def register_arxiv_handlers() -> None:
     """Explicit per-domain handler registration for the arXiv pipeline."""
     from idiograph.core.executor import register_handler
+
     # assemble_graph, backward_traverse, clean_cycles, compute_co_citations,
     # compute_depth_metrics, compute_pagerank, detect_communities, enrich_nodes,
     # forward_traverse and resolve_seeds live in pipeline.py (they are pipeline
@@ -120,6 +121,7 @@ def register_arxiv_handlers() -> None:
         forward_traverse,
         resolve_seeds,
     )
+
     # Node 5.5 lives in its own module rather than pipeline.py — it is the one
     # traversal stage with a model call in it — but registers the same way.
     from idiograph.domains.arxiv.relationship_annotation import (

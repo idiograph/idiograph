@@ -4,9 +4,9 @@
 # Idiograph — deterministic semantic graph execution for production AI pipelines.
 # https://github.com/idiograph/idiograph
 
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtGui import QBrush, QColor, QPainter, QPen
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsSceneMouseEvent
-from PySide6.QtCore import Qt, QRectF, QPointF
-from PySide6.QtGui import QPainter, QPen, QBrush, QColor
 
 PORT_RADIUS = 6
 PORT_HIT_RADIUS = 10  # generous click area, larger than the visible dot

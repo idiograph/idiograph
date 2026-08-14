@@ -4,7 +4,7 @@
 # Idiograph — deterministic semantic graph execution for production AI pipelines.
 # https://github.com/idiograph/idiograph
 
-from idiograph.core.models import Node, Edge, Graph
+from idiograph.core.models import Edge, Graph, Node
 
 SAMPLE_PIPELINE: Graph = Graph(
     name="lookdev_approval_pipeline",

@@ -5,7 +5,9 @@
 # https://github.com/idiograph/idiograph
 
 from typing import Any, Literal
+
 from pydantic import BaseModel, Field
+
 
 class PortType(BaseModel):
     label: str = Field(description="Human-readable label for this type. Example: 'RGB Color', 'USD Stage Handle'.")

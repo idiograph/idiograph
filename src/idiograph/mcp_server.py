@@ -7,18 +7,18 @@
 import asyncio
 import json
 
-from mcp.server import Server
 from mcp import stdio_server, types
+from mcp.server import Server
 
 from idiograph.core import (
-    get_node,
-    get_edges_from,
-    validate_integrity,
-    summarize_intent,
     execute_graph,
+    get_edges_from,
+    get_node,
+    summarize_intent,
+    validate_integrity,
 )
-from idiograph.core.models import Graph
 from idiograph.core.logging_config import get_logger
+from idiograph.core.models import Graph
 
 logger = get_logger("mcp_server")
 

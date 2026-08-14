@@ -4,19 +4,31 @@
 # Idiograph — deterministic semantic graph execution for production AI pipelines.
 # https://github.com/idiograph/idiograph
 
-import os
-import json
 import asyncio
+import json
+import os
+
 import typer
 from dotenv import load_dotenv
-from idiograph.core import SAMPLE_PIPELINE, summarize, load_graph, load_config, setup_logging
+from pydantic import ValidationError
+
+from idiograph.core import (
+    SAMPLE_PIPELINE,
+    load_config,
+    load_graph,
+    setup_logging,
+    summarize,
+)
 from idiograph.core.executor import execute_graph
 from idiograph.core.models import Graph
 from idiograph.core.query import (
-    get_downstream, get_upstream, topological_sort,
-    find_cycles, validate_integrity, summarize_intent,
+    find_cycles,
+    get_downstream,
+    get_upstream,
+    summarize_intent,
+    topological_sort,
+    validate_integrity,
 )
-from pydantic import ValidationError
 from idiograph.mcp_server import main as mcp_main
 
 app = typer.Typer()
@@ -82,8 +94,8 @@ async def _execute_live(pipeline: Graph) -> dict:
     clients; they never build them, so what a handler can reach is exactly what
     its node declared.
     """
-    import httpx
     import anthropic
+    import httpx
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -122,11 +134,14 @@ def run(
     from idiograph.domains.arxiv.pipeline import ARXIV_PIPELINE
 
     if mock:
-        from idiograph.domains.arxiv.mock_handlers import (
-            mock_fetch_abstract, mock_llm_call, mock_evaluator,
-            mock_llm_summarize, mock_discard,
-        )
         from idiograph.core.executor import register_handler
+        from idiograph.domains.arxiv.mock_handlers import (
+            mock_discard,
+            mock_evaluator,
+            mock_fetch_abstract,
+            mock_llm_call,
+            mock_llm_summarize,
+        )
         register_handler("FetchAbstract", mock_fetch_abstract)
         register_handler("LLMCall",       mock_llm_call)
         register_handler("Evaluator",     mock_evaluator)
@@ -181,8 +196,8 @@ def query_intent():
 @app.command()
 def serve():
     """Start the Idiograph MCP server (stdio transport)."""
-    from idiograph.core.pipeline import SAMPLE_PIPELINE
     from idiograph.core.graph import load_graph
+    from idiograph.core.pipeline import SAMPLE_PIPELINE
     graph = load_graph(SAMPLE_PIPELINE.model_dump())
     mcp_main(graph)
 

@@ -18,7 +18,6 @@ from idiograph.domains.arxiv.pipeline import (
     backward_traverse,
 )
 
-
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
 

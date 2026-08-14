@@ -37,7 +37,6 @@ from idiograph.domains.arxiv.relationship_annotation import (
     text_route,
 )
 
-
 # ── Fake Anthropic client ────────────────────────────────────────────────────
 
 

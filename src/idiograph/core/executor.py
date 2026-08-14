@@ -4,12 +4,12 @@
 # Idiograph — deterministic semantic graph execution for production AI pipelines.
 # https://github.com/idiograph/idiograph
 
-from collections.abc import Mapping
-from typing import Callable, Any
+from collections.abc import Callable, Mapping
+from typing import Any
 
-from idiograph.core.models import Edge, Graph, Node
-from idiograph.core.query import topological_sort, find_cycles
 from idiograph.core.logging_config import get_logger
+from idiograph.core.models import Edge, Graph, Node
+from idiograph.core.query import find_cycles, topological_sort
 
 _log = get_logger("executor")
 

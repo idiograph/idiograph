@@ -34,7 +34,6 @@ from idiograph.domains.arxiv.pipeline import (
 )
 from idiograph.domains.arxiv.pipeline_graph import build_pipeline_graph
 
-
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 

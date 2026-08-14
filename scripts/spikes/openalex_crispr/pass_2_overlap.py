@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from openalex_client import get_work  # noqa: E402
+from openalex_client import get_work
 
 OUTPUT_DIR = Path(__file__).parent / "output"
 DOUDNA_SEED_PATH = OUTPUT_DIR / "seed_doudna_2012.json"

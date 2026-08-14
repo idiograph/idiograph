@@ -12,7 +12,6 @@ from idiograph.domains.arxiv.models import (
 )
 from idiograph.domains.arxiv.pipeline import compute_co_citations
 
-
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 
