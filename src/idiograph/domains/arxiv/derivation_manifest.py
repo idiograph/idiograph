@@ -72,6 +72,14 @@ freeze and the attachment, and any drift inside that span is unwitnessed. That
 span is known and bounded, and saying so here is cheaper than letting a later
 reader infer a provenance claim the file cannot support.
 
+A sidecar written at the MISS that produced the record is the DEGENERATE case of
+those same semantics, not an exception to them: attachment and derivation
+coincide, so the unwitnessed span is empty by construction. The file still makes
+no stronger claim than any other sidecar — it says what the derivation code was
+at the tree where it was generated, and that this happens to be the tree the
+record was derived at is a fact about when it was written, not a claim the
+manifest itself carries.
+
 DETERMINISM. Two computations against the same tree produce identical manifests:
 the rows are sorted by module name, every hash is over file bytes, and the only
 process-external reads are the module files, ``uv.lock`` and ``git rev-parse``.
