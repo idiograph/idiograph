@@ -327,6 +327,10 @@ def test_a_hit_on_the_attached_baseline_records_nothing(
     hit = _cached_run(reg, params, mismatch_ledger_path=ledger)
 
     assert hit.model_dump() == missed.model_dump()
+    # The baseline must be PRESENT for this to be the agreement path at all —
+    # without it the HIT returns at the no-sidecar no-op and writes no ledger for
+    # a reason that has nothing to do with agreeing.
+    assert sidecar_path_for(reg.root, content_address([s.node_id], params)).is_file()
     assert not ledger.exists(), (
         f"a ledger was created at {ledger} by a HIT against the baseline the "
         f"MISS itself attached. The derivation code has not moved between the "
