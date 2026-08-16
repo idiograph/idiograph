@@ -8,6 +8,7 @@ import pytest
 
 from idiograph.core.executor import (
     HANDLERS,
+    DuplicateNodeIdError,
     InjectedOutputError,
     UnregisteredNodeTypeError,
     UnsuppliedResourceError,
@@ -93,13 +94,106 @@ class TestHandlerRegistry:
         async def stub(params, inputs):
             return {}
 
-        # 'a' and 'c' are registered; 'b' is not, so the raise happens midway
-        # through the run rather than on the first node.
+        # 'a' and 'c' are registered; 'b' is not. A partial registration is what
+        # a per-node lookup would have carried into the loop; the preflight
+        # refuses the graph on it, and nothing turns that into a results dict.
         register_handler("StubFetch", stub)
         register_handler("StubOutput", stub)
 
         with pytest.raises(UnregisteredNodeTypeError):
             asyncio.run(execute_graph(linear_graph))
+
+    def test_unregistered_last_type_raises_before_anything_runs(self, linear_graph):
+        """The promise is BEFORE ANY HANDLER RUNS, and the only graph that can
+        tell a preflight from a per-node lookup is one whose unregistered type
+        is topologically LAST. Resolved inside the loop, this graph executes 'a'
+        and 'b' first and raises having already paid for work the run was always
+        going to discard."""
+        import asyncio
+
+        executed: list[str] = []
+
+        async def recording(params, inputs):
+            executed.append(params["name"])
+            return {}
+
+        # Everything but the tail is registered, so a per-node lookup reaches
+        # the raise only after both upstream handlers have run.
+        register_handler("StubFetch", recording)
+        register_handler("StubProcess", recording)
+        linear_graph.get_node("a").params = {"name": "a"}
+        linear_graph.get_node("b").params = {"name": "b"}
+
+        with pytest.raises(UnregisteredNodeTypeError):
+            asyncio.run(execute_graph(linear_graph))
+
+        assert executed == []
+
+    def test_every_unregistered_type_is_named_at_once(self, linear_graph):
+        """The whole graph is in hand at the preflight, so one raise reports the
+        whole registration gap — not the first type the order happens to reach."""
+        import asyncio
+
+        async def stub(params, inputs):
+            return {}
+
+        register_handler("StubProcess", stub)
+
+        with pytest.raises(UnregisteredNodeTypeError) as excinfo:
+            asyncio.run(execute_graph(linear_graph))
+
+        message = str(excinfo.value)
+        assert "StubFetch" in message
+        assert "StubOutput" in message
+        assert "StubProcess" not in message
+
+    def test_disabled_node_needs_no_handler(self):
+        """The config predicate is read FIRST, as it is in `_check_resource_supply`
+        and in the loop: a node configured off is never dispatched, so a run that
+        disables it needs no handler registered for its type."""
+        import asyncio
+
+        async def stub(_params, _inputs):
+            return {}
+
+        register_handler("StubTail", stub)
+
+        graph = Graph(
+            name="disabled_unregistered",
+            version="1.0",
+            nodes=[
+                Node(
+                    id="off",
+                    type="NothingImplementsThis",
+                    params={"on": False},
+                    enabled_when="on",
+                ),
+                Node(id="tail", type="StubTail", params={}),
+            ],
+            edges=[],
+        )
+
+        results = asyncio.run(execute_graph(graph))
+
+        assert results["off"]["status"] == "SKIPPED"
+        assert results["tail"]["status"] == "SUCCESS"
+
+    def test_injection_does_not_waive_handler_registration(self):
+        """Injection is NOT an exemption, on the reading `_check_resource_supply`
+        already takes of it: a node whose output the run supplies is still a
+        declared node of its type, and a type nothing implements is a defect in
+        the graph rather than a fact about one invocation."""
+        import asyncio
+
+        async def tail(_params, inputs):
+            return {"seen": inputs["value"]}
+
+        register_handler("StubTail", tail)
+
+        with pytest.raises(UnregisteredNodeTypeError) as excinfo:
+            asyncio.run(execute_graph(_head_graph(), None, {"head": {"value": 1}}))
+
+        assert "StubHead" in str(excinfo.value)
 
     def test_missing_handler_leaves_node_status_untouched(self, linear_graph):
         """Node status is graph state, and graph state is the ran-a-handler
@@ -173,6 +267,57 @@ class TestFailurePropagation:
         assert results["b"]["status"] == "SKIPPED"
         assert results["c"]["status"] == "SKIPPED"
 
+    def test_cascade_skip_leaves_node_status_pending(self, linear_graph):
+        """A node skipped because an upstream dependency did not succeed did not
+        itself fail: it was never dispatched, so it never entered the PENDING →
+        RUNNING ladder. SKIPPED lives in the results dict; `Node.status` stays
+        exactly as it was — the same reading the config-disable branch takes."""
+        import asyncio
+
+        async def failing(params, inputs):
+            raise RuntimeError("Simulated failure")
+
+        async def stub(params, inputs):
+            return {}
+
+        register_handler("StubFetch",   failing)
+        register_handler("StubProcess", stub)
+        register_handler("StubOutput",  stub)
+
+        results = asyncio.run(execute_graph(linear_graph))
+
+        status = {n.id: n.status for n in linear_graph.nodes}
+        # The node that actually raised is the only FAILED one in the graph.
+        assert status["a"] == "FAILED"
+        assert status["b"] == "PENDING"
+        assert status["c"] == "PENDING"
+        # The skip is still fully recorded — in the results dict, where it lives.
+        assert results["b"]["status"] == "SKIPPED"
+        assert results["c"]["status"] == "SKIPPED"
+
+    def test_cascade_skip_is_not_a_failed_node_in_the_summary(self, linear_graph):
+        """The consequence worth pinning: `summarize_intent`'s `failed_nodes`
+        reads `Node.status`, so it now names the node that failed and not the
+        tail that was skipped behind it. A cascade is one failure with
+        consequences, not a row of independent ones."""
+        import asyncio
+
+        from idiograph.core.query import summarize_intent
+
+        async def failing(params, inputs):
+            raise RuntimeError("Simulated failure")
+
+        async def stub(params, inputs):
+            return {}
+
+        register_handler("StubFetch",   failing)
+        register_handler("StubProcess", stub)
+        register_handler("StubOutput",  stub)
+
+        asyncio.run(execute_graph(linear_graph))
+
+        assert summarize_intent(linear_graph)["failed_nodes"] == ["a"]
+
     def test_failed_control_dependency_skips_downstream(self, branching_graph):
         async def stub(params, inputs):
             return {}
@@ -191,6 +336,52 @@ class TestFailurePropagation:
         assert results["gate"]["status"] == "FAILED"
         assert results["summary"]["status"] == "SKIPPED"
         assert results["discard"]["status"] == "SKIPPED"
+
+
+class TestDuplicateNodeIds:
+    """A reused id is refused by the same preflight class a cycle is: it is
+    knowable without running anything, and every reader of the graph resolves it
+    differently, so there is no correct run to attempt."""
+
+    def _twins(self) -> Graph:
+        return Graph(
+            name="twins",
+            version="1.0",
+            nodes=[
+                Node(id="a", type="StubFetch", params={"which": "first"}),
+                Node(id="a", type="StubFetch", params={"which": "second"}),
+                Node(id="b", type="StubProcess", params={}),
+            ],
+            edges=[Edge(source="a", target="b", type="DATA")],
+        )
+
+    def test_duplicate_ids_refuse_the_graph_before_any_handler_runs(self):
+        import asyncio
+
+        executed: list[str] = []
+
+        async def recording(params, inputs):
+            executed.append(params.get("which", "b"))
+            return {}
+
+        register_handler("StubFetch", recording)
+        register_handler("StubProcess", recording)
+
+        with pytest.raises(DuplicateNodeIdError) as excinfo:
+            asyncio.run(execute_graph(self._twins()))
+
+        assert "'a'" in str(excinfo.value)
+        assert executed == []
+
+    def test_duplicate_ids_outrank_the_other_preflights(self):
+        """Identity is checked FIRST. With no handlers registered at all this
+        graph is defective twice over, and the duplicate is what it raises on —
+        the registration check reads a projection the duplicate has already
+        collapsed."""
+        import asyncio
+
+        with pytest.raises(DuplicateNodeIdError):
+            asyncio.run(execute_graph(self._twins()))
 
 
 class TestCycleDetection:

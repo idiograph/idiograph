@@ -60,6 +60,32 @@ def find_cycles(graph: Graph) -> list[list[str]]:
 
 # ── Integrity ────────────────────────────────────────────────────────────────
 
+def duplicate_node_ids(graph: Graph) -> list[str]:
+    """Return every node id `graph` declares more than once, sorted.
+
+    An id is the graph's ONLY identity: edges name one, results are keyed by
+    one, and every reader resolves one its own way. Nothing rejects a reused id
+    at construction, and the three readers then disagree silently — `get_node`
+    returns the FIRST node carrying it, `execute_graph`'s `node_map` keeps the
+    LAST, and the networkx projection every function above builds collapses both
+    into a single node holding the union of their edges. So a duplicate is not a
+    defect located in any one of them; it is the question "which node did this
+    edge mean?" having three answers at once, which is why it is reported here
+    rather than resolved anywhere.
+
+    Sorted, so the report is a fact about the graph rather than about
+    declaration order.
+    """
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for node in graph.nodes:
+        if node.id in seen:
+            duplicates.add(node.id)
+        seen.add(node.id)
+    return sorted(duplicates)
+
+
+
 #: The bookkeeping keys `execute_graph` stamps onto every result dict, AFTER
 #: splatting the handler's output into it. A port sharing one of these names is
 #: therefore unreadable: the stamp wins, and the consumer bound to that port
@@ -209,15 +235,29 @@ def _dataflow_errors(graph: Graph) -> list[str]:
 
 def validate_integrity(graph: Graph) -> dict:
     """
-    Check referential integrity (every edge references node IDs that exist) and
-    dataflow integrity (every port-declared edge names ports its endpoints declare).
+    Check identity integrity (no node id is declared twice), referential integrity
+    (every edge references node IDs that exist) and dataflow integrity (every
+    port-declared edge names ports its endpoints declare).
     Returns a dict with 'valid' (bool) and 'errors' (list of problem descriptions).
+
+    Identity is reported FIRST because the other two are stated in terms of it: an
+    edge that "references a node that exists" and a port that "its endpoint
+    declares" both assume the id names one node. Under a duplicate they are
+    answering about whichever node the lookup below happens to find.
     """
     from idiograph.core.logging_config import get_logger
     _log = get_logger("query")
 
     node_ids = {node.id for node in graph.nodes}
     errors = []
+
+    for node_id in duplicate_node_ids(graph):
+        errors.append(
+            f"Node id '{node_id}' is declared by more than one node — an id is "
+            f"the graph's only identity, and its readers disagree when one is "
+            f"reused: get_node returns the first, the executor keeps the last, "
+            f"and the networkx projection collapses them into one."
+        )
 
     for edge in graph.edges:
         if edge.source not in node_ids:

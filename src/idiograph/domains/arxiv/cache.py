@@ -92,7 +92,10 @@ observation and nothing more:
   priority entirely.
 - NO SIDECAR IS A NO-OP, NOT A MISMATCH. A record with no committed baseline has
   nothing to be measured against and is served exactly as it was before this
-  channel existed, with no ledger write. Absence is not drift.
+  channel existed, with no ledger write. Absence is not drift. Since IDG-101 the
+  MISS leg attaches a baseline to every record it writes (below), so absence now
+  means a record written before attachment existed, one frozen by hand, or one
+  whose attachment failed — never a record this cache wrote successfully today.
 - On mismatch, ONE ledger entry per drift STATE, deduplicated by
   ``(record_address, manifest_diff_hash)``: re-observing an unchanged mismatch on
   a later HIT appends nothing, while a tree that has drifted further carries a new
@@ -100,6 +103,28 @@ observation and nothing more:
 
 The entry IS the diff — no severity, no classification, no summarization. The
 entry records; the operator interprets.
+
+Baseline attachment at the MISS gate (IDG-101)
+----------------------------------------------
+The gate above can only observe what it has a baseline for, and until now
+nothing in this module ever wrote one: every record this cache produced arrived
+at the HIT gate with no sidecar and was therefore a permanent no-op. The MISS
+leg now attaches one — ``write_sidecar(sidecar_path_for(...),
+derive_manifest(...))``, immediately after ``registry.write``.
+
+The MISS is the moment a baseline is free to be exactly right. The record was
+derived, seconds earlier, by the code running now, so the manifest computed now
+IS its derivation manifest rather than an approximation taken from a later tree;
+there is no span between derivation and attachment for drift to hide in. That is
+also why the MISS still reads no ledger: nothing has moved yet, so there is
+nothing to compare and nothing to append.
+
+Same failure posture as the observation above, and for the same reason. The
+attachment is fenced: it runs AFTER the record is persisted, cannot alter what
+the MISS returns, and every failure the manifest machinery can reach costs the
+record its baseline and nothing else. A record with no baseline is exactly the
+no-op case the gate already handles, so a failed attachment degrades to the
+behaviour that preceded this channel rather than to a broken write.
 """
 
 import json
@@ -117,6 +142,7 @@ from idiograph.domains.arxiv.derivation_manifest import (
     manifest_diff,
     read_sidecar,
     sidecar_path_for,
+    write_sidecar,
 )
 from idiograph.domains.arxiv.models import (
     PaperRecord,
@@ -302,6 +328,53 @@ def _observe_derivation_mismatch(
         )
 
 
+def _attach_derivation_baseline(
+    *,
+    registry: PipelineRegistry,
+    address: str,
+    seeds: list[dict],
+    parameters: PipelineParameters,
+) -> None:
+    """Commit the record just written its baseline manifest (IDG-101).
+
+    The MISS leg is the one moment at which a baseline costs nothing to be sure
+    of: the record was derived, seconds ago, by the code running now, so the
+    manifest computed here describes the derivation exactly rather than
+    approximating it from a later tree. Attaching it at any other time leaves a
+    span between derivation and attachment that the sidecar cannot speak for.
+
+    Fenced exactly as :func:`_observe_derivation_mismatch` fences the HIT leg,
+    and for the identical reason: this is the observation channel, and the
+    observation channel must never break the thing it observes. Every failure
+    the manifest machinery can reach — an unresolvable ``uv.lock``, an unreadable
+    module, a read-only registry root — costs the record its baseline and
+    nothing else. The MISS's return value and its persistence are already
+    complete when this runs; a failure here degrades to the pre-existing
+    no-baseline case, which the HIT gate reads as a NO-OP rather than as drift.
+
+    Blind by construction. Enumerating the exception types would be a promise to
+    keep the list current, and the day the list falls behind is the day a
+    manifest failure takes down a cache write that had already succeeded.
+    """
+    try:
+        write_sidecar(
+            sidecar_path_for(registry.root, address),
+            derive_manifest(seeds, parameters),
+        )
+    # Ruled: IDG-101 attaches the baseline under the same failure posture the
+    # HIT-leg fence carries (IDG-091 clause 3), and that posture IS the blind
+    # catch — see this function's docstring. The record wins.
+    except Exception as exc:  # noqa: BLE001
+        _log.warning(
+            "Derivation-baseline attachment failed for %s (%s: %s) — the record "
+            "was written and returned; it simply carries no baseline, which the "
+            "HIT gate reads as a no-op rather than as drift.",
+            address,
+            type(exc).__name__,
+            exc,
+        )
+
+
 async def cached_run_arxiv_pipeline(
     seeds: list[dict],
     parameters: PipelineParameters,
@@ -351,7 +424,16 @@ async def cached_run_arxiv_pipeline(
     channel, never a derivation input, so it is not a ``PipelineParameters`` field
     and enters no content address. The MISS path does not read it: a record being
     written now was derived by the code running now, so there is nothing to
-    compare and nothing to record.
+    compare and nothing to append.
+
+    The MISS path DOES write the record's baseline manifest beside it, after
+    persisting (IDG-101). Same fact, opposite conclusion: because the record was
+    derived by the code running now, the manifest computed now describes its
+    derivation exactly, and this is the only moment at which that is true without
+    an unwitnessed span in between. The attachment is fenced like the HIT leg's
+    observation — it can fail, the MISS cannot — so a record whose baseline could
+    not be written is returned and persisted regardless, simply carrying no
+    baseline, which the HIT gate reads as a no-op rather than as drift.
     """
     node0 = await resolve_seeds(
         {"seeds": seeds},
@@ -389,4 +471,13 @@ async def cached_run_arxiv_pipeline(
     )
     result = _resupply_request_derived(result, resolved, seed_failures)
     registry.write(result)
+    # AFTER the record is persisted, and deliberately: the baseline describes a
+    # record, so there must be a record for it to describe. The attachment is
+    # fenced and cannot alter what is returned below.
+    _attach_derivation_baseline(
+        registry=registry,
+        address=address,
+        seeds=seeds,
+        parameters=parameters,
+    )
     return result

@@ -9,7 +9,7 @@ from typing import Any
 
 from idiograph.core.logging_config import get_logger
 from idiograph.core.models import Edge, Graph, Node
-from idiograph.core.query import find_cycles, topological_sort
+from idiograph.core.query import duplicate_node_ids, find_cycles, topological_sort
 
 _log = get_logger("executor")
 
@@ -45,6 +45,26 @@ class InjectedOutputError(RuntimeError):
     Detectable the moment the node is reached and before its handler runs, so it
     propagates out of `execute_graph` rather than becoming one node's FAILED
     result — the same side of the line as an unregistered type.
+    """
+
+
+class DuplicateNodeIdError(RuntimeError):
+    """The graph declares one node id more than once.
+
+    An id is the graph's only identity, and its readers resolve a reused one
+    differently: `Graph.get_node` returns the FIRST node carrying it,
+    `execute_graph`'s `node_map` keeps the LAST, and the networkx projection the
+    traversal helpers build collapses both into a single node holding the union
+    of their edges. Execution against that graph is not wrong in one identifiable
+    place — every reader answers consistently with itself, and no two agree.
+
+    Detectable without running anything, so it halts execution rather than being
+    recorded as one node's failure. Propagates out of `execute_graph`.
+
+    A named class rather than the bare `ValueError` the cycle check raises: the
+    cycle raise predates this module's error family, and a caller that wants to
+    tell a malformed graph from a malformed argument should not have to read the
+    message to do it.
     """
 
 
@@ -103,13 +123,19 @@ async def execute_graph(
     injected node still requires the resources it declares.
 
     Where a defect surfaces decides how it is reported. A defect detectable
-    BEFORE any handler runs RAISES: a cycle makes the order undefined, a node
-    type with no registered handler names work that does not exist, and a node
-    declaring a resource this run did not supply asks for a capability that is
-    absent — none is a result the graph can carry. Anything that requires
-    having run a handler becomes graph state instead: a raising handler, or an
-    input binding that only fails once the upstream payload exists, becomes
-    `{"status": "FAILED", ...}` and cascades to SKIPPED downstream.
+    BEFORE any handler runs RAISES: a duplicate node id leaves the graph's own
+    readers disagreeing about which node an id names, a cycle makes the order
+    undefined, a node type with no registered handler names work that does not
+    exist, and a node declaring a resource this run did not supply asks for a
+    capability that is absent — none is a result the graph can carry. All four
+    are checked over the WHOLE graph before the loop starts, never per-node as it
+    reaches them: a defect that halts the run is reported before the run does
+    any work, not after everything upstream of it has already been paid for.
+    Anything that requires having run a handler becomes graph state instead: a
+    raising handler, or an input binding that only fails once the upstream
+    payload exists, becomes `{"status": "FAILED", ...}` and cascades to SKIPPED
+    downstream. A cascade-skipped node's own `Node.status` stays PENDING: the
+    skip lives in the results dict, and a node that never ran did not fail.
 
     A node declaring `enabled_when` is neither: it is not a defect at all. The
     predicate is read before dispatch, and a node configured off is recorded as
@@ -119,9 +145,24 @@ async def execute_graph(
     asks for its declared resources, and it does NOT cascade: it forwards its
     `disabled_passthrough` ports and the downstream tail runs on.
     """
+    # Identity first: every check below it reads the graph through a projection
+    # or a map that a duplicate id has already collapsed, so they would be
+    # answering about whichever node their own lookup happened to keep.
+    duplicates = duplicate_node_ids(graph)
+    if duplicates:
+        raise DuplicateNodeIdError(
+            f"Cannot execute graph with duplicate node id(s): "
+            f"{', '.join(repr(node_id) for node_id in duplicates)}. An id is the "
+            f"graph's only identity and its readers resolve a reused one "
+            f"differently, so the run is refused rather than executed against "
+            f"whichever node each reader finds."
+        )
+
     cycles = find_cycles(graph)
     if cycles:
         raise ValueError(f"Cannot execute graph with cycles: {cycles}")
+
+    _check_handler_registration(graph)
 
     supplied: Mapping[str, Any] = {} if resources is None else resources
     _check_resource_supply(graph, supplied)
@@ -160,8 +201,16 @@ async def execute_graph(
                 break
 
         if skip:
+            # `Node.status` is left exactly as it was — PENDING — on the same
+            # reading the config-disable branch below states: the node was never
+            # dispatched, so it never entered the PENDING → RUNNING ladder, and a
+            # node that did not run did not fail. The upstream node is the one
+            # that failed; recording FAILED here duplicated its defect onto every
+            # node downstream of it and made a cascade indistinguishable from a
+            # row of independent failures. The whole record of the skip lives in
+            # the results dict, distinguished from a config-disable by carrying
+            # no `skip_reason`.
             results[node_id] = {"status": "SKIPPED", "node_id": node_id}
-            _update_node_status(node, "FAILED")
             continue
 
         try:
@@ -290,6 +339,48 @@ def _declares_resources(node: Node) -> bool:
     return node.resources is not None
 
 
+def _check_handler_registration(graph: Graph) -> None:
+    """Verify every node type this run will dispatch has a handler, before
+    anything executes.
+
+    A registry miss is knowable without running a single handler — the graph
+    names a type nothing was registered for — so it halts the whole execution
+    rather than becoming one node's failure, the same rule that sends an
+    unsupplied resource out of `execute_graph`. Checked once, over the whole
+    graph, so a run that cannot finish never starts. Resolved per-node inside
+    the loop instead, the identical defect would be reported only when the loop
+    reached the node carrying it, so a graph whose LAST type is unregistered
+    would run everything upstream first and pay for work the run was always
+    going to discard.
+
+    Every unregistered type is named at once rather than the first one reached.
+    The whole graph is in hand here, so a caller with a registration gap learns
+    its full size from one raise instead of one run per missing type.
+
+    The config predicate is evaluated FIRST, here as in `_check_resource_supply`
+    and in the loop. A node configured off is never dispatched, so it never asks
+    for a handler and a run that disables it needs none registered for its type.
+    Injection is NOT an exemption, on the same reading `_check_resource_supply`
+    takes of it: a node whose output this run supplies is still a declared node
+    of that type, and a type nothing implements is a defect in the graph rather
+    than a fact about one invocation.
+    """
+    offenders: dict[str, list[str]] = {}
+    for node in graph.nodes:
+        if _is_disabled_by_config(node) or node.type in HANDLERS:
+            continue
+        offenders.setdefault(node.type, []).append(node.id)
+
+    if offenders:
+        named = ", ".join(
+            f"{node_type!r} (nodes {', '.join(repr(i) for i in ids)})"
+            for node_type, ids in sorted(offenders.items())
+        )
+        raise UnregisteredNodeTypeError(
+            f"No handler registered for node type(s): {named}."
+        )
+
+
 def _check_resource_supply(graph: Graph, supplied: Mapping[str, Any]) -> None:
     """Verify every declared resource was supplied, before anything executes.
 
@@ -401,8 +492,14 @@ async def _execute_node(
     handler = HANDLERS.get(node.type)
 
     if handler is None:
-        # Outside the handler try/except below, and deliberately: this
-        # propagates out of execute_graph rather than becoming a FAILED result.
+        # Not reachable from `execute_graph`'s loop: `_check_handler_registration`
+        # ran over the whole graph before it, so a missing handler has already
+        # raised. Kept anyway, because `HANDLERS` is a live global that the
+        # preflight can only read once — a handler that mutates the registry
+        # mid-run can unregister a type the preflight saw — and because this
+        # function is callable on its own. Outside the handler try/except below,
+        # and deliberately: this propagates out of execute_graph rather than
+        # becoming a FAILED result.
         raise UnregisteredNodeTypeError(
             f"Node '{node.id}': no handler registered for node type "
             f"'{node.type}'."

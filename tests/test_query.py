@@ -8,6 +8,7 @@ import pytest
 
 from idiograph.core.models import Edge, Graph, Node
 from idiograph.core.query import (
+    duplicate_node_ids,
     find_cycles,
     get_downstream,
     get_upstream,
@@ -85,6 +86,44 @@ class TestValidateIntegrity:
         )
         result = validate_integrity(g)
         assert result["valid"] is False
+
+
+class TestDuplicateNodeIds:
+    """An id is the graph's only identity, and nothing rejects a reused one at
+    construction. `validate_integrity` is where it becomes visible."""
+
+    def test_a_reused_id_is_an_integrity_error(self):
+        g = Graph(
+            name="twins", version="1.0",
+            nodes=[
+                Node(id="n1", type="Render", params={"pass": "beauty"}),
+                Node(id="n1", type="Render", params={"pass": "shadow"}),
+            ],
+            edges=[],
+        )
+        result = validate_integrity(g)
+        assert result["valid"] is False
+        assert any("n1" in e for e in result["errors"])
+
+    def test_unique_ids_report_nothing(self, sample_graph):
+        assert duplicate_node_ids(sample_graph) == []
+        assert validate_integrity(sample_graph)["valid"] is True
+
+    def test_every_reused_id_is_reported_once(self):
+        """Sorted and deduplicated: three nodes sharing an id is one defect, and
+        the report is a fact about the graph rather than about declaration order."""
+        g = Graph(
+            name="triplets", version="1.0",
+            nodes=[
+                Node(id="b", type="Render"),
+                Node(id="a", type="Render"),
+                Node(id="b", type="Render"),
+                Node(id="a", type="Render"),
+                Node(id="b", type="Render"),
+            ],
+            edges=[],
+        )
+        assert duplicate_node_ids(g) == ["a", "b"]
 
 
 class TestSummarizeIntent:
