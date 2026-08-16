@@ -9,7 +9,7 @@ from typing import Any
 
 from idiograph.core.logging_config import get_logger
 from idiograph.core.models import Edge, Graph, Node
-from idiograph.core.query import find_cycles, topological_sort
+from idiograph.core.query import duplicate_node_ids, find_cycles, topological_sort
 
 _log = get_logger("executor")
 
@@ -45,6 +45,26 @@ class InjectedOutputError(RuntimeError):
     Detectable the moment the node is reached and before its handler runs, so it
     propagates out of `execute_graph` rather than becoming one node's FAILED
     result — the same side of the line as an unregistered type.
+    """
+
+
+class DuplicateNodeIdError(RuntimeError):
+    """The graph declares one node id more than once.
+
+    An id is the graph's only identity, and its readers resolve a reused one
+    differently: `Graph.get_node` returns the FIRST node carrying it,
+    `execute_graph`'s `node_map` keeps the LAST, and the networkx projection the
+    traversal helpers build collapses both into a single node holding the union
+    of their edges. Execution against that graph is not wrong in one identifiable
+    place — every reader answers consistently with itself, and no two agree.
+
+    Detectable without running anything, so it halts execution rather than being
+    recorded as one node's failure. Propagates out of `execute_graph`.
+
+    A named class rather than the bare `ValueError` the cycle check raises: the
+    cycle raise predates this module's error family, and a caller that wants to
+    tell a malformed graph from a malformed argument should not have to read the
+    message to do it.
     """
 
 
@@ -103,13 +123,14 @@ async def execute_graph(
     injected node still requires the resources it declares.
 
     Where a defect surfaces decides how it is reported. A defect detectable
-    BEFORE any handler runs RAISES: a cycle makes the order undefined, a node
-    type with no registered handler names work that does not exist, and a node
-    declaring a resource this run did not supply asks for a capability that is
-    absent — none is a result the graph can carry. Each is checked over the
-    WHOLE graph before the loop starts, never resolved per-node as the loop
-    reaches it: a defect that halts the run is reported before the run does any
-    work, not after everything upstream of it has already been paid for.
+    BEFORE any handler runs RAISES: a duplicate node id leaves the graph's own
+    readers disagreeing about which node an id names, a cycle makes the order
+    undefined, a node type with no registered handler names work that does not
+    exist, and a node declaring a resource this run did not supply asks for a
+    capability that is absent — none is a result the graph can carry. All four
+    are checked over the WHOLE graph before the loop starts, never per-node as it
+    reaches them: a defect that halts the run is reported before the run does
+    any work, not after everything upstream of it has already been paid for.
     Anything that requires having run a handler becomes graph state instead: a
     raising handler, or an input binding that only fails once the upstream
     payload exists, becomes `{"status": "FAILED", ...}` and cascades to SKIPPED
@@ -123,6 +144,19 @@ async def execute_graph(
     asks for its declared resources, and it does NOT cascade: it forwards its
     `disabled_passthrough` ports and the downstream tail runs on.
     """
+    # Identity first: every check below it reads the graph through a projection
+    # or a map that a duplicate id has already collapsed, so they would be
+    # answering about whichever node their own lookup happened to keep.
+    duplicates = duplicate_node_ids(graph)
+    if duplicates:
+        raise DuplicateNodeIdError(
+            f"Cannot execute graph with duplicate node id(s): "
+            f"{', '.join(repr(node_id) for node_id in duplicates)}. An id is the "
+            f"graph's only identity and its readers resolve a reused one "
+            f"differently, so the run is refused rather than executed against "
+            f"whichever node each reader finds."
+        )
+
     cycles = find_cycles(graph)
     if cycles:
         raise ValueError(f"Cannot execute graph with cycles: {cycles}")

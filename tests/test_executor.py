@@ -8,6 +8,7 @@ import pytest
 
 from idiograph.core.executor import (
     HANDLERS,
+    DuplicateNodeIdError,
     InjectedOutputError,
     UnregisteredNodeTypeError,
     UnsuppliedResourceError,
@@ -284,6 +285,52 @@ class TestFailurePropagation:
         assert results["gate"]["status"] == "FAILED"
         assert results["summary"]["status"] == "SKIPPED"
         assert results["discard"]["status"] == "SKIPPED"
+
+
+class TestDuplicateNodeIds:
+    """A reused id is refused by the same preflight class a cycle is: it is
+    knowable without running anything, and every reader of the graph resolves it
+    differently, so there is no correct run to attempt."""
+
+    def _twins(self) -> Graph:
+        return Graph(
+            name="twins",
+            version="1.0",
+            nodes=[
+                Node(id="a", type="StubFetch", params={"which": "first"}),
+                Node(id="a", type="StubFetch", params={"which": "second"}),
+                Node(id="b", type="StubProcess", params={}),
+            ],
+            edges=[Edge(source="a", target="b", type="DATA")],
+        )
+
+    def test_duplicate_ids_refuse_the_graph_before_any_handler_runs(self):
+        import asyncio
+
+        executed: list[str] = []
+
+        async def recording(params, inputs):
+            executed.append(params.get("which", "b"))
+            return {}
+
+        register_handler("StubFetch", recording)
+        register_handler("StubProcess", recording)
+
+        with pytest.raises(DuplicateNodeIdError) as excinfo:
+            asyncio.run(execute_graph(self._twins()))
+
+        assert "'a'" in str(excinfo.value)
+        assert executed == []
+
+    def test_duplicate_ids_outrank_the_other_preflights(self):
+        """Identity is checked FIRST. With no handlers registered at all this
+        graph is defective twice over, and the duplicate is what it raises on —
+        the registration check reads a projection the duplicate has already
+        collapsed."""
+        import asyncio
+
+        with pytest.raises(DuplicateNodeIdError):
+            asyncio.run(execute_graph(self._twins()))
 
 
 class TestCycleDetection:
