@@ -134,7 +134,8 @@ async def execute_graph(
     Anything that requires having run a handler becomes graph state instead: a
     raising handler, or an input binding that only fails once the upstream
     payload exists, becomes `{"status": "FAILED", ...}` and cascades to SKIPPED
-    downstream.
+    downstream. A cascade-skipped node's own `Node.status` stays PENDING: the
+    skip lives in the results dict, and a node that never ran did not fail.
 
     A node declaring `enabled_when` is neither: it is not a defect at all. The
     predicate is read before dispatch, and a node configured off is recorded as
@@ -200,8 +201,16 @@ async def execute_graph(
                 break
 
         if skip:
+            # `Node.status` is left exactly as it was — PENDING — on the same
+            # reading the config-disable branch below states: the node was never
+            # dispatched, so it never entered the PENDING → RUNNING ladder, and a
+            # node that did not run did not fail. The upstream node is the one
+            # that failed; recording FAILED here duplicated its defect onto every
+            # node downstream of it and made a cascade indistinguishable from a
+            # row of independent failures. The whole record of the skip lives in
+            # the results dict, distinguished from a config-disable by carrying
+            # no `skip_reason`.
             results[node_id] = {"status": "SKIPPED", "node_id": node_id}
-            _update_node_status(node, "FAILED")
             continue
 
         try:

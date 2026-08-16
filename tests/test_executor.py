@@ -267,6 +267,57 @@ class TestFailurePropagation:
         assert results["b"]["status"] == "SKIPPED"
         assert results["c"]["status"] == "SKIPPED"
 
+    def test_cascade_skip_leaves_node_status_pending(self, linear_graph):
+        """A node skipped because an upstream dependency did not succeed did not
+        itself fail: it was never dispatched, so it never entered the PENDING →
+        RUNNING ladder. SKIPPED lives in the results dict; `Node.status` stays
+        exactly as it was — the same reading the config-disable branch takes."""
+        import asyncio
+
+        async def failing(params, inputs):
+            raise RuntimeError("Simulated failure")
+
+        async def stub(params, inputs):
+            return {}
+
+        register_handler("StubFetch",   failing)
+        register_handler("StubProcess", stub)
+        register_handler("StubOutput",  stub)
+
+        results = asyncio.run(execute_graph(linear_graph))
+
+        status = {n.id: n.status for n in linear_graph.nodes}
+        # The node that actually raised is the only FAILED one in the graph.
+        assert status["a"] == "FAILED"
+        assert status["b"] == "PENDING"
+        assert status["c"] == "PENDING"
+        # The skip is still fully recorded — in the results dict, where it lives.
+        assert results["b"]["status"] == "SKIPPED"
+        assert results["c"]["status"] == "SKIPPED"
+
+    def test_cascade_skip_is_not_a_failed_node_in_the_summary(self, linear_graph):
+        """The consequence worth pinning: `summarize_intent`'s `failed_nodes`
+        reads `Node.status`, so it now names the node that failed and not the
+        tail that was skipped behind it. A cascade is one failure with
+        consequences, not a row of independent ones."""
+        import asyncio
+
+        from idiograph.core.query import summarize_intent
+
+        async def failing(params, inputs):
+            raise RuntimeError("Simulated failure")
+
+        async def stub(params, inputs):
+            return {}
+
+        register_handler("StubFetch",   failing)
+        register_handler("StubProcess", stub)
+        register_handler("StubOutput",  stub)
+
+        asyncio.run(execute_graph(linear_graph))
+
+        assert summarize_intent(linear_graph)["failed_nodes"] == ["a"]
+
     def test_failed_control_dependency_skips_downstream(self, branching_graph):
         async def stub(params, inputs):
             return {}
