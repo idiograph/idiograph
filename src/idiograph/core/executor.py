@@ -106,10 +106,14 @@ async def execute_graph(
     BEFORE any handler runs RAISES: a cycle makes the order undefined, a node
     type with no registered handler names work that does not exist, and a node
     declaring a resource this run did not supply asks for a capability that is
-    absent — none is a result the graph can carry. Anything that requires
-    having run a handler becomes graph state instead: a raising handler, or an
-    input binding that only fails once the upstream payload exists, becomes
-    `{"status": "FAILED", ...}` and cascades to SKIPPED downstream.
+    absent — none is a result the graph can carry. Each is checked over the
+    WHOLE graph before the loop starts, never resolved per-node as the loop
+    reaches it: a defect that halts the run is reported before the run does any
+    work, not after everything upstream of it has already been paid for.
+    Anything that requires having run a handler becomes graph state instead: a
+    raising handler, or an input binding that only fails once the upstream
+    payload exists, becomes `{"status": "FAILED", ...}` and cascades to SKIPPED
+    downstream.
 
     A node declaring `enabled_when` is neither: it is not a defect at all. The
     predicate is read before dispatch, and a node configured off is recorded as
@@ -122,6 +126,8 @@ async def execute_graph(
     cycles = find_cycles(graph)
     if cycles:
         raise ValueError(f"Cannot execute graph with cycles: {cycles}")
+
+    _check_handler_registration(graph)
 
     supplied: Mapping[str, Any] = {} if resources is None else resources
     _check_resource_supply(graph, supplied)
@@ -290,6 +296,48 @@ def _declares_resources(node: Node) -> bool:
     return node.resources is not None
 
 
+def _check_handler_registration(graph: Graph) -> None:
+    """Verify every node type this run will dispatch has a handler, before
+    anything executes.
+
+    A registry miss is knowable without running a single handler — the graph
+    names a type nothing was registered for — so it halts the whole execution
+    rather than becoming one node's failure, the same rule that sends an
+    unsupplied resource out of `execute_graph`. Checked once, over the whole
+    graph, so a run that cannot finish never starts. Resolved per-node inside
+    the loop instead, the identical defect would be reported only when the loop
+    reached the node carrying it, so a graph whose LAST type is unregistered
+    would run everything upstream first and pay for work the run was always
+    going to discard.
+
+    Every unregistered type is named at once rather than the first one reached.
+    The whole graph is in hand here, so a caller with a registration gap learns
+    its full size from one raise instead of one run per missing type.
+
+    The config predicate is evaluated FIRST, here as in `_check_resource_supply`
+    and in the loop. A node configured off is never dispatched, so it never asks
+    for a handler and a run that disables it needs none registered for its type.
+    Injection is NOT an exemption, on the same reading `_check_resource_supply`
+    takes of it: a node whose output this run supplies is still a declared node
+    of that type, and a type nothing implements is a defect in the graph rather
+    than a fact about one invocation.
+    """
+    offenders: dict[str, list[str]] = {}
+    for node in graph.nodes:
+        if _is_disabled_by_config(node) or node.type in HANDLERS:
+            continue
+        offenders.setdefault(node.type, []).append(node.id)
+
+    if offenders:
+        named = ", ".join(
+            f"{node_type!r} (nodes {', '.join(repr(i) for i in ids)})"
+            for node_type, ids in sorted(offenders.items())
+        )
+        raise UnregisteredNodeTypeError(
+            f"No handler registered for node type(s): {named}."
+        )
+
+
 def _check_resource_supply(graph: Graph, supplied: Mapping[str, Any]) -> None:
     """Verify every declared resource was supplied, before anything executes.
 
@@ -401,8 +449,14 @@ async def _execute_node(
     handler = HANDLERS.get(node.type)
 
     if handler is None:
-        # Outside the handler try/except below, and deliberately: this
-        # propagates out of execute_graph rather than becoming a FAILED result.
+        # Not reachable from `execute_graph`'s loop: `_check_handler_registration`
+        # ran over the whole graph before it, so a missing handler has already
+        # raised. Kept anyway, because `HANDLERS` is a live global that the
+        # preflight can only read once — a handler that mutates the registry
+        # mid-run can unregister a type the preflight saw — and because this
+        # function is callable on its own. Outside the handler try/except below,
+        # and deliberately: this propagates out of execute_graph rather than
+        # becoming a FAILED result.
         raise UnregisteredNodeTypeError(
             f"Node '{node.id}': no handler registered for node type "
             f"'{node.type}'."
