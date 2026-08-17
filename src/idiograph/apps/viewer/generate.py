@@ -14,17 +14,27 @@ renderer script into ONE HTML file. The output has no external references — it
 opens offline in a browser with no serving layer (Slice 1 has none by design).
 
 The generator is deliberately thin: all geometry and all contract shaping live in
-:mod:`idiograph.domains.viewer.projection`. This module only reads bytes, fills a
-template, and writes a file.
+:mod:`idiograph.domains.viewer`. This module only reads bytes, fills a template,
+and writes a file.
+
+THE PROJECTION IS A PARAMETER, NOT A HARDWIRING. :func:`render_projection_html`
+is the viewer-agnostic core — it takes an already-projected ``{meta, nodes,
+edges}`` dict and knows nothing about where it came from. Everything above it is
+a named entry for one subject: :func:`generate_viewer_html` for the artifact
+(Slice 1, still defaulting to :func:`project_depth_provenance`, now overridable),
+:func:`generate_graph_viewer_html` for a declared ``Graph`` (Slice 2). The
+renderer is one renderer; it selects its draw path on ``meta["view"]``.
 """
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
+from idiograph.core.models import Graph
 from idiograph.demo import REGISTRY_ROOT
 from idiograph.domains.arxiv.models import PipelineResult
 from idiograph.domains.arxiv.registry import PipelineRegistry, sole_record_address
-from idiograph.domains.viewer import project_depth_provenance
+from idiograph.domains.viewer import project_depth_provenance, project_graph
 
 _ASSETS = Path(__file__).resolve().parent / "assets"
 _TEMPLATE = _ASSETS / "template.html"
@@ -41,23 +51,24 @@ _MARK_DATA = "/*__DATA__*/"
 _MARK_JS = "/*__JS__*/"
 
 
-def generate_viewer_html(result: PipelineResult) -> str:
-    """Render the self-contained viewer HTML string for ``result``.
+def render_projection_html(data: dict, title: str | None = None) -> str:
+    """Inline an already-projected ``{meta, nodes, edges}`` contract into the template.
 
-    Runs the headless projection and inlines it, the vendored D3 bundle, the CSS,
-    and the renderer JS into the HTML template. Pure over ``result`` — no I/O
-    beyond reading the static assets that ship with the package.
+    THE VIEWER-AGNOSTIC SEAM. This function knows nothing about what produced
+    ``data`` — only that it satisfies the contract every projection in
+    :mod:`idiograph.domains.viewer` emits. It inlines the payload, the vendored
+    D3 bundle, the CSS and the renderer JS into one self-contained HTML string.
+
+    ``title`` defaults to whatever the projection put in ``meta["title"]``, and
+    falls back to the graph name. A caller that wants a different heading passes
+    one rather than teaching this function about views.
     """
-    data = project_depth_provenance(result)
-    # sort_keys → byte-stable payload; the projection is already deterministic.
+    # sort_keys → byte-stable payload; the projections are already deterministic.
     data_json = json.dumps(data, sort_keys=True, ensure_ascii=False)
 
     template = _TEMPLATE.read_text(encoding="utf-8")
-    seeds = data["meta"]["seeds"]
-    title = "Idiograph — depth/provenance ({a} × {b})".format(
-        a=(seeds[0]["title"] or "seed A")[:40],
-        b=(seeds[1]["title"] or "seed B")[:40],
-    )
+    if title is None:
+        title = data["meta"].get("title") or data["meta"].get("view", "Idiograph")
 
     # Order matters only in that each marker is replaced exactly once; the D3 and
     # JS bodies may themselves contain braces but never our sentinel markers.
@@ -69,6 +80,54 @@ def generate_viewer_html(result: PipelineResult) -> str:
     )
     html = html.replace(_MARK_JS, _JS.read_text(encoding="utf-8"))
     return html
+
+
+def generate_viewer_html(
+    result: PipelineResult,
+    projection: Callable[[PipelineResult], dict] = project_depth_provenance,
+) -> str:
+    """Render the self-contained viewer HTML string for ``result``.
+
+    Runs the headless projection and inlines it, the vendored D3 bundle, the CSS,
+    and the renderer JS into the HTML template. Pure over ``result`` — no I/O
+    beyond reading the static assets that ship with the package.
+
+    ``projection`` is the seam: any callable taking a ``PipelineResult`` and
+    returning the ``{meta, nodes, edges}`` contract. It defaults to
+    :func:`~idiograph.domains.viewer.project_depth_provenance`, so every existing
+    call site renders exactly the bytes it did before this parameter existed.
+    """
+    data = projection(result)
+    return render_projection_html(data, _depth_provenance_title(data))
+
+
+def generate_graph_viewer_html(graph: Graph) -> str:
+    """Render the self-contained viewer HTML string for a declared ``Graph``.
+
+    The Slice 2 entry, and the whole of it: project the graph, hand the contract
+    to the same :func:`render_projection_html` the artifact view uses. There is
+    no second renderer and no second template — the instrument is unchanged and
+    is simply pointed at the declaration instead of the result.
+    """
+    return render_projection_html(project_graph(graph))
+
+
+def _depth_provenance_title(data: dict) -> str:
+    """The Slice 1 heading — the two seed titles, unchanged.
+
+    Kept here rather than in the projection because ``project_depth_provenance``
+    is Slice 1's frozen contract and does not emit a title; a projection that
+    does (Slice 2) is picked up by :func:`render_projection_html`'s default. The
+    seed lookup is guarded so this cannot become the reason a differently-shaped
+    contract fails to render.
+    """
+    seeds = data["meta"].get("seeds")
+    if not seeds or len(seeds) < 2:
+        return data["meta"].get("title") or "Idiograph — depth/provenance"
+    return "Idiograph — depth/provenance ({a} × {b})".format(
+        a=(seeds[0]["title"] or "seed A")[:40],
+        b=(seeds[1]["title"] or "seed B")[:40],
+    )
 
 
 def render_viewer(
@@ -92,6 +151,65 @@ def render_viewer(
         sole_record_address(root) if address is None else address
     )
     html = generate_viewer_html(result)
+    return _write(output_path, html)
+
+
+def render_graph_viewer(
+    output_path: Path,
+    registry_root: Path | None = None,
+    address: str | None = None,
+) -> Path:
+    """Render the DECLARED pipeline graph for a persisted artifact's configuration.
+
+    Same selectors and same defaults as :func:`render_viewer`, pointed at the
+    other subject: this reads the artifact only to recover the
+    ``PipelineParameters`` and seed set it was produced under, rebuilds the
+    ``Graph`` that pipeline declares, and renders that.
+
+    THE ARTIFACT IS READ FOR PROVENANCE, NOT FOR CONTENT. No byte of the emitted
+    projection depends on either argument to ``build_pipeline_graph``: seeds ride
+    as Node 0 configuration and parameters as per-node params, and the projection
+    emits param KEY NAMES only. Reading them anyway is what makes this view the
+    declaration of the same pipeline the Slice 1 view shows the output of, rather
+    than of a graph reconstructed from a second set of assumptions.
+
+    Returns the written path. Creates parent directories as needed.
+    """
+    root = REGISTRY_ROOT if registry_root is None else Path(registry_root)
+    result = PipelineRegistry(root).read(
+        sole_record_address(root) if address is None else address
+    )
+    # Imported at CALL time: `pipeline_graph` pulls in `pipeline`, whose module
+    # body runs `load_dotenv()`, so a top-level import here would make merely
+    # importing the generator touch the filesystem. The build itself is pure.
+    from idiograph.domains.arxiv.pipeline_graph import build_pipeline_graph
+
+    graph = build_pipeline_graph(_seed_requests(result), result.parameters)
+    return _write(output_path, generate_graph_viewer_html(graph))
+
+
+def _seed_requests(result: PipelineResult) -> list[dict]:
+    """Recover Node 0's seed REQUEST dicts from an artifact's resolved seed ids.
+
+    ``PipelineResult.seeds`` holds resolved node ids (``doi:<url>``,
+    ``arxiv:<id>``); ``build_pipeline_graph`` takes the request shape Node 0 was
+    given (``{"doi": ...}`` / ``{"arxiv_id": ...}``), which the artifact does not
+    persist. This inverts the prefix to name the same seeds. An id with no known
+    prefix is passed through as a ``doi`` request — the fallback is inert, since
+    nothing downstream of here reads the value (see ``render_graph_viewer``).
+    """
+    requests = []
+    for seed in result.seeds:
+        prefix, _, rest = seed.partition(":")
+        if prefix == "arxiv" and rest:
+            requests.append({"arxiv_id": rest})
+        else:
+            requests.append({"doi": rest or seed})
+    return requests
+
+
+def _write(output_path: Path, html: str) -> Path:
+    """Write ``html`` to ``output_path``, creating parent directories."""
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(html, encoding="utf-8")

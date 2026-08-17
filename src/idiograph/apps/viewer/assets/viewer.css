@@ -21,6 +21,14 @@
   /* Signal — edge type */
   --cites: #7f95b0;         /* a declaration: solid */
   --co-citation: #6f6a8a;   /* an inference: dashed, dimmer */
+
+  /* Declared-graph view. Deliberately NOT signal colours: a stage's box says
+     nothing by its hue, because every node in that view — the LLM node
+     included — is drawn at one weight and one colour. The only chromatic
+     decision here is that the boxes read as surface, not as meaning. */
+  --node-fill: #242430;
+  --node-edge: #3c3c4c;
+  --wire: #7a7a90;          /* every declared edge is DATA: one wire treatment */
 }
 
 * { box-sizing: border-box; }
@@ -114,6 +122,7 @@ html, body {
 .caveat.lag { border-left-color: var(--forward); }
 .caveat.local { border-left-color: var(--co-citation); }
 .caveat.cycle { border-left-color: var(--seed); }
+.caveat.declaration { border-left-color: var(--wire); }
 
 /* toggle */
 .toggle {
@@ -156,6 +165,9 @@ html, body {
 #tooltip .tt-title { font-weight: 600; margin-bottom: 4px; }
 #tooltip .tt-meta { color: var(--ink-dim); }
 #tooltip .tt-dir { text-transform: capitalize; }
+#tooltip .tt-ports { font-variant-numeric: tabular-nums; }
+#tooltip .tt-ports b { color: var(--ink-faint); font-weight: 600; }
+#tooltip i { color: var(--ink-faint); font-style: normal; }
 #tooltip .tt-lag {
   margin-top: 7px; padding-top: 7px;
   border-top: 1px solid var(--panel-edge);
