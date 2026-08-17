@@ -83,9 +83,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    render, default_name = _VIEWS[args.view]
+    _, default_name = _VIEWS[args.view]
     out = _BUILD_DIR / default_name if args.out is None else args.out
-    written = render(out, args.registry_root, args.address)
+
+    if args.view == "declared-graph":
+        # The registry selectors are REFUSED here rather than ignored. The
+        # declared-graph view reads no artifact, so accepting --registry-root or
+        # --address would let a caller believe they had selected a subject they
+        # had not; a flag that silently does nothing is a false affordance.
+        if args.registry_root is not None or args.address is not None:
+            parser.error(
+                "--registry-root and --address apply only to the "
+                "depth-provenance view; the declared graph is read from the "
+                "pipeline's declaration, not from a stored run."
+            )
+        written = render_graph_viewer(out)
+    else:
+        written = render_viewer(out, args.registry_root, args.address)
     size_kb = written.stat().st_size / 1024
     print(f"wrote {written} ({size_kb:.0f} KB)")
     return 0

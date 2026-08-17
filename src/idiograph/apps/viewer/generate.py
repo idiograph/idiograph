@@ -32,9 +32,36 @@ from pathlib import Path
 
 from idiograph.core.models import Graph
 from idiograph.demo import REGISTRY_ROOT
-from idiograph.domains.arxiv.models import PipelineResult
+from idiograph.domains.arxiv.models import (
+    BackwardParameters,
+    ForwardParameters,
+    PipelineParameters,
+    PipelineResult,
+)
 from idiograph.domains.arxiv.registry import PipelineRegistry, sole_record_address
 from idiograph.domains.viewer import project_depth_provenance, project_graph
+
+# The arguments `build_pipeline_graph` requires and the declared-graph view
+# cannot use. EVERY VALUE HERE IS DELIBERATELY DEGENERATE — zero seeds, zeroed
+# counts, zeroed decay, no LLM config — precisely so that nobody reads a real
+# pipeline configuration into a picture that does not carry one. They are not
+# defaults, not a suggested configuration, and not the frozen CRISPR run's
+# values; they are the shape the builder demands with the content removed.
+# `test_the_projection_is_invariant_to_seeds_and_parameters` is the enforcement.
+_INERT_ARGUMENTS = (
+    [],
+    PipelineParameters(
+        backward=BackwardParameters(n_backward=0, lambda_decay=0.0),
+        forward=ForwardParameters(
+            n_forward=0,
+            lambda_decay=0.0,
+            alpha=0.0,
+            beta=0.0,
+            sort="cited_by_count:desc",
+        ),
+        current_year=0,
+    ),
+)
 
 _ASSETS = Path(__file__).resolve().parent / "assets"
 _TEMPLATE = _ASSETS / "template.html"
@@ -154,58 +181,46 @@ def render_viewer(
     return _write(output_path, html)
 
 
-def render_graph_viewer(
-    output_path: Path,
-    registry_root: Path | None = None,
-    address: str | None = None,
-) -> Path:
-    """Render the DECLARED pipeline graph for a persisted artifact's configuration.
+def declared_pipeline_graph() -> Graph:
+    """Build the citation-traversal pipeline's declared ``Graph``.
 
-    Same selectors and same defaults as :func:`render_viewer`, pointed at the
-    other subject: this reads the artifact only to recover the
-    ``PipelineParameters`` and seed set it was produced under, rebuilds the
-    ``Graph`` that pipeline declares, and renders that.
+    THE SUBJECT OF THIS VIEW IS A SHAPE, NOT A RUN. ``build_pipeline_graph``
+    takes a seed set and ``PipelineParameters`` because a graph built to be
+    EXECUTED needs them — seeds ride as Node 0 configuration, parameters as
+    per-node params. The projection emits neither: param KEY NAMES only, no
+    values, and no seed identifiers. Every emitted byte is therefore a function
+    of the pipeline's declared topology alone.
 
-    THE ARTIFACT IS READ FOR PROVENANCE, NOT FOR CONTENT. No byte of the emitted
-    projection depends on either argument to ``build_pipeline_graph``: seeds ride
-    as Node 0 configuration and parameters as per-node params, and the projection
-    emits param KEY NAMES only. Reading them anyway is what makes this view the
-    declaration of the same pipeline the Slice 1 view shows the output of, rather
-    than of a graph reconstructed from a second set of assumptions.
+    So this passes ``_INERT_ARGUMENTS`` rather than reading a persisted artifact
+    to recover a configuration that cannot reach the output. An artifact read
+    here would make the declared-graph view require a stored run in order to
+    draw a picture that does not depend on one, and would let a claim about
+    provenance ride on a value nothing consumes.
 
-    Returns the written path. Creates parent directories as needed.
+    ``test_the_projection_is_invariant_to_seeds_and_parameters`` is what holds
+    this: it projects the graph under deliberately divergent configurations —
+    including ``llm`` set and unset — and asserts one payload. If that
+    invariance ever breaks, this function is wrong and the test says so, rather
+    than a docstring being quietly outrun.
     """
-    root = REGISTRY_ROOT if registry_root is None else Path(registry_root)
-    result = PipelineRegistry(root).read(
-        sole_record_address(root) if address is None else address
-    )
     # Imported at CALL time: `pipeline_graph` pulls in `pipeline`, whose module
     # body runs `load_dotenv()`, so a top-level import here would make merely
     # importing the generator touch the filesystem. The build itself is pure.
     from idiograph.domains.arxiv.pipeline_graph import build_pipeline_graph
 
-    graph = build_pipeline_graph(_seed_requests(result), result.parameters)
-    return _write(output_path, generate_graph_viewer_html(graph))
+    return build_pipeline_graph(*_INERT_ARGUMENTS)
 
 
-def _seed_requests(result: PipelineResult) -> list[dict]:
-    """Recover Node 0's seed REQUEST dicts from an artifact's resolved seed ids.
+def render_graph_viewer(output_path: Path) -> Path:
+    """Render the DECLARED pipeline graph to a self-contained HTML file.
 
-    ``PipelineResult.seeds`` holds resolved node ids (``doi:<url>``,
-    ``arxiv:<id>``); ``build_pipeline_graph`` takes the request shape Node 0 was
-    given (``{"doi": ...}`` / ``{"arxiv_id": ...}``), which the artifact does not
-    persist. This inverts the prefix to name the same seeds. An id with no known
-    prefix is passed through as a ``doi`` request — the fallback is inert, since
-    nothing downstream of here reads the value (see ``render_graph_viewer``).
+    Takes no registry selectors, because it reads no artifact: the declaration
+    is knowable without a run, which is the claim the whole view exists to make.
+    See :func:`declared_pipeline_graph`.
+
+    Returns the written path. Creates parent directories as needed.
     """
-    requests = []
-    for seed in result.seeds:
-        prefix, _, rest = seed.partition(":")
-        if prefix == "arxiv" and rest:
-            requests.append({"arxiv_id": rest})
-        else:
-            requests.append({"doi": rest or seed})
-    return requests
+    return _write(output_path, generate_graph_viewer_html(declared_pipeline_graph()))
 
 
 def _write(output_path: Path, html: str) -> Path:

@@ -15,6 +15,8 @@ byte, and the no-argument entry point must still render it.
 
 import json
 
+import pytest
+
 from idiograph.apps.viewer.__main__ import _DEFAULT_OUT, _DEFAULT_VIEW, main
 from idiograph.apps.viewer.generate import (
     generate_graph_viewer_html,
@@ -183,6 +185,78 @@ def test_render_graph_viewer_writes_a_file(tmp_path):
     written = render_graph_viewer(out)
     assert written == out
     assert out.exists() and out.stat().st_size > 100_000
+
+
+def test_the_projection_is_invariant_to_seeds_and_parameters():
+    """No emitted byte depends on a run's configuration — enforced, not asserted.
+
+    `declared_pipeline_graph` passes deliberately degenerate arguments to
+    `build_pipeline_graph` on the grounds that the projection emits param KEY
+    NAMES only, no values, and no seed identifiers. That grounds is checkable,
+    so it is checked here rather than left in a docstring: three divergent
+    configurations — including `llm` set and unset, which is the one that gates
+    Node 5.5's `enabled_when` — must project to one payload.
+
+    If this ever fails, the declared-graph view has started depending on a run
+    and must read one. The failure is the point.
+    """
+    import json
+
+    from idiograph.domains.arxiv.models import (
+        BackwardParameters,
+        ForwardParameters,
+        LLMConfig,
+        PipelineParameters,
+    )
+    from idiograph.domains.arxiv.pipeline_graph import build_pipeline_graph
+    from idiograph.domains.viewer import project_graph
+
+    def configuration(n, llm):
+        return PipelineParameters(
+            backward=BackwardParameters(n_backward=n, lambda_decay=0.1 * n),
+            forward=ForwardParameters(
+                n_forward=n,
+                lambda_decay=0.1 * n,
+                alpha=float(n),
+                beta=float(n),
+                sort="publication_date:asc" if n else "cited_by_count:desc",
+            ),
+            current_year=2000 + n,
+            llm=llm,
+        )
+
+    cases = [
+        ([], configuration(0, None)),
+        ([{"doi": "10.1126/science.1225829"}], configuration(5, None)),
+        (
+            [{"arxiv_id": "1234.5678"}, {"doi": "10.1126/science.1231143"}],
+            configuration(9, LLMConfig(model_id="m", prompt_template_hash="h")),
+        ),
+    ]
+    payloads = {
+        json.dumps(
+            project_graph(build_pipeline_graph(seeds, parameters)),
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+        for seeds, parameters in cases
+    }
+    assert len(payloads) == 1
+
+
+def test_the_declared_graph_view_refuses_registry_selectors(tmp_path, capsys):
+    """A flag that silently does nothing is a false affordance.
+
+    The declared-graph view reads no artifact, so `--registry-root`/`--address`
+    cannot select anything. argparse exits 2 rather than accepting them and
+    rendering a picture the caller thinks they chose.
+    """
+    out = tmp_path / "declared.html"
+    for selector in (["--registry-root", str(tmp_path)], ["--address", "abc123"]):
+        with pytest.raises(SystemExit) as exit_info:
+            main(["--view", "declared-graph", "--out", str(out), *selector])
+        assert exit_info.value.code == 2
+    assert "declaration, not from a stored run" in capsys.readouterr().err
 
 
 def test_render_projection_html_is_view_agnostic():
