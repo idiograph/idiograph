@@ -54,8 +54,6 @@ from idiograph.domains.arxiv.relationship_annotation import (  # noqa: F401
     annotate_relationships,
 )
 
-load_dotenv()
-
 _log = get_logger("arxiv.pipeline")
 
 OPENALEX_BASE = "https://api.openalex.org/works"
@@ -67,6 +65,22 @@ _TRAVERSAL_SELECT = _WORK_SELECT + ",referenced_works"
 
 
 def _get_api_key() -> str:
+    """Read the OpenAlex credential, loading `.env` first if it has not been.
+
+    The `load_dotenv()` call lives HERE, at the one site in this module that
+    reads process environment, rather than in the module body. At module level
+    it was an IMPORT side effect: merely importing this module — or anything
+    that transitively pulls it in, which is most of the domain — read `.env` off
+    the filesystem before a single line of caller code ran. `generate.py` was
+    importing `pipeline_graph` at call time purely to dodge it.
+
+    `load_dotenv` does not override a variable already present in `os.environ`,
+    so calling it per read is idempotent and composes with the CLI's own
+    `load_dotenv()` at `main._startup`: whichever runs first wins, and both see
+    the same value. The cost is one filesystem stat on a path that was about to
+    make a network call anyway.
+    """
+    load_dotenv()
     key = os.getenv("OPENALEX_API_KEY")
     if not key:
         raise OSError(

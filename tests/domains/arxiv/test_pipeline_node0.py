@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import os
+import subprocess
+import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -286,3 +289,53 @@ def test_reconstruct_abstract_roundtrip():
 def test_reconstruct_abstract_none():
     assert reconstruct_abstract(None) is None
     assert reconstruct_abstract({}) is None
+
+
+def test_importing_the_pipeline_module_does_not_load_the_environment(tmp_path):
+    """Environment loading is not an import side effect (finding 069febda).
+
+    `pipeline.py` used to call `load_dotenv()` in its module body, so importing
+    it — or anything that transitively pulled it in, which is most of the domain
+    — read `.env` off the filesystem before a line of caller code ran.
+    `apps/viewer/generate.py` imported `pipeline_graph` at CALL time purely to
+    dodge that.
+
+    Run in a SUBPROCESS: `idiograph.domains.arxiv.pipeline` is already in
+    `sys.modules` by the time this file executes, so an in-process re-import
+    would be a no-op and would pass vacuously.
+
+    The probe counts calls rather than watching the filesystem: `dotenv.load_dotenv`
+    is replaced before the module is imported, and `pipeline`'s own
+    `from dotenv import load_dotenv` then binds the replacement. The second half
+    is what keeps the assertion honest — `_get_api_key`, the module's one reader
+    of process environment, must still load the environment before reading it,
+    so a fix that merely deleted the call would fail here rather than pass.
+    """
+    probe = tmp_path / "probe.py"
+    probe.write_text(
+        "import dotenv\n"
+        "calls = []\n"
+        "dotenv.load_dotenv = lambda *a, **k: calls.append(1)\n"
+        "\n"
+        "import idiograph.domains.arxiv.pipeline as pipeline\n"
+        "at_import = len(calls)\n"
+        "\n"
+        "pipeline._get_api_key()\n"
+        "at_read = len(calls)\n"
+        "\n"
+        "print(at_import, at_read)\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [sys.executable, str(probe)],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        env={**os.environ, "OPENALEX_API_KEY": "sentinel"},
+        check=True,
+    )
+
+    at_import, at_read = completed.stdout.split()
+    assert at_import == "0", "importing the pipeline module loaded the environment"
+    assert at_read == "1", "_get_api_key read the environment without loading it"
