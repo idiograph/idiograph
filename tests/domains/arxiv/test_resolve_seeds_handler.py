@@ -78,17 +78,22 @@ def _port(name: str) -> PortDeclaration:
     return PortDeclaration(name=name, port_type="untyped")
 
 
-ARXIV_SEED = {"arxiv_id": "2301.07041"}
+#: A seed the stage actually resolves. DOI-shaped because that is the only form
+#: seed resolution accepts (IDG-105); the paper it stands for is incidental to
+#: every test here, which are about the handler's port and resource contract.
+RESOLVING_SEED = {"doi": "10.48550/arXiv.2301.07041"}
 #: A seed whose shape `_seed_filter` does not recognize. It fails resolution
 #: WITHOUT issuing an HTTP call, so the failure provenance below is produced by
-#: the stage itself rather than by a fake client's error scripting.
+#: the stage itself rather than by a fake client's error scripting. Unrecognized,
+#: NOT refused — a refused form (`{"arxiv_id": ...}`) halts the whole batch
+#: instead of recording a per-seed failure.
 UNRESOLVABLE_SEED = {"isbn": "978-0"}
 
 
 def _params(seeds: list[dict] | None = None) -> dict:
     """Params as the direct call site shapes them: the requested seed identifier
     dicts, and nothing else. The credential is NOT here — it is a resource."""
-    return {"seeds": seeds if seeds is not None else [ARXIV_SEED]}
+    return {"seeds": seeds if seeds is not None else [RESOLVING_SEED]}
 
 
 def _client(n_resolving: int = 1) -> AsyncMock:
@@ -193,7 +198,7 @@ def test_seed_failures_port_carries_the_failure_provenance() -> None:
     """
     graph = _lone_graph(
         "resolve-seeds-partial-failure",
-        params=_params([ARXIV_SEED, UNRESOLVABLE_SEED]),
+        params=_params([RESOLVING_SEED, UNRESOLVABLE_SEED]),
     )
 
     results = asyncio.run(execute_graph(graph, resources=_resources()))
