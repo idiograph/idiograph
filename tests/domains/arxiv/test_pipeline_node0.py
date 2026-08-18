@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import os
+import subprocess
+import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -52,10 +55,74 @@ def _make_client(responses: list[MagicMock]) -> AsyncMock:
     return client
 
 
-def test_single_arxiv_seed_resolves():
-    client = _make_client([_ok_response({"results": [_work(arxiv_id="2301.07041")]})])
+def test_arxiv_id_seed_is_refused():
+    """arXiv-ID seed resolution is UNSUPPORTED by ruling (IDG-105), not by
+    transport accident.
+
+    The refusal is stated locally: it names the seed as received and the forms
+    the path actually accepts, rather than building `ids.arxiv:<abs url>` and
+    letting OpenAlex answer HTTP 400 — a response that got recorded as a network
+    failure and invited a retry that could never succeed.
+    """
+    client = _make_client([])  # no HTTP call is expected to be reached
+
+    with pytest.raises(ValueError) as excinfo:
+        asyncio.run(
+            fetch_seeds([{"arxiv_id": "2301.07041"}], client, api_key="k", sleep_ms=0)
+        )
+
+    message = str(excinfo.value)
+    # The offending seed, as received.
+    assert "{'arxiv_id': '2301.07041'}" in message
+    # The forms the path does accept.
+    assert '{"doi": ...}' in message
+    client.get.assert_not_awaited()
+
+
+def test_arxiv_id_seed_refused_before_any_seed_is_fetched():
+    """The halt is whole-batch and fires BEFORE the fetch loop. A resolvable seed
+    ahead of the offending one must not have been spent on the network — the run
+    was never going to resolve the set it was asked for."""
+    client = _make_client([_ok_response({"results": [_work(openalex_id="W1")]})])
+
+    with pytest.raises(ValueError) as excinfo:
+        asyncio.run(
+            fetch_seeds(
+                [{"doi": "10.1/x"}, {"arxiv_id": "2301.07041"}],
+                client,
+                api_key="k",
+                sleep_ms=0,
+            )
+        )
+
+    assert "seed 1 {'arxiv_id': '2301.07041'}" in str(excinfo.value)
+    client.get.assert_not_awaited()
+
+
+def test_every_refused_seed_is_named():
+    client = _make_client([])
+    with pytest.raises(ValueError) as excinfo:
+        asyncio.run(
+            fetch_seeds(
+                [{"arxiv_id": "1111.11111"}, {"arxiv_id": "2222.22222"}],
+                client,
+                api_key="k",
+                sleep_ms=0,
+            )
+        )
+
+    message = str(excinfo.value)
+    assert "1111.11111" in message
+    assert "2222.22222" in message
+
+
+def test_single_doi_seed_resolves_with_full_record():
+    """The DOI path is unchanged — this is the resolution the refused form used
+    to stand in for in this file."""
+    work = _work(openalex_id="W100", arxiv_id="2301.07041")
+    client = _make_client([_ok_response({"results": [work]})])
     resolved, failures = asyncio.run(
-        fetch_seeds([{"arxiv_id": "2301.07041"}], client, api_key="k", sleep_ms=0)
+        fetch_seeds([{"doi": "10.1/x"}], client, api_key="k", sleep_ms=0)
     )
     assert len(resolved) == 1
     assert failures == []
@@ -114,9 +181,7 @@ def test_single_seed_not_found_raises():
     client = _make_client([_ok_response({"results": []})])
     with pytest.raises(ValueError):
         asyncio.run(
-            fetch_seeds(
-                [{"arxiv_id": "9999.99999"}], client, api_key="k", sleep_ms=0
-            )
+            fetch_seeds([{"doi": "10.1/missing"}], client, api_key="k", sleep_ms=0)
         )
 
 
@@ -129,7 +194,7 @@ def test_two_seeds_both_resolve():
     )
     resolved, failures = asyncio.run(
         fetch_seeds(
-            [{"arxiv_id": "1111.11111"}, {"arxiv_id": "2222.22222"}],
+            [{"doi": "10.1/one"}, {"doi": "10.1/two"}],
             client,
             api_key="k",
             sleep_ms=0,
@@ -150,7 +215,7 @@ def test_two_seeds_one_fails():
     )
     resolved, failures = asyncio.run(
         fetch_seeds(
-            [{"arxiv_id": "1111.11111"}, {"arxiv_id": "9999.99999"}],
+            [{"doi": "10.1/one"}, {"doi": "10.1/missing"}],
             client,
             api_key="k",
             sleep_ms=0,
@@ -158,7 +223,7 @@ def test_two_seeds_one_fails():
     )
     assert len(resolved) == 1
     assert len(failures) == 1
-    assert failures[0]["seed"] == {"arxiv_id": "9999.99999"}
+    assert failures[0]["seed"] == {"doi": "10.1/missing"}
     assert resolved[0].node_id == "arxiv:1111.11111"
 
 
@@ -172,7 +237,7 @@ def test_unrecognized_seed_shape_recorded_as_failure():
     client = _make_client([])  # no HTTP calls expected
     resolved, failures = asyncio.run(
         fetch_seeds(
-            [{"unknown": "x"}, {"arxiv_id": "1111.11111"}],
+            [{"unknown": "x"}, {"doi": "10.1/one"}],
             _make_client(
                 [_ok_response({"results": [_work(openalex_id="W1", arxiv_id="1111.11111")]})]
             ),
@@ -196,9 +261,7 @@ def test_http_error_recorded_as_failure():
     # Only the failing seed — resolved list will be empty, so ValueError fires.
     with pytest.raises(ValueError):
         asyncio.run(
-            fetch_seeds(
-                [{"arxiv_id": "1111.11111"}], client, api_key="k", sleep_ms=0
-            )
+            fetch_seeds([{"doi": "10.1/one"}], client, api_key="k", sleep_ms=0)
         )
 
     # Now pair it with a successful seed so we can inspect failures.
@@ -207,7 +270,7 @@ def test_http_error_recorded_as_failure():
     client2.get = AsyncMock(side_effect=[httpx.ConnectError("boom"), ok])
     resolved, failures = asyncio.run(
         fetch_seeds(
-            [{"arxiv_id": "1111.11111"}, {"arxiv_id": "2222.22222"}],
+            [{"doi": "10.1/one"}, {"doi": "10.1/two"}],
             client2,
             api_key="k",
             sleep_ms=0,
@@ -226,3 +289,53 @@ def test_reconstruct_abstract_roundtrip():
 def test_reconstruct_abstract_none():
     assert reconstruct_abstract(None) is None
     assert reconstruct_abstract({}) is None
+
+
+def test_importing_the_pipeline_module_does_not_load_the_environment(tmp_path):
+    """Environment loading is not an import side effect (finding 069febda).
+
+    `pipeline.py` used to call `load_dotenv()` in its module body, so importing
+    it — or anything that transitively pulled it in, which is most of the domain
+    — read `.env` off the filesystem before a line of caller code ran.
+    `apps/viewer/generate.py` imported `pipeline_graph` at CALL time purely to
+    dodge that.
+
+    Run in a SUBPROCESS: `idiograph.domains.arxiv.pipeline` is already in
+    `sys.modules` by the time this file executes, so an in-process re-import
+    would be a no-op and would pass vacuously.
+
+    The probe counts calls rather than watching the filesystem: `dotenv.load_dotenv`
+    is replaced before the module is imported, and `pipeline`'s own
+    `from dotenv import load_dotenv` then binds the replacement. The second half
+    is what keeps the assertion honest — `_get_api_key`, the module's one reader
+    of process environment, must still load the environment before reading it,
+    so a fix that merely deleted the call would fail here rather than pass.
+    """
+    probe = tmp_path / "probe.py"
+    probe.write_text(
+        "import dotenv\n"
+        "calls = []\n"
+        "dotenv.load_dotenv = lambda *a, **k: calls.append(1)\n"
+        "\n"
+        "import idiograph.domains.arxiv.pipeline as pipeline\n"
+        "at_import = len(calls)\n"
+        "\n"
+        "pipeline._get_api_key()\n"
+        "at_read = len(calls)\n"
+        "\n"
+        "print(at_import, at_read)\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [sys.executable, str(probe)],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        env={**os.environ, "OPENALEX_API_KEY": "sentinel"},
+        check=True,
+    )
+
+    at_import, at_read = completed.stdout.split()
+    assert at_import == "0", "importing the pipeline module loaded the environment"
+    assert at_read == "1", "_get_api_key read the environment without loading it"

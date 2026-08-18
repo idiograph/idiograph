@@ -54,8 +54,6 @@ from idiograph.domains.arxiv.relationship_annotation import (  # noqa: F401
     annotate_relationships,
 )
 
-load_dotenv()
-
 _log = get_logger("arxiv.pipeline")
 
 OPENALEX_BASE = "https://api.openalex.org/works"
@@ -67,6 +65,22 @@ _TRAVERSAL_SELECT = _WORK_SELECT + ",referenced_works"
 
 
 def _get_api_key() -> str:
+    """Read the OpenAlex credential, loading `.env` first if it has not been.
+
+    The `load_dotenv()` call lives HERE, at the one site in this module that
+    reads process environment, rather than in the module body. At module level
+    it was an IMPORT side effect: merely importing this module — or anything
+    that transitively pulls it in, which is most of the domain — read `.env` off
+    the filesystem before a single line of caller code ran. `generate.py` was
+    importing `pipeline_graph` at call time purely to dodge it.
+
+    `load_dotenv` does not override a variable already present in `os.environ`,
+    so calling it per read is idempotent and composes with the CLI's own
+    `load_dotenv()` at `main._startup`: whichever runs first wins, and both see
+    the same value. The cost is one filesystem stat on a path that was about to
+    make a network call anyway.
+    """
+    load_dotenv()
     key = os.getenv("OPENALEX_API_KEY")
     if not key:
         raise OSError(
@@ -139,15 +153,65 @@ def _work_to_record(
     )
 
 
+#: The seed identifier keys `_seed_filter` resolves, in the order it tries them.
+#: `_reject_unsupported_seeds` renders its accepted-forms list off this tuple
+#: rather than restating one, so the error cannot drift from the filter builder
+#: it describes.
+_SUPPORTED_SEED_KEYS = ("doi",)
+
+#: Seed identifier keys this path REFUSES, by ruling (IDG-105) rather than by
+#: transport accident. Held apart from `_SUPPORTED_SEED_KEYS` because a refused
+#: form is not an unrecognized one: an unrecognized shape is a per-seed failure
+#: record, a refused form halts the batch before anything is fetched.
+_UNSUPPORTED_SEED_KEYS = ("arxiv_id",)
+
+
 def _seed_filter(seed: dict) -> str | None:
-    """Build the OpenAlex filter expression for a single seed entry."""
-    if seed.get("arxiv_id"):
-        return f"ids.arxiv:https://arxiv.org/abs/{seed['arxiv_id']}"
+    """Build the OpenAlex filter expression for a single seed entry.
+
+    Only the DOI form resolves. `doi:` is used rather than `ids.doi:` — OpenAlex
+    rejects the latter with HTTP 400 — and it accepts both the bare DOI and the
+    https://doi.org/… prefixed form. Any other shape returns None and is
+    recorded as a per-seed failure by the caller; the one shape that is refused
+    outright rather than recorded is handled by `_reject_unsupported_seeds`,
+    above the loop.
+    """
     if seed.get("doi"):
-        # OpenAlex rejects `ids.doi:` with HTTP 400; `doi:` accepts both the bare
-        # DOI and the https://doi.org/… prefixed form.
         return f"doi:{seed['doi']}"
     return None
+
+
+def _reject_unsupported_seeds(seed_ids: list[dict]) -> None:
+    """Halt on any seed whose identifier form this path refuses to resolve.
+
+    arXiv-ID seed resolution is UNSUPPORTED BY RULING (IDG-105), not by
+    transport accident. `_seed_filter` used to build
+    `ids.arxiv:https://arxiv.org/abs/<id>` for such a seed, and OpenAlex answers
+    that filter with HTTP 400 — so the seed failed as an "http error" recorded
+    against the network, which says nothing about the declaration that was
+    actually wrong and invites a retry that cannot succeed. The boundary is
+    stated here instead: named, local, and derived from no response at all.
+
+    Whole-batch and BEFORE the fetch loop, not per-seed inside it: failing on
+    seed 3 mid-loop would already have spent the network on seeds 0-2 under a
+    seed set that was never resolvable.
+    """
+    offenders = [
+        (idx, seed)
+        for idx, seed in enumerate(seed_ids)
+        if any(seed.get(key) for key in _UNSUPPORTED_SEED_KEYS)
+    ]
+    if not offenders:
+        return
+    listed = ", ".join(f"seed {idx} {seed!r}" for idx, seed in offenders)
+    supported = ", ".join(f'{{"{key}": ...}}' for key in _SUPPORTED_SEED_KEYS)
+    raise ValueError(
+        f"Unsupported seed identifier form ({listed}): "
+        f"{', '.join(_UNSUPPORTED_SEED_KEYS)} seeds are not resolvable by this "
+        f"path — OpenAlex has no arXiv-ID filter it can query, so the request "
+        f"would return HTTP 400 rather than the paper. Accepted seed forms: "
+        f"{supported}. Resolve the arXiv ID to its DOI and pass that."
+    )
 
 
 async def fetch_seeds(
@@ -158,19 +222,27 @@ async def fetch_seeds(
 ) -> tuple[list[PaperRecord], list[dict]]:
     """Resolve a list of seed identifiers against OpenAlex.
 
-    Each entry in ``seed_ids`` is one of::
+    Each entry in ``seed_ids`` is::
 
-        {"arxiv_id": "1234.56789"}
         {"doi": "10.1234/example"}
+
+    The DOI form is the only one that resolves. ``{"arxiv_id": ...}`` is
+    REFUSED, by ruling (IDG-105) rather than by transport accident: OpenAlex has
+    no arXiv-ID filter this path can query, so such a seed used to draw an
+    HTTP 400 that was then recorded as a network failure. It now raises before
+    any request is issued for the run — see ``_reject_unsupported_seeds``.
 
     Returns a tuple ``(resolved, failures)``. ``resolved`` is a list of
     ``PaperRecord`` with ``hop_depth=0`` and ``root_ids=[node_id]``.
     ``failures`` is a list of ``{"seed": <original dict>, "reason": <str>}``.
 
-    Raises ``ValueError`` if ``seed_ids`` is empty, or if every seed fails.
+    Raises ``ValueError`` if ``seed_ids`` is empty, if any entry carries an
+    unsupported identifier form, or if every seed fails.
     """
     if not seed_ids:
         raise ValueError("fetch_seeds requires at least one seed identifier.")
+
+    _reject_unsupported_seeds(seed_ids)
 
     resolved: list[PaperRecord] = []
     failures: list[dict] = []
@@ -2101,9 +2173,10 @@ async def resolve_seeds(params: dict, inputs: dict, *, resources: dict) -> dict:
     Contract (``core/executor.py`` handler convention):
       ``params``    — ``{"seeds": [request dicts]}``, validated as
                       ``_ResolveSeedsParams``. Seed identifier dicts
-                      (``{"arxiv_id": ...}`` / ``{"doi": ...}``) — the exact
-                      shape ``fetch_seeds`` accepts; shape classification is
-                      Node 0's own job. REQUIRED.
+                      (``{"doi": ...}``) — the exact shape ``fetch_seeds``
+                      accepts; shape classification is Node 0's own job. An
+                      ``{"arxiv_id": ...}`` entry is refused, not resolved
+                      (IDG-105). REQUIRED.
       ``inputs``    — BOUND AND EMPTY. The node declares
                       ``RESOLVE_SEEDS_INPUT_PORTS``, which is ``[]``: an empty
                       list is a declaration, so the node is on the bound side of
@@ -2133,9 +2206,11 @@ async def resolve_seeds(params: dict, inputs: dict, *, resources: dict) -> dict:
 
     Input validation: an empty ``seeds`` param raises ``ValueError`` here, before
     any work (a pre-check, not a reliance on ``fetch_seeds``' own empty-input
-    guard — see Halt conditions in the spec). ``fetch_seeds``' own ``ValueError``
-    on total resolution failure propagates; the empty-resolved-without-raising
-    Node 0 contract violation raises ``PipelineError``.
+    guard — see Halt conditions in the spec). ``fetch_seeds``' own ``ValueError``s
+    propagate: the unsupported-seed-form halt, raised before any request is
+    issued for the run, and total resolution failure. The
+    empty-resolved-without-raising Node 0 contract violation raises
+    ``PipelineError``.
     """
     config = _ResolveSeedsParams.model_validate(params)
     seeds = config.seeds
@@ -2312,8 +2387,8 @@ async def run_traversal(
     the node declares ``input_ports == []``, which is what makes it injectable,
     and the executor records it SUCCESS without dispatching the handler.
 
-    ``seed_requests`` is the request identifier dicts (``{"arxiv_id": ...}`` /
-    ``{"doi": ...}``) that produced ``resolved``, and it is REQUIRED with no
+    ``seed_requests`` is the request identifier dicts (``{"doi": ...}``) that
+    produced ``resolved``, and it is REQUIRED with no
     default (IDG-088; IDG-089 rider 3). It is the seed set Node 0 carries as
     CONFIGURATION on its params, so it enters the declared graph. A default would
     let a caller build a graph whose RESOLVE params silently disagreed with the
@@ -2495,9 +2570,10 @@ async def run_arxiv_pipeline(
 ) -> PipelineResult:
     """Compose the per-stage pipeline into one end-to-end run (UNCACHED).
 
-    ``seeds`` is a list of seed identifier dicts (``{"arxiv_id": ...}`` /
-    ``{"doi": ...}``) — the exact shape Node 0's ``fetch_seeds`` accepts; shape
-    classification is Node 0's job. ``client`` and ``api_key`` are owned at the
+    ``seeds`` is a list of seed identifier dicts (``{"doi": ...}``) — the exact
+    shape Node 0's ``fetch_seeds`` accepts; shape classification is Node 0's
+    job, and an ``{"arxiv_id": ...}`` entry is refused there rather than
+    resolved (IDG-105). ``client`` and ``api_key`` are owned at the
     true top of the call graph and threaded to every async stage (IDG-022); the
     orchestrator constructs neither.
 
@@ -2514,9 +2590,9 @@ async def run_arxiv_pipeline(
     produce byte-identical results. This function is deliberately cache-unaware;
     the caching decision layer lives above it in ``cache.py``.
 
-    Halts (raises, no partial result) when ``seeds`` is empty, when every seed
-    fails Node 0 resolution, or when any whole-graph stage (Node 4.5/5/6/7)
-    raises. Otherwise records provenance on the result and proceeds — partial
+    Halts (raises, no partial result) when ``seeds`` is empty, when any seed
+    carries an unsupported identifier form, when every seed fails Node 0
+    resolution, or when any whole-graph stage (Node 4.5/5/6/7) raises. Otherwise records provenance on the result and proceeds — partial
     Node 0/3/4 failures and empty backward/forward results still produce a valid
     (possibly seeds-only) graph.
     """

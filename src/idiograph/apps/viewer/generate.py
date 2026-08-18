@@ -38,6 +38,7 @@ from idiograph.domains.arxiv.models import (
     PipelineParameters,
     PipelineResult,
 )
+from idiograph.domains.arxiv.pipeline_graph import build_pipeline_graph
 from idiograph.domains.arxiv.registry import PipelineRegistry, sole_record_address
 from idiograph.domains.viewer import project_depth_provenance, project_graph
 
@@ -203,11 +204,6 @@ def declared_pipeline_graph() -> Graph:
     invariance ever breaks, this function is wrong and the test says so, rather
     than a docstring being quietly outrun.
     """
-    # Imported at CALL time: `pipeline_graph` pulls in `pipeline`, whose module
-    # body runs `load_dotenv()`, so a top-level import here would make merely
-    # importing the generator touch the filesystem. The build itself is pure.
-    from idiograph.domains.arxiv.pipeline_graph import build_pipeline_graph
-
     return build_pipeline_graph(*_INERT_ARGUMENTS)
 
 

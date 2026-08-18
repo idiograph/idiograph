@@ -121,6 +121,21 @@ def _dataflow_errors(graph: Graph) -> list[str]:
     (`RESERVED_PORT_NAMES`) is rejected outright, independently of any edge —
     the collision is a property of the DECLARATION, so a port that no edge
     binds yet is still reported.
+
+    Two further checks are node-INTERNAL name references rather than dataflow,
+    and are checked here for every node that declares them — legacy nodes
+    included, because the migration fence is about dataflow and neither of these
+    is dataflow:
+
+    - `enabled_when` must name a key PRESENT in `node.params`, with any value at
+      all. `params={'llm': None}` stays legal and stays disabling, and 0, '',
+      [], {} and False all still disable; the only defect is omitting the key,
+      which is a misspelt reference silently disabling the node for every run
+      instead of gating it. Truthiness of the VALUE is the executor's business
+      and is unchanged — this governs the NAME.
+    - every `disabled_passthrough` key must name a declared OUTPUT port of the
+      node and every value a declared INPUT port of it. A node declaring the
+      mapping while declaring no ports satisfies neither.
     """
     node_map = {node.id: node for node in graph.nodes}
     errors: list[str] = []
@@ -219,7 +234,43 @@ def _dataflow_errors(graph: Graph) -> list[str]:
     # binds. This needs a pass over NODES — the edge loop above cannot see a
     # port that has no edge. An empty `input_ports` declares "accepts no
     # inputs" and is trivially satisfied; legacy nodes stay out of the regime.
+    #
+    # The two config-declaration checks ride the same pass, ABOVE its gate. Both
+    # are node-internal: a predicate name is a reference into the node's own
+    # params and a passthrough entry a reference into its own port declarations,
+    # so neither is dataflow and neither is answerable by incoming wiring. They
+    # therefore gate on the DECLARATION being present — not on `input_ports`,
+    # and not on `faulted_targets`: a node with a dangling edge still has a
+    # wrong predicate name, and a node declaring passthrough while declaring no
+    # ports at all is the worst case rather than an exempt one.
     for node in graph.nodes:
+        if node.enabled_when is not None and node.enabled_when not in node.params:
+            errors.append(
+                f"Node '{node.id}': enabled_when names param "
+                f"'{node.enabled_when}', which the node does not declare "
+                f"(params: {sorted(node.params)}) — the predicate is a param "
+                f"NAME, so a name no param carries disables the node for every "
+                f"run rather than gating it."
+            )
+
+        if node.disabled_passthrough is not None:
+            declared_outputs = {p.name for p in node.output_ports or ()}
+            declared_inputs = {p.name for p in node.input_ports or ()}
+            for out_port, in_port in node.disabled_passthrough.items():
+                if out_port not in declared_outputs:
+                    errors.append(
+                        f"Node '{node.id}': disabled_passthrough emits output "
+                        f"port '{out_port}', which is not a declared output "
+                        f"port of '{node.id}' (declared: "
+                        f"{sorted(declared_outputs)})."
+                    )
+                if in_port not in declared_inputs:
+                    errors.append(
+                        f"Node '{node.id}': disabled_passthrough forwards input "
+                        f"port '{in_port}', which is not a declared input port "
+                        f"of '{node.id}' (declared: {sorted(declared_inputs)})."
+                    )
+
         if node.input_ports is None or node.id in faulted_targets:
             continue
         for port in node.input_ports:
