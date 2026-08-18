@@ -9,3 +9,14 @@
 ignore:
   - "src/idiograph/apps/color_designer/**"
   - "scripts/**"
+
+# Patch is INFORMATIONAL (IDG-106): IDG-100's named fallback, executed under
+# its fired re-open condition (a post-carve-out false failure on coverable,
+# mutation-proven-tested code — PR #76). The number still reports on every PR;
+# it no longer blocks. The coverage instrument of record is the design seat's
+# mutation checks at scoring.
+coverage:
+  status:
+    patch:
+      default:
+        informational: true
