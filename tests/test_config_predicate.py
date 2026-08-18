@@ -509,12 +509,13 @@ class TestTruthiness:
     """These tests DOCUMENT the truthiness behaviour; they do not rule it.
 
     `enabled_when` names a param and the executor tests ordinary Python
-    truthiness of `params.get(name)`. That is the reading a plain
-    `if node.params[name]` would give, chosen so the field needs no lookup
-    table to predict — and it means an ABSENT key is None and therefore
-    disabled, alongside 0, '', [], {} and False. If a future node needs "0 is a
-    real value", that is the second predicate shape clause 4 defers to, and it
-    arrives as a declared shape, not as a special case here.
+    truthiness of `params.get(name)`: 0, '', [], {} and False all disable, and
+    so does an ABSENT key, which reads as None. The executor says what happens
+    if you run the graph anyway; `validate_integrity` separately reports the
+    absent key as a declaration defect, and these tests pin the executor half —
+    unchanged by that. If a future node needs "0 is a real value", that is the
+    second predicate shape clause 4 defers to, and it arrives as a declared
+    shape, not as a special case here.
     """
 
     def _ran(self, node: Node) -> bool:

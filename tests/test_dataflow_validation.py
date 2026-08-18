@@ -453,3 +453,202 @@ class TestReferentialChecksStillApply:
         errors = _errors(graph)
         assert len(errors) == 1
         assert "does not exist" in errors[0]
+
+
+class TestConfigPredicateNames:
+    """`enabled_when` must name a key PRESENT in the node's own params, with any
+    value at all. This is a check on the NAME; the IDG-069 truthiness rider
+    governs the VALUE and is untouched — a param holding None, 0, '', [], {} or
+    False is a legal declaration that disables the node. The only defect is
+    omitting the key, which is a reference to nothing: the executor's
+    `params.get(name)` reads None for it, so the node is disabled for every run
+    rather than gated by anything. The executor is unchanged — this says the
+    graph carries a declaration defect, not what happens if you run it."""
+
+    def test_predicate_naming_a_declared_param_is_valid(self):
+        graph = _graph(
+            [Node(id="n", type="Gated", params={"llm": True}, enabled_when="llm")],
+            [],
+        )
+        assert _errors(graph) == []
+
+    @pytest.mark.parametrize("value", [None, False, 0, 0.0, "", [], {}])
+    def test_predicate_naming_a_param_holding_a_falsy_value_is_valid(self, value):
+        """Present-with-any-value is the whole rule. Each of these disables the
+        node at run time and none of them is a declaration defect."""
+        graph = _graph(
+            [Node(id="n", type="Gated", params={"llm": value}, enabled_when="llm")],
+            [],
+        )
+        assert _errors(graph) == []
+
+    def test_predicate_naming_an_absent_param_is_an_error(self):
+        graph = _graph(
+            [Node(id="n", type="Gated", params={"llm": True}, enabled_when="lm")],
+            [],
+        )
+        errors = _errors(graph)
+        assert len(errors) == 1
+        assert "enabled_when names param 'lm'" in errors[0]
+        assert "params: ['llm']" in errors[0]
+
+    def test_predicate_check_applies_to_a_legacy_node(self):
+        """The legacy exemption is pierced deliberately: it is about DATAFLOW,
+        and a predicate name is not dataflow. A node declaring no ports at all
+        is still checked."""
+        graph = _graph(
+            [Node(id="n", type="Gated", params={}, enabled_when="llm")],
+            [],
+        )
+        errors = _errors(graph)
+        assert len(errors) == 1
+        assert "enabled_when names param 'llm'" in errors[0]
+
+    def test_predicate_check_applies_to_a_bound_node(self):
+        graph = _graph(
+            [
+                _declared_source(["alpha"]),
+                Node(id="t", type="Gated", params={}, enabled_when="llm",
+                     input_ports=[_port("left")]),
+            ],
+            [Edge(source="s", target="t", type="DATA",
+                  from_port="alpha", to_port="left")],
+        )
+        errors = _errors(graph)
+        assert len(errors) == 1
+        assert "enabled_when names param 'llm'" in errors[0]
+
+    def test_dangling_edge_does_not_suppress_the_predicate_error(self):
+        """No `faulted_targets` suppression: the check is node-internal and
+        wholly independent of incoming wiring. A node with a dangling edge still
+        has a wrong predicate name."""
+        graph = _graph(
+            [Node(id="n", type="Gated", params={"llm": True}, enabled_when="lm")],
+            [Edge(source="ghost", target="n", type="DATA")],
+        )
+        errors = _errors(graph)
+        assert len(errors) == 2
+        assert sum("does not exist" in e for e in errors) == 1
+        assert sum("enabled_when names param 'lm'" in e for e in errors) == 1
+
+    def test_undeclared_predicate_is_not_checked(self):
+        """`enabled_when is None` is the legacy regime — the node always runs
+        and nothing is referenced, so there is no name to be wrong."""
+        graph = _graph([Node(id="n", type="Gated", params={})], [])
+        assert _errors(graph) == []
+
+
+class TestDisabledPassthroughPorts:
+    """Every `disabled_passthrough` KEY must name a declared output port of the
+    node and every VALUE a declared input port of it — the mapping is what the
+    node emits from what it received, so both halves are references into its own
+    declarations. Gated on the mapping being declared, NOT on the ports fence: a
+    node carrying the mapping with no port declarations at all is the worst
+    case, not an exempt one."""
+
+    def _passthrough_node(self, mapping: dict[str, str]) -> Node:
+        return Node(
+            id="t", type="Gated", params={},
+            input_ports=[_port("left")], output_ports=[_port("out")],
+            disabled_passthrough=mapping,
+        )
+
+    def _fed(self, node: Node) -> Graph:
+        return _graph(
+            [_declared_source(["alpha"]), node],
+            [Edge(source="s", target="t", type="DATA",
+                  from_port="alpha", to_port="left")],
+        )
+
+    def test_passthrough_naming_declared_ports_is_valid(self):
+        assert _errors(self._fed(self._passthrough_node({"out": "left"}))) == []
+
+    def test_empty_passthrough_is_trivially_satisfied(self):
+        """`{}` is a declaration — the disabled node forwards nothing — and it
+        has no entries to be wrong."""
+        assert _errors(self._fed(self._passthrough_node({}))) == []
+
+    def test_key_naming_an_undeclared_output_port_is_an_error(self):
+        errors = _errors(self._fed(self._passthrough_node({"nope": "left"})))
+        assert len(errors) == 1
+        assert "disabled_passthrough emits output port 'nope'" in errors[0]
+        assert "declared: ['out']" in errors[0]
+
+    def test_value_naming_an_undeclared_input_port_is_an_error(self):
+        errors = _errors(self._fed(self._passthrough_node({"out": "nope"})))
+        assert len(errors) == 1
+        assert "disabled_passthrough forwards input port 'nope'" in errors[0]
+        assert "declared: ['left']" in errors[0]
+
+    def test_both_halves_wrong_reports_both(self):
+        errors = _errors(self._fed(self._passthrough_node({"bad": "worse"})))
+        assert len(errors) == 2
+        assert sum("emits output port 'bad'" in e for e in errors) == 1
+        assert sum("forwards input port 'worse'" in e for e in errors) == 1
+
+    def test_every_bad_entry_reports_once_each(self):
+        node = Node(
+            id="t", type="Gated", params={},
+            input_ports=[_port("left")], output_ports=[_port("out")],
+            disabled_passthrough={"out": "left", "nope": "left"},
+        )
+        errors = _errors(self._fed(node))
+        assert len(errors) == 1
+        assert "emits output port 'nope'" in errors[0]
+
+    def test_passthrough_on_a_node_declaring_no_ports_reports_both(self):
+        """The legacy node is the WORST case, not an exempt one: it declares a
+        mapping between ports it does not have, so neither half can be
+        satisfied."""
+        graph = _graph(
+            [Node(id="n", type="Gated", params={},
+                  disabled_passthrough={"out": "left"})],
+            [],
+        )
+        errors = _errors(graph)
+        assert len(errors) == 2
+        assert sum("emits output port 'out'" in e for e in errors) == 1
+        assert sum("forwards input port 'left'" in e for e in errors) == 1
+        assert all("declared: []" in e for e in errors)
+
+    def test_passthrough_with_output_ports_none_is_still_checked(self):
+        """Clause 5 in isolation: declaring inputs but not outputs does not
+        exempt the key half."""
+        graph = _graph(
+            [
+                _declared_source(["alpha"]),
+                Node(id="t", type="Gated", params={},
+                     input_ports=[_port("left")],
+                     disabled_passthrough={"out": "left"}),
+            ],
+            [Edge(source="s", target="t", type="DATA",
+                  from_port="alpha", to_port="left")],
+        )
+        errors = _errors(graph)
+        assert len(errors) == 1
+        assert "emits output port 'out'" in errors[0]
+        assert "declared: []" in errors[0]
+
+    def test_dangling_edge_does_not_suppress_the_passthrough_error(self):
+        """No `faulted_targets` suppression here either — the unfed report is
+        suppressed by the dangling edge, the passthrough defect is not."""
+        graph = _graph(
+            [Node(id="t", type="Gated", params={},
+                  input_ports=[_port("left")], output_ports=[_port("out")],
+                  disabled_passthrough={"nope": "left"})],
+            [Edge(source="ghost", target="t", type="DATA",
+                  from_port="alpha", to_port="left")],
+        )
+        errors = _errors(graph)
+        assert len(errors) == 2
+        assert sum("does not exist" in e for e in errors) == 1
+        assert sum("emits output port 'nope'" in e for e in errors) == 1
+
+    def test_undeclared_passthrough_is_not_checked(self):
+        graph = _graph(
+            [_declared_source(["alpha"]),
+             Node(id="t", type="Gated", params={}, input_ports=[_port("left")])],
+            [Edge(source="s", target="t", type="DATA",
+                  from_port="alpha", to_port="left")],
+        )
+        assert _errors(graph) == []
