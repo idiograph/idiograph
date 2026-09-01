@@ -193,18 +193,52 @@ def query_intent():
 
 
 @app.command()
-def serve():
-    """Start the Idiograph MCP server (stdio transport).
+def serve(
+    transport: str = typer.Option(
+        "stdio",
+        "--transport",
+        help="Transport to mount: 'stdio' (the default) or 'http'.",
+    ),
+    host: str = typer.Option(
+        None,
+        "--host",
+        help="--transport http: bind address. Defaults to 127.0.0.1 (loopback).",
+    ),
+    port: int = typer.Option(
+        None,
+        "--port",
+        help="--transport http: bind port. Defaults to 8765.",
+    ),
+):
+    """Start the Idiograph MCP server over stdio (default) or streamable HTTP.
 
     The server takes no graph. Under IDG-109 the served surface is a read-only
     projection resolved per request from the repo, so there is nothing for the
     composition root to hand it and nothing for it to hold. Imported here rather
     than at module level so the other commands do not pay for the MCP stack and
     the arxiv pipeline import on every CLI invocation.
+
+    The transports JOIN rather than replace: a bare `idiograph serve` is stdio,
+    unchanged, and HTTP is reached only by asking for it. The HTTP mount is
+    STATELESS — the surface has no session state to keep, because every served
+    thing is a projection of a durable artifact — and binds loopback unless
+    `--host` widens it, which is an explicit operator act.
+
+    `--host` and `--port` default to None rather than to literals so that the
+    bind defaults live in one place, `mcp_server`, which resolves them.
     """
+    from idiograph.mcp_server import TRANSPORT_HTTP, TRANSPORT_STDIO
     from idiograph.mcp_server import main as mcp_main
 
-    mcp_main()
+    # Checked here so a typo is a CLI usage error rather than a traceback, and
+    # so it is caught before anything is mounted. `mcp_server.main` rejects the
+    # same value on its own account, for callers that are not this CLI.
+    if transport not in (TRANSPORT_STDIO, TRANSPORT_HTTP):
+        raise typer.BadParameter(
+            f"{transport!r} — expected {TRANSPORT_STDIO!r} or {TRANSPORT_HTTP!r}",
+            param_hint="--transport",
+        )
+    mcp_main(transport=transport, host=host, port=port)
 
 if __name__ == "__main__":
     app()
