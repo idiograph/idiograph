@@ -27,6 +27,15 @@ cannot drift apart. The single deliberate exception is the authored literal in
 ``tests/domains/arxiv/test_freeze_trigger_address.py``, which exists precisely to
 be an independent second opinion — a test that derived the address from here
 would only be agreeing with itself.
+
+It is also the one place that knows what the run was ASKED for.
+:data:`FROZEN_CRISPR_SEEDS` holds the two request dicts the freeze was triggered
+with — the un-resolved input, as distinct from the record's ``seeds`` field,
+which holds the node_ids Node 0 resolved them to. They live here, not in the
+demo script that used to own them, because the package now has two importers of
+the demo run's own arguments (the freeze script and the served MCP surface) and
+a second literal of a value that rides into a content address is a drift hazard
+of exactly the kind :func:`frozen_crispr_address` exists to close.
 """
 
 from pathlib import Path
@@ -39,7 +48,22 @@ from idiograph.domains.arxiv.registry import PipelineRegistry, sole_record_addre
 # — the same discipline ``_ASSETS`` uses in idiograph.apps.viewer.generate.
 REGISTRY_ROOT = Path(__file__).resolve().parent / "registry"
 
-__all__ = ["REGISTRY_ROOT", "frozen_crispr_address", "load_frozen_crispr"]
+#: The recorded CRISPR validation corpus as REQUESTED, seeded as DOIs (the Node
+#: 0 path repaired in #42). Doudna/Charpentier 2012 -> W2045435533; Zhang 2013
+#: -> W2064815984. These are request dicts, not resolved node_ids: they are what
+#: Node 0 takes as configuration, and the record's own ``seeds`` field is what it
+#: turned them into.
+FROZEN_CRISPR_SEEDS = [
+    {"doi": "10.1126/science.1225829"},
+    {"doi": "10.1126/science.1231143"},
+]
+
+__all__ = [
+    "FROZEN_CRISPR_SEEDS",
+    "REGISTRY_ROOT",
+    "frozen_crispr_address",
+    "load_frozen_crispr",
+]
 
 
 def frozen_crispr_address() -> str:
