@@ -22,7 +22,7 @@ The current implementation includes a working arXiv research pipeline: nodes tha
 
 Phase 9 extends this to a citation graph: multi-seed backward and forward traversal, citation acceleration ranking, and semantic relationship annotation via LLM. Phase 10 applies the same architecture to USD composition inversion — a deterministic backward-chaining solver for VFX asset pipeline decisions. There is no special-casing in the executor across any of these domains.
 
-An MCP server wraps the core graph operations as six standards-compliant tools (`get_node`, `get_edges_from`, `update_node`, `summarize_intent`, `validate_graph`, `execute_graph`). Any MCP-compatible agent client can connect, inspect the graph, mutate node parameters, and trigger execution without bespoke adapter code.
+An MCP server wraps the core graph operations as five standards-compliant tools (`get_node`, `get_edges_from`, `summarize_intent`, `validate_graph`, `read_record`). The served surface is a read-only projection: the graph is resolved per request from the repo, and the record is read from the packaged content-addressed artifact. Any MCP-compatible agent client can connect, inspect the declared pipeline, and read the execution record it produced without bespoke adapter code. Nothing served is mutated, and execution stays at the CLI composition root.
 
 ---
 
@@ -64,7 +64,7 @@ src/idiograph/
 │       ├── __init__.py    # register_color_designer_handlers()
 │       ├── handlers.py
 │       └── pipeline.py
-├── mcp_server.py          # MCP interface — six tools via stdio transport
+├── mcp_server.py          # MCP interface — five read-only tools via stdio transport
 └── main.py                # CLI entry point (Typer)
 
 apps/color_designer/       # PySide6 UI — a view of the domain, not the domain itself
@@ -213,7 +213,7 @@ These are architectural properties, not features — and they are what make AI t
 
 **Agent interface**
 
-* [mcp](https://github.com/modelcontextprotocol/python-sdk) — stdio transport, six tools
+* [mcp](https://github.com/modelcontextprotocol/python-sdk) — stdio transport, five read-only tools
 
 **Color Designer**
 
