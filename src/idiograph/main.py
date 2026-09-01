@@ -29,7 +29,6 @@ from idiograph.core.query import (
     topological_sort,
     validate_integrity,
 )
-from idiograph.mcp_server import main as mcp_main
 
 app = typer.Typer()
 query_app = typer.Typer()
@@ -195,11 +194,17 @@ def query_intent():
 
 @app.command()
 def serve():
-    """Start the Idiograph MCP server (stdio transport)."""
-    from idiograph.core.graph import load_graph
-    from idiograph.core.pipeline import SAMPLE_PIPELINE
-    graph = load_graph(SAMPLE_PIPELINE.model_dump())
-    mcp_main(graph)
+    """Start the Idiograph MCP server (stdio transport).
+
+    The server takes no graph. Under IDG-109 the served surface is a read-only
+    projection resolved per request from the repo, so there is nothing for the
+    composition root to hand it and nothing for it to hold. Imported here rather
+    than at module level so the other commands do not pay for the MCP stack and
+    the arxiv pipeline import on every CLI invocation.
+    """
+    from idiograph.mcp_server import main as mcp_main
+
+    mcp_main()
 
 if __name__ == "__main__":
     app()

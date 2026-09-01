@@ -58,6 +58,13 @@ from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
 
 from idiograph.core.logging_config import get_logger
+
+# The seed set moved into the package (IDG-109): it is one of the demo run's own
+# arguments, and the served MCP surface needs it too. Imported under the name
+# this script has always used, so `crispr_hit_leg`'s `from crispr_freeze_trigger
+# import SEEDS` — deriving the seeds from the module that produced the artifact,
+# which is that script's whole experiment — keeps working unchanged.
+from idiograph.demo import FROZEN_CRISPR_SEEDS as SEEDS
 from idiograph.domains.arxiv import cache as cache_module
 from idiograph.domains.arxiv.cache import cached_run_arxiv_pipeline
 from idiograph.domains.arxiv.models import (
@@ -76,14 +83,6 @@ from idiograph.domains.arxiv.registry import (
 from idiograph.domains.arxiv.relationship_annotation import prompt_template_hash
 
 _log = get_logger("demos.crispr_freeze_trigger")
-
-# The recorded CRISPR validation corpus, seeded as DOIs (the Node 0 path
-# repaired in #42). Doudna/Charpentier 2012 -> W2045435533; Zhang 2013 ->
-# W2064815984.
-SEEDS = [
-    {"doi": "10.1126/science.1225829"},
-    {"doi": "10.1126/science.1231143"},
-]
 
 # 3200 is NOT a size choice and this run is NOT "small enough to watch" — the
 # freeze takes ~50 minutes. 3200 is the ONE value at which the Node 3 backward
