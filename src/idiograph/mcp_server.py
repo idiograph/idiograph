@@ -41,19 +41,40 @@ registered. Serving ``execute_graph`` over a graph with no registered handler fo
 any of its node types is what finding f52487fa reported — the tool raised on the
 only graph it was ever given. Removal is the discharge.
 
-TRANSPORT. ``serve()`` mounts stdio. ``app`` is module-level and every request
-resolves what it needs from the repo, so a second transport can mount the same
-``app`` without touching anything here.
+TRANSPORT. Two, and they are two ways to reach ONE surface. ``serve()`` mounts
+stdio; ``serve_http()`` mounts the SDK's ``StreamableHTTPSessionManager`` at
+``/mcp`` inside an ASGI app under uvicorn. Both mount the same module-level
+``app`` — there is no second ``Server``, no duplicated registration, and no
+transport-conditional tool set, so the five tools, their schemas and their
+result shapes are identical whichever way a client connects (IDG-109 clause 3).
+The promise the previous paragraph of this docstring made — that a second
+transport could mount the same ``app`` without touching anything above — is
+what the section at the foot of this module collects on: nothing between here
+and there changed to admit it.
+
+The HTTP mount is STATELESS. The SDK's stateful mode keeps an in-memory
+session→transport registry, which would be the only mutable in-process state on
+the surface, and clause 4 says there is none: every served thing is a projection
+of a durable artifact, so there is no session for a client to have. A stateless
+mount also survives a restart with nothing to lose. The cost — no
+server-initiated notifications, no stream resumability — is not a cost here:
+every tool answers one bounded question with one complete result.
 """
 
 import asyncio
+import contextlib
 import json
 import re
+from collections.abc import AsyncIterator
 from functools import lru_cache
 from typing import Any
 
 from mcp import stdio_server, types
 from mcp.server import Server
+from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+from mcp.server.transport_security import TransportSecuritySettings
+from starlette.applications import Starlette
+from starlette.routing import Mount
 
 from idiograph.core import (
     get_edges_from,
@@ -515,6 +536,121 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
 
 
+# ── Transports ────────────────────────────────────────────────────────────────
+
+#: The two transport names, spelled once. The CLI's `--transport` value, the
+#: switch in `main` below and the smoke script all source them from here rather
+#: than retyping the strings.
+TRANSPORT_STDIO = "stdio"
+TRANSPORT_HTTP = "http"
+
+#: Where the HTTP transport answers. ONE mount, one path. The ASGI app is a
+#: router rather than the session manager bare, so that a second leg — the color
+#: designer's SSE broadcast, which shares this host under goal 132a4c55 — can be
+#: mounted beside this route later without moving it. That route is NOT built
+#: here. Note the canonical URL carries a trailing slash: `Mount` answers
+#: `/mcp/` and 307s the bare `/mcp` onto it.
+HTTP_PATH = "/mcp"
+
+#: Default bind for the HTTP transport: LOOPBACK, deliberately. A `serve` that
+#: selects HTTP without naming a host must not be reachable from another
+#: machine. Widening the bind is an explicit operator act, and it is that act —
+#: not a flag of its own — that relaxes the Host allowlist below.
+DEFAULT_HTTP_HOST = "127.0.0.1"
+DEFAULT_HTTP_PORT = 8765
+
+#: Bind addresses that mean "this machine only". Compared against what the
+#: operator asked to bind, which is why `::1` appears here unbracketed while the
+#: Host-header spellings below bracket it — a bind address and a Host header are
+#: different notations for the same interface.
+_LOOPBACK_BINDS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+#: Host-header spellings that all name the loopback interface. A client may
+#: reach the default bind by any of them, so an allowlist derived from the bound
+#: port carries all three; one that carried only `127.0.0.1` would refuse a
+#: legitimate local client for spelling it `localhost`.
+_LOOPBACK_HOST_HEADERS = ("127.0.0.1", "localhost", "[::1]")
+
+#: Responses are complete JSON documents, not SSE frames. Nothing on this
+#: surface streams: every tool answers one bounded question with one result
+#: under `_MAX_RESPONSE_BYTES`, and a stateless mount has no server-initiated
+#: notification to deliver anyway. SSE framing would wrap a single message in a
+#: stream that never has a second one.
+_JSON_RESPONSE = True
+
+
+def _transport_security(host: str, port: int) -> TransportSecuritySettings:
+    """DNS-rebinding protection that FOLLOWS THE BIND.
+
+    On the default loopback bind the protection is ON, and the allowlist is
+    derived from the port actually bound rather than hand-authored — the attack
+    it answers is a browser on this machine being steered to this port by a
+    rebound name, and the defense is to accept only the Host headers that spell
+    the loopback interface.
+
+    On a bind the operator WIDENED it is off, with a line in the log saying so.
+    This is not a silent downgrade: a loopback-derived allowlist left in place
+    over `0.0.0.0` would refuse every remote client by Host header — refusing
+    exactly the hosts the operator just opened — and no allowlist can be derived
+    from a wildcard bind, because the legitimate Host header is then whatever
+    name the client used to reach this machine. Restricting a widened bind is
+    the reverse proxy's job, not this process's.
+    """
+    if host in _LOOPBACK_BINDS:
+        allowed_hosts = [f"{name}:{port}" for name in _LOOPBACK_HOST_HEADERS]
+        return TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=allowed_hosts,
+            allowed_origins=[f"http://{name}" for name in allowed_hosts],
+        )
+    logger.warning(
+        "Bind %s is not loopback — DNS-rebinding Host/Origin checks are off, "
+        "since the legitimate Host header cannot be derived from a widened "
+        "bind. Restrict access ahead of this process.",
+        host,
+    )
+    return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+
+
+def http_session_manager(
+    host: str = DEFAULT_HTTP_HOST, port: int = DEFAULT_HTTP_PORT
+) -> StreamableHTTPSessionManager:
+    """The streamable-HTTP session manager for the module-level ``app``.
+
+    NOT a server: it is a transport in front of the one ``app`` this module
+    registers its tools on. Stateless for the reason the module docstring gives,
+    which is also why it holds nothing worth reusing — a caller builds one per
+    mount rather than sharing a module-level instance.
+    """
+    return StreamableHTTPSessionManager(
+        app,
+        stateless=True,
+        json_response=_JSON_RESPONSE,
+        security_settings=_transport_security(host, port),
+    )
+
+
+def build_http_app(manager: StreamableHTTPSessionManager) -> Starlette:
+    """The ASGI app mounting ``manager`` at :data:`HTTP_PATH`.
+
+    Takes the manager rather than building one so that both callers compose the
+    same two pieces. ``serve_http`` hands the app to uvicorn, which runs the
+    lifespan below; the in-process transport tests drive this same app through
+    ``httpx.ASGITransport``, which does NOT run a lifespan, and so enter
+    ``manager.run()`` themselves. Those are the only two ways in, and neither
+    reaches a tool by a path the other does not.
+    """
+
+    @contextlib.asynccontextmanager
+    async def lifespan(_: Starlette) -> AsyncIterator[None]:
+        async with manager.run():
+            yield
+
+    return Starlette(
+        routes=[Mount(HTTP_PATH, app=manager.handle_request)], lifespan=lifespan
+    )
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 async def serve() -> None:
@@ -523,5 +659,53 @@ async def serve() -> None:
         await app.run(read_stream, write_stream, app.create_initialization_options())
 
 
-def main() -> None:
-    asyncio.run(serve())
+def serve_http(host: str | None = None, port: int | None = None) -> None:
+    """Serve the surface over streamable HTTP, blocking until the process stops.
+
+    ``None`` for either bind component means the loopback default, so that the
+    defaults live at :data:`DEFAULT_HTTP_HOST` / :data:`DEFAULT_HTTP_PORT` alone
+    and the CLI does not carry a second copy of them.
+    """
+    # Imported here, not at module level, because uvicorn is needed only where a
+    # socket is actually opened. The transport tests build the very same ASGI
+    # app and drive it in-process, and nothing on that path binds anything.
+    import uvicorn
+
+    host = DEFAULT_HTTP_HOST if host is None else host
+    port = DEFAULT_HTTP_PORT if port is None else port
+    logger.info(
+        "Idiograph MCP server starting (streamable HTTP, stateless) at http://%s:%d%s/",
+        host,
+        port,
+        HTTP_PATH,
+    )
+    # `log_config=None`: uvicorn's default config would reconfigure the root
+    # logger that the CLI's startup callback already set up.
+    uvicorn.run(
+        build_http_app(http_session_manager(host, port)),
+        host=host,
+        port=port,
+        log_config=None,
+    )
+
+
+def main(
+    transport: str = TRANSPORT_STDIO,
+    host: str | None = None,
+    port: int | None = None,
+) -> None:
+    """Run the served surface over one transport. THE DEFAULT IS STDIO.
+
+    A no-argument call is exactly what it was before HTTP existed, which is the
+    whole of the compatibility promise: a client that spawns this process and
+    speaks over the pipe sees no change. HTTP is selected, never fallen into.
+    """
+    if transport == TRANSPORT_STDIO:
+        asyncio.run(serve())
+    elif transport == TRANSPORT_HTTP:
+        serve_http(host, port)
+    else:
+        raise ValueError(
+            f"Unknown transport: {transport!r} — "
+            f"expected {TRANSPORT_STDIO!r} or {TRANSPORT_HTTP!r}"
+        )

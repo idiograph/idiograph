@@ -64,7 +64,7 @@ src/idiograph/
 │       ├── __init__.py    # register_color_designer_handlers()
 │       ├── handlers.py
 │       └── pipeline.py
-├── mcp_server.py          # MCP interface — five read-only tools via stdio transport
+├── mcp_server.py          # MCP interface — five read-only tools over stdio or streamable HTTP
 └── main.py                # CLI entry point (Typer)
 
 apps/color_designer/       # PySide6 UI — a view of the domain, not the domain itself
@@ -135,8 +135,9 @@ uv run idiograph run 1706.03762
 # Run without an API key — mock handlers execute the full pipeline
 uv run idiograph run 1706.03762 --mock
 
-# Start the MCP server (stdio transport — connect any MCP-compatible client)
-uv run idiograph serve
+# Start the MCP server — stdio by default, or streamable HTTP on loopback
+uv run idiograph serve                          # stdio (connect any MCP-compatible client)
+uv run idiograph serve --transport http         # streamable HTTP at http://127.0.0.1:8765/mcp/
 
 # Explore and inspect the graph
 uv run idiograph stats                         # Pipeline statistics as JSON
@@ -213,7 +214,7 @@ These are architectural properties, not features — and they are what make AI t
 
 **Agent interface**
 
-* [mcp](https://github.com/modelcontextprotocol/python-sdk) — stdio transport, five read-only tools
+* [mcp](https://github.com/modelcontextprotocol/python-sdk) — stdio and streamable-HTTP transports, five read-only tools
 
 **Color Designer**
 
