@@ -57,3 +57,4 @@ nodeforge.toml.local
 # Session scratch / prompt artifacts
 tmp/
 *-prompt.md
+.env
