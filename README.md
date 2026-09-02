@@ -138,6 +138,7 @@ uv run idiograph run 1706.03762 --mock
 # Start the MCP server — stdio by default, or streamable HTTP on loopback
 uv run idiograph serve                          # stdio (connect any MCP-compatible client)
 uv run idiograph serve --transport http         # streamable HTTP at http://127.0.0.1:8765/mcp/
+                                                # same bind: GET /projection/graph and /projection/record (viewer JSON)
 
 # Explore and inspect the graph
 uv run idiograph stats                         # Pipeline statistics as JSON

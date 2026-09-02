@@ -14,6 +14,11 @@ dependencies = [
     "pydantic>=2.12.5",
     "python-dotenv>=1.2.2",
     "scipy>=1.17.1",
+    # Direct, not transitive: mcp_server routes its own projection routes with
+    # starlette's Router rather than only mounting mcp's ASGI handler. The bound
+    # is the version already resolved in uv.lock — a declaration of what is
+    # imported, not a bump (finding 8dff089f residual 1).
+    "starlette>=1.0.0",
     "typer>=0.12.0",
 ]
 
