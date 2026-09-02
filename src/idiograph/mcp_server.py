@@ -28,10 +28,10 @@ NO AUTHORITATIVE IN-PROCESS STATE. There is no module-level graph and no
 initializer. Every request resolves its own ``Graph`` through the pure
 constructor, so nothing a request can reach outlives it, and two requests never
 share a mutable graph — which matters because the executor mutates
-``Node.status`` in place. The record READ is memoized, keyed by content address:
-a projection of a durable artifact under a key derived from its content is a
-cache, not state. No tool call writes it, re-freezes anything, or touches the
-network.
+``Node.status`` in place. The record READ is memoized, keyed by content address,
+and so is the record projection the HTTP surface serves below: a projection of a
+durable artifact under a key derived from its content is a cache, not state. No
+tool call writes it, re-freezes anything, or touches the network.
 
 WHY THERE IS NO ``update_node`` AND NO ``execute_graph``. Both were deleted
 under IDG-109. The repo is the authority on what the graph is, so a served
@@ -59,6 +59,18 @@ of a durable artifact, so there is no session for a client to have. A stateless
 mount also survives a restart with nothing to lose. The cost — no
 server-initiated notifications, no stream resumability — is not a cost here:
 every tool answers one bounded question with one complete result.
+
+BESIDE THE TOOL SURFACE, THE VIEWER'S. The HTTP app answers two further routes —
+:data:`PROJECTION_GRAPH_PATH` and :data:`PROJECTION_RECORD_PATH` — each serving
+one headless projection from :mod:`idiograph.domains.viewer` as exactly the JSON
+``apps.viewer.generate`` inlines into its static HTML. They are a second
+SURFACE, not a second transport: no MCP client reaches them, they carry no tool,
+no schema and no session, and nothing on the tool surface changed to admit them.
+They exist because this host served an LLM's surface and nothing a RENDERER
+could fetch. The renderer is not changed to fetch them here; that is follow-on
+work. Everything the paragraphs above claim holds of these routes unchanged —
+read-only, offline, GET-only, and no state beyond the same content-addressed
+memoization.
 """
 
 import asyncio
@@ -74,8 +86,11 @@ from mcp.server import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
-from starlette.routing import Mount
+from starlette.requests import Request
+from starlette.responses import Response
+from starlette.routing import Mount, Route
 
+from idiograph.apps.viewer.generate import declared_pipeline_graph
 from idiograph.core import (
     get_edges_from,
     get_node,
@@ -92,6 +107,7 @@ from idiograph.demo import (
 from idiograph.domains.arxiv.models import PipelineResult
 from idiograph.domains.arxiv.pipeline_graph import build_pipeline_graph
 from idiograph.domains.arxiv.registry import PipelineRegistry
+from idiograph.domains.viewer import project_depth_provenance, project_graph
 
 logger = get_logger("mcp_server")
 
@@ -547,9 +563,11 @@ TRANSPORT_HTTP = "http"
 #: Where the HTTP transport answers. ONE mount, one path. The ASGI app is a
 #: router rather than the session manager bare, so that a second leg — the color
 #: designer's SSE broadcast, which shares this host under goal 132a4c55 — can be
-#: mounted beside this route later without moving it. That route is NOT built
-#: here. Note the canonical URL carries a trailing slash: `Mount` answers
-#: `/mcp/` and 307s the bare `/mcp` onto it.
+#: mounted beside this route later without moving it. That route is still NOT
+#: built here; the projection routes below are what first collected on the
+#: affordance, and this mount did not move to admit them. Note the canonical URL
+#: carries a trailing slash: `Mount` answers `/mcp/` and 307s the bare `/mcp`
+#: onto it.
 HTTP_PATH = "/mcp"
 
 #: Default bind for the HTTP transport: LOOPBACK, deliberately. A `serve` that
@@ -630,6 +648,87 @@ def http_session_manager(
     )
 
 
+# ── The viewer's projections, served ──────────────────────────────────────────
+
+#: Where the headless projections answer, one path per SUBJECT. The renderer
+#: dispatches on `meta["view"]` and the two subjects are different things — the
+#: pipeline's DECLARATION and one record it produced — so they are two routes
+#: rather than one route with a selector. Neither is under `HTTP_PATH`: they are
+#: not MCP, and a client that speaks MCP never reaches them.
+PROJECTION_GRAPH_PATH = "/projection/graph"
+PROJECTION_RECORD_PATH = "/projection/record"
+
+#: Complete JSON documents, served as bytes that were serialized here — hence
+#: `Response` and not `JSONResponse`. A response class that re-encodes the object
+#: would substitute its own separators for the projection's own serialization,
+#: and the whole contract of these routes is that the bytes are the SAME bytes a
+#: browser gets from the generated HTML, not a second encoding of one object.
+_PROJECTION_MEDIA_TYPE = "application/json"
+
+
+def _projection_body(projection: dict[str, Any]) -> bytes:
+    """One ``{meta, nodes, edges}`` contract, in the viewer's own serialization.
+
+    Spelled exactly as ``apps.viewer.generate.render_projection_html`` spells it,
+    and for its reason: `sort_keys` makes the payload byte-stable (the
+    projections are already deterministic) and `ensure_ascii=False` leaves paper
+    titles readable rather than escaped. NOT a re-serialization of the viewer's
+    contract — the same one, so that a client fetching a route and a browser
+    opening the static file are looking at identical bytes.
+    """
+    return json.dumps(projection, sort_keys=True, ensure_ascii=False).encode("utf-8")
+
+
+@lru_cache(maxsize=2)
+def _record_projection_body(address: str) -> bytes:
+    """The record projection's body, memoized by the record's content address.
+
+    The same warrant as :func:`_record_json`: a projection of a durable artifact
+    under a key derived from that artifact's content is a cache, not state
+    (IDG-109 clause 4). What is cached is `bytes` — immutable, so what one
+    request is handed cannot be what a later request sees changed — and caching
+    the encoded body rather than the dict spares every request after the first
+    both the projection and the dump over 1,885 nodes.
+    """
+    return _projection_body(project_depth_provenance(_read_record(address)))
+
+
+async def _serve_graph_projection(_request: Request) -> Response:
+    """GET the DECLARED pipeline graph's projection.
+
+    THIS ROUTE READS NO RECORD. Its subject is a shape, not a run: the graph is
+    built through ``declared_pipeline_graph`` — the static generator's own
+    constructor, over deliberately inert arguments — because the projection emits
+    param key NAMES and no values, and is therefore invariant to seeds and
+    parameters (``test_the_projection_is_invariant_to_seeds_and_parameters`` in
+    tests/apps/viewer/test_generate.py is what holds that). Resolving the subject
+    from the packaged record's parameters instead, as :func:`resolve_graph` must
+    for the tool surface, would make a picture that cannot depend on a run
+    require one in order to be drawn.
+
+    Not memoized, deliberately. A declaration is not a durable artifact with a
+    content address to key on, and :func:`resolve_graph`'s rule holds here too:
+    a fresh ``Graph`` per request shares no mutable structure with any other.
+    """
+    return Response(
+        _projection_body(project_graph(declared_pipeline_graph())),
+        media_type=_PROJECTION_MEDIA_TYPE,
+    )
+
+
+async def _serve_record_projection(_request: Request) -> Response:
+    """GET the packaged frozen record's depth/provenance projection.
+
+    One subject, reached through the address-verifying registry path every record
+    tool call takes. There is no selector: this route reads no query parameter,
+    so no client-supplied string reaches the registry from here at all.
+    """
+    return Response(
+        _record_projection_body(frozen_crispr_address()),
+        media_type=_PROJECTION_MEDIA_TYPE,
+    )
+
+
 def build_http_app(manager: StreamableHTTPSessionManager) -> Starlette:
     """The ASGI app mounting ``manager`` at :data:`HTTP_PATH`.
 
@@ -639,6 +738,10 @@ def build_http_app(manager: StreamableHTTPSessionManager) -> Starlette:
     ``httpx.ASGITransport``, which does NOT run a lifespan, and so enter
     ``manager.run()`` themselves. Those are the only two ways in, and neither
     reaches a tool by a path the other does not.
+
+    The projection routes sit BESIDE the mount, not inside it. They are declared
+    ``methods=["GET"]``, so Starlette answers every other verb with a 405 and
+    there is no request body any of them could read.
     """
 
     @contextlib.asynccontextmanager
@@ -647,7 +750,12 @@ def build_http_app(manager: StreamableHTTPSessionManager) -> Starlette:
             yield
 
     return Starlette(
-        routes=[Mount(HTTP_PATH, app=manager.handle_request)], lifespan=lifespan
+        routes=[
+            Mount(HTTP_PATH, app=manager.handle_request),
+            Route(PROJECTION_GRAPH_PATH, _serve_graph_projection, methods=["GET"]),
+            Route(PROJECTION_RECORD_PATH, _serve_record_projection, methods=["GET"]),
+        ],
+        lifespan=lifespan,
     )
 
 
