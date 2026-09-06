@@ -8,12 +8,12 @@
 
 WHAT IS SERVED. Two things, and they describe ONE run:
 
-  - THE DECLARATION. ``build_pipeline_graph`` resolved over the packaged frozen
-    CRISPR record's own arguments — its ``parameters`` block and the seed set it
-    was triggered with. Eleven nodes, 21 edges: the citation-traversal pipeline
-    as a declared ``Graph``.
-  - THE RECORD. The packaged ``PipelineResult`` that run produced, read back
-    through the address-verifying registry path.
+  - THE DECLARATION. ``build_pipeline_graph`` resolved over a stored record's own
+    arguments — its ``parameters`` block and the request sidecar recording the
+    seed set it was triggered with. Eleven nodes, 21 edges: the citation-traversal
+    pipeline as a declared ``Graph``.
+  - THE RECORD. The ``PipelineResult`` that run produced, read back through the
+    address-verifying registry path.
 
 The declaration is NOT a claim that this ``Graph`` was executed to produce the
 record: ``run_traversal`` produced it, and the graph is the declaration that
@@ -23,6 +23,23 @@ declaration of the pipeline whose record this is, configured identically. That
 is why the resolver reads the record's parameters rather than the viewer's inert
 arguments: zeroed values would tell a client ``n_backward: 0`` and ``llm: None``
 beside a record that says otherwise.
+
+WHICH RECORD (IDG-113 clause 5). Two coordinates, and neither is a name this
+module knows: a REGISTRY ROOT, fixed once per process at startup, and a CONTENT
+ADDRESS, named per request. The root defaults to the packaged demo registry, so
+a server started with no arguments serves byte-for-byte what it served before
+this existed; ``--registry-root`` points it at an operator's own durable registry
+instead. The address defaults to :func:`sole_record_address` OF THAT ROOT — a
+single-record root already states its record's address in the filename, and a
+multi-record root has no default, which is answered as a structured miss rather
+than by picking a winner.
+
+Nothing here hand-authors the CRISPR address or its seeds any more. The
+declaration's seeds come off the record's own ``<address>.request.json`` sidecar,
+so a surface pointed at a second corpus describes THAT corpus; falling back to a
+packaged literal would have answered for a record it did not produce. A record
+with no request sidecar is a structured miss naming the file it wants, never a
+substitution.
 
 NO AUTHORITATIVE IN-PROCESS STATE. There is no module-level graph and no
 initializer. Every request resolves its own ``Graph`` through the pure
@@ -71,6 +88,14 @@ could fetch. The renderer is not changed to fetch them here; that is follow-on
 work. Everything the paragraphs above claim holds of these routes unchanged —
 read-only, offline, GET-only, and no state beyond the same content-addressed
 memoization.
+
+:data:`PROJECTION_RECORD_PATH` takes the same address selector the record tool
+takes, and by the same route through :func:`_resolve_address`, so no
+client-supplied string reaches the registry except a validated content address.
+:data:`PROJECTION_GRAPH_PATH` REFUSES one: its subject is a shape, invariant to
+seeds and parameters, so an address there would select nothing — and a selector
+that silently does nothing is a false affordance, the same call the viewer CLI
+makes when it refuses ``--address`` on its declared-graph view.
 """
 
 import asyncio
@@ -79,6 +104,7 @@ import json
 import re
 from collections.abc import AsyncIterator
 from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 from mcp import stdio_server, types
@@ -99,14 +125,14 @@ from idiograph.core import (
 )
 from idiograph.core.logging_config import get_logger
 from idiograph.core.models import Graph
-from idiograph.demo import (
-    FROZEN_CRISPR_SEEDS,
-    REGISTRY_ROOT,
-    frozen_crispr_address,
-)
+from idiograph.demo import REGISTRY_ROOT
 from idiograph.domains.arxiv.models import PipelineResult
 from idiograph.domains.arxiv.pipeline_graph import build_pipeline_graph
-from idiograph.domains.arxiv.registry import PipelineRegistry
+from idiograph.domains.arxiv.registry import (
+    PipelineRegistry,
+    RecordRequest,
+    sole_record_address,
+)
 from idiograph.domains.viewer import project_depth_provenance, project_graph
 
 logger = get_logger("mcp_server")
@@ -144,18 +170,62 @@ class _RecordMiss(LookupError):
 
 # ── Resolution: the repo is the authority ─────────────────────────────────────
 
+#: The registry root every record read on this surface resolves against. A
+#: PROCESS SETTING, not served state: it is written once, by an entry point,
+#: BEFORE anything is mounted, and no request can reach it — which is what keeps
+#: IDG-109 clause 4's "no authoritative in-process state" intact. The default is
+#: the packaged demo registry, so a server started with no arguments answers
+#: exactly what it answered before this setting existed.
+_registry_root: Path = REGISTRY_ROOT
+
+
+def registry_root() -> Path:
+    """The root this process serves records from.
+
+    A function rather than a bare read of the module global, so that every call
+    site — the memoized reads, the address check, the tools, the routes — is
+    asking the same question of the same place, and so that the setter below is
+    the only writer.
+    """
+    return _registry_root
+
+
+def set_registry_root(root: Path | None) -> Path:
+    """Fix the served registry root for this process; return what it resolved to.
+
+    Called ONCE, by an entry point, before a transport is mounted. The memos
+    below are keyed by content address alone — sound only while the root is
+    fixed, because a content address names a record within a root, not across
+    roots — so this drops them. That is a fence, not an invitation: nothing on
+    the request path calls this, and a root changed under a live server would be
+    a different surface wearing the same process.
+
+    Returning the resolved root is not a convenience. The entry points below take
+    a parameter named ``registry_root``, which SHADOWS :func:`registry_root` for
+    the length of their bodies, so an entry point that wanted to log what it had
+    just set could not ask for it. Handing it back here removes the need to.
+    """
+    global _registry_root
+    _registry_root = REGISTRY_ROOT if root is None else Path(root)
+    _read_record.cache_clear()
+    _record_json.cache_clear()
+    _record_projection_body.cache_clear()
+    return _registry_root
+
 
 @lru_cache(maxsize=2)
 def _read_record(address: str) -> PipelineResult:
-    """Read one packaged record, memoized by its content address.
+    """Read one record from the served root, memoized by its content address.
 
     Goes through :meth:`PipelineRegistry.read`, which re-supplies the excluded
     cycle witness and verifies that what came off disk addresses to what was
     asked for. Memoizing is sound precisely because the key is the content
     address: two calls with the same key cannot be answered differently by a
-    content-addressed store, and ``PipelineResult`` is frozen.
+    content-addressed store, and ``PipelineResult`` is frozen. The ROOT is fixed
+    per process (:func:`set_registry_root`), so it is not part of the key and
+    does not need to be.
     """
-    return PipelineRegistry(REGISTRY_ROOT).read(address)
+    return PipelineRegistry(registry_root()).read(address)
 
 
 @lru_cache(maxsize=2)
@@ -169,35 +239,80 @@ def _record_json(address: str) -> dict[str, Any]:
 
 
 def _resolve_address(address: str | None) -> str:
-    """The address a record call names, defaulting to the packaged record's.
+    """The address a call names, defaulting to the served root's sole record.
 
-    Never hand-authored: the default is derived from the packaged registry's
-    sole filename. A supplied address must both look like an address and be held
-    by the registry, or the call is a miss.
+    Never hand-authored: the default is derived from the served registry's sole
+    filename, so a surface pointed at another single-record root needs no second
+    argument and no address literal lives in this module. A supplied address must
+    both look like an address and be held by that registry, or the call is a miss.
+
+    A MULTI-RECORD ROOT HAS NO DEFAULT, and this reports that as a miss rather
+    than choosing one. ``sole_record_address`` raises there — correctly, since
+    "the sole record" is a claim about the directory — and the raise is restated
+    as a miss because a client asking for the default record of a root that has
+    none has asked a well-formed question about something that is not there. That
+    is DATA on this surface (see :class:`_RecordMiss`), not a protocol fault.
     """
+    root = registry_root()
     if address is None:
-        return frozen_crispr_address()
+        try:
+            return sole_record_address(root)
+        except ValueError as exc:
+            raise _RecordMiss(
+                f"No default record: {exc}. Name one with 'address'."
+            ) from exc
     if not _ADDRESS_PATTERN.match(address):
         raise _RecordMiss(
             f"Address '{address}' is not a content address "
             "(64 lowercase hex characters)."
         )
-    if not PipelineRegistry(REGISTRY_ROOT).path_for(address).is_file():
+    if not PipelineRegistry(root).path_for(address).is_file():
         raise _RecordMiss(f"The registry holds no record at address '{address}'.")
     return address
 
 
-def resolve_graph() -> Graph:
+def _read_request(address: str) -> RecordRequest:
+    """What the run at ``address`` was ASKED for, off its request sidecar.
+
+    NOT memoized, and not for want of symmetry with the record read above: the
+    file is a few hundred bytes, and re-parsing it per call hands every
+    resolution its own fresh seed dicts — the mutable structure
+    :func:`resolve_graph` must not share between requests — for free.
+
+    ABSENCE IS A STRUCTURED MISS NAMING THE FILE. A record whose request was
+    never recorded cannot say what it was asked for, and the one thing this must
+    not do is answer with some other run's seeds: the substitution would be
+    invisible in the response and wrong in exactly the case the address selector
+    exists for.
+    """
+    request = PipelineRegistry(registry_root()).read_request(address)
+    if request is None:
+        raise _RecordMiss(
+            f"The record at '{address}' records no request — expected "
+            f"{PipelineRegistry(registry_root()).request_path_for(address)}. "
+            "The declared graph is configured from what a run was asked for, "
+            "and this record does not say."
+        )
+    return request
+
+
+def resolve_graph(address: str | None = None) -> Graph:
     """The served graph: the declaration of the pipeline whose record this is.
+
+    Both of the record's own arguments, from the record itself: its
+    ``parameters`` block, and the request seeds off its ``<address>.request.json``
+    sidecar. Nothing about which corpus this is written down here — point the
+    surface at another record and this describes that one.
 
     A FRESH ``Graph`` every call, deliberately — ``build_pipeline_graph``'s own
     contract, and the reason there is no module-level graph here. The seed dicts
     are copied on the way in so that two resolutions share no mutable structure
     at all, not merely no shared ``Node``.
     """
-    parameters = _read_record(frozen_crispr_address()).parameters
+    address = _resolve_address(address)
+    parameters = _read_record(address).parameters
     return build_pipeline_graph(
-        [dict(seed) for seed in FROZEN_CRISPR_SEEDS], parameters
+        [dict(seed) for seed in _read_request(address).seeds], parameters
     )
 
 
@@ -393,6 +508,23 @@ def _read_record_tool(arguments: dict) -> dict[str, Any] | list[Any]:
 app = Server("idiograph")
 
 
+#: The address selector, spelled ONCE and shared by every tool that takes one.
+#: All five resolve it through the same :func:`_resolve_address`, so a client
+#: reads one rule on five tools rather than five descriptions of one rule — and
+#: a served root that changes what "the default" means changes it everywhere at
+#: once. Copied into each schema (the SDK wants a plain dict per tool) rather
+#: than referenced, which is why it is built here instead of retyped there.
+_ADDRESS_ARGUMENT = {
+    "type": "string",
+    "description": (
+        "Content address of the record to resolve against. Defaults to the "
+        "sole record the served registry root holds; a root holding several "
+        "has no default and answers with an 'error' field naming that, as "
+        "does an address the root does not hold."
+    ),
+}
+
+
 @app.list_tools()
 async def list_tools() -> list[types.Tool]:
     return [
@@ -402,7 +534,8 @@ async def list_tools() -> list[types.Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "node_id": {"type": "string", "description": "The node ID to retrieve."}
+                    "node_id": {"type": "string", "description": "The node ID to retrieve."},
+                    "address": dict(_ADDRESS_ARGUMENT),
                 },
                 "required": ["node_id"],
             },
@@ -413,7 +546,8 @@ async def list_tools() -> list[types.Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "node_id": {"type": "string", "description": "The source node ID."}
+                    "node_id": {"type": "string", "description": "The source node ID."},
+                    "address": dict(_ADDRESS_ARGUMENT),
                 },
                 "required": ["node_id"],
             },
@@ -431,7 +565,8 @@ async def list_tools() -> list[types.Tool]:
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Optional list of node IDs to scope the summary. Omit for the full graph.",
-                    }
+                    },
+                    "address": dict(_ADDRESS_ARGUMENT),
                 },
                 "required": [],
             },
@@ -439,13 +574,17 @@ async def list_tools() -> list[types.Tool]:
         types.Tool(
             name="validate_graph",
             description="Check referential integrity of the graph. Returns valid (bool) and a list of errors.",
-            inputSchema={"type": "object", "properties": {}, "required": []},
+            inputSchema={
+                "type": "object",
+                "properties": {"address": dict(_ADDRESS_ARGUMENT)},
+                "required": [],
+            },
         ),
         types.Tool(
             name=RECORD_TOOL,
             description=(
-                "Read the packaged, content-addressed pipeline record the served "
-                "graph declares — execution STATE, with no execution trigger. "
+                "Read a content-addressed pipeline record the served graph "
+                "declares — execution STATE, with no execution trigger. "
                 "Read-only and offline. The record is far too large to return "
                 "whole, so every call is a bounded selection: 'shape' (the "
                 "default) gives the address, the resolved seeds, the parameters "
@@ -457,14 +596,7 @@ async def list_tools() -> list[types.Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "address": {
-                        "type": "string",
-                        "description": (
-                            "Content address of the record to read. Defaults to "
-                            "the packaged frozen CRISPR record. An address the "
-                            "registry does not hold returns an 'error' field."
-                        ),
-                    },
+                    "address": dict(_ADDRESS_ARGUMENT),
                     "select": {
                         "type": "string",
                         "enum": ["shape", "path", "node", "edge"],
@@ -519,35 +651,49 @@ async def list_tools() -> list[types.Tool]:
 async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     # Resolved per request, never held: the repo is the authority and nothing
     # served outlives the call that resolved it.
-    if name == "get_node":
-        node_id = arguments.get("node_id")
-        if not node_id:
-            raise ValueError("get_node requires 'node_id'")
-        node = get_node(resolve_graph(), node_id)
-        result = node.model_dump() if node else {"error": f"Node '{node_id}' not found."}
+    #
+    # The miss fence spans every branch, not just the record tool's. Since the
+    # declaration is resolved FROM a record (IDG-113 clause 5), every tool here
+    # can now be asked about an address the served root does not hold — and a
+    # well-formed question about something that is not there is data on this
+    # surface. Malformed arguments still raise, as they always have: `ValueError`
+    # is not a `_RecordMiss` and passes straight through, and so does the
+    # unknown-tool refusal below.
+    try:
+        if name == "get_node":
+            node_id = arguments.get("node_id")
+            if not node_id:
+                raise ValueError("get_node requires 'node_id'")
+            graph = resolve_graph(arguments.get("address"))
+            node = get_node(graph, node_id)
+            result = (
+                node.model_dump() if node else {"error": f"Node '{node_id}' not found."}
+            )
 
-    elif name == "get_edges_from":
-        node_id = arguments.get("node_id")
-        if not node_id:
-            raise ValueError("get_edges_from requires 'node_id'")
-        edges = get_edges_from(resolve_graph(), node_id)
-        result = [e.model_dump() for e in edges]
+        elif name == "get_edges_from":
+            node_id = arguments.get("node_id")
+            if not node_id:
+                raise ValueError("get_edges_from requires 'node_id'")
+            edges = get_edges_from(resolve_graph(arguments.get("address")), node_id)
+            result = [e.model_dump() for e in edges]
 
-    elif name == "summarize_intent":
-        node_ids = arguments.get("node_ids") or None
-        result = summarize_intent(resolve_graph(), node_ids)
+        elif name == "summarize_intent":
+            node_ids = arguments.get("node_ids") or None
+            result = summarize_intent(
+                resolve_graph(arguments.get("address")), node_ids
+            )
 
-    elif name == "validate_graph":
-        result = validate_integrity(resolve_graph())
+        elif name == "validate_graph":
+            result = validate_integrity(resolve_graph(arguments.get("address")))
 
-    elif name == RECORD_TOOL:
-        try:
+        elif name == RECORD_TOOL:
             result = _read_record_tool(arguments)
-        except _RecordMiss as miss:
-            result = {"error": str(miss)}
 
-    else:
-        raise ValueError(f"Unknown tool: {name}")
+        else:
+            raise ValueError(f"Unknown tool: {name}")
+
+    except _RecordMiss as miss:
+        result = {"error": str(miss)}
 
     return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
 
@@ -665,6 +811,43 @@ PROJECTION_RECORD_PATH = "/projection/record"
 #: browser gets from the generated HTML, not a second encoding of one object.
 _PROJECTION_MEDIA_TYPE = "application/json"
 
+#: The query parameter naming which record a projection is of. A QUERY PARAM and
+#: not a path segment, so that ONE route answers ONE path: the no-selector URL
+#: stays exactly the URL it was before a selector existed — byte-identical
+#: response, same route, nothing 307'd or shadowed — and the selector is the
+#: optional refinement it actually is. A `/projection/record/{address}` segment
+#: would have needed a second route to keep the bare path answering, which is two
+#: declarations of one subject.
+PROJECTION_ADDRESS_PARAM = "address"
+
+#: Status for a structured miss on a projection route. ONE code for every shape
+#: of miss the record route can report — malformed address, an address the root
+#: does not hold, a root with no sole record to default to, a record with no
+#: request sidecar — because they are one fact to a client: the URL you asked for
+#: names no served projection. The body says which, in the same `{"error": ...}`
+#: shape the record tool answers a miss with.
+_MISS_STATUS = 404
+
+#: Status for a selector a route does not take. Distinct from the miss above and
+#: deliberately: nothing was looked for and not found — the request itself is
+#: malformed, the same distinction the tool surface draws between `_RecordMiss`
+#: and `ValueError`.
+_BAD_SELECTOR_STATUS = 400
+
+
+def _error_response(message: str, status: int) -> Response:
+    """A structured refusal, in the `{"error": ...}` shape the tools already use.
+
+    Never a 500 and never a traceback: every refusal these routes can reach is a
+    fact about the request, not a fault in the process, and a client that gets
+    JSON back can act on it.
+    """
+    return Response(
+        json.dumps({"error": message}, ensure_ascii=False).encode("utf-8"),
+        status_code=status,
+        media_type=_PROJECTION_MEDIA_TYPE,
+    )
+
 
 def _projection_body(projection: dict[str, Any]) -> bytes:
     """One ``{meta, nodes, edges}`` contract, in the viewer's own serialization.
@@ -693,7 +876,7 @@ def _record_projection_body(address: str) -> bytes:
     return _projection_body(project_depth_provenance(_read_record(address)))
 
 
-async def _serve_graph_projection(_request: Request) -> Response:
+async def _serve_graph_projection(request: Request) -> Response:
     """GET the DECLARED pipeline graph's projection.
 
     THIS ROUTE READS NO RECORD. Its subject is a shape, not a run: the graph is
@@ -702,29 +885,59 @@ async def _serve_graph_projection(_request: Request) -> Response:
     param key NAMES and no values, and is therefore invariant to seeds and
     parameters (``test_the_projection_is_invariant_to_seeds_and_parameters`` in
     tests/apps/viewer/test_generate.py is what holds that). Resolving the subject
-    from the packaged record's parameters instead, as :func:`resolve_graph` must
-    for the tool surface, would make a picture that cannot depend on a run
-    require one in order to be drawn.
+    from a stored record's parameters instead, as :func:`resolve_graph` must for
+    the tool surface, would make a picture that cannot depend on a run require
+    one in order to be drawn.
+
+    AN ADDRESS IS REFUSED HERE, NOT IGNORED. Because the projection is invariant
+    to which record it was configured from, a selector accepted here would return
+    identical bytes for every value it was given — letting a caller believe they
+    had selected a subject they had not. That is the same false affordance the
+    viewer CLI refuses ``--registry-root``/``--address`` on for this same view,
+    and it is refused for the same reason rather than silently dropped.
 
     Not memoized, deliberately. A declaration is not a durable artifact with a
     content address to key on, and :func:`resolve_graph`'s rule holds here too:
     a fresh ``Graph`` per request shares no mutable structure with any other.
     """
+    if PROJECTION_ADDRESS_PARAM in request.query_params:
+        return _error_response(
+            f"'{PROJECTION_ADDRESS_PARAM}' applies only to "
+            f"{PROJECTION_RECORD_PATH}. The declared graph is read from the "
+            "pipeline's declaration, not from a stored run, and its projection "
+            "is invariant to which record configured it.",
+            _BAD_SELECTOR_STATUS,
+        )
     return Response(
         _projection_body(project_graph(declared_pipeline_graph())),
         media_type=_PROJECTION_MEDIA_TYPE,
     )
 
 
-async def _serve_record_projection(_request: Request) -> Response:
-    """GET the packaged frozen record's depth/provenance projection.
+async def _serve_record_projection(request: Request) -> Response:
+    """GET one stored record's depth/provenance projection.
 
-    One subject, reached through the address-verifying registry path every record
-    tool call takes. There is no selector: this route reads no query parameter,
-    so no client-supplied string reaches the registry from here at all.
+    WHICH record is the ``address`` query parameter, and an absent one is the
+    served root's sole record — the same rule, through the same
+    :func:`_resolve_address`, that every record tool call takes. So the property
+    this route has always had survives the selector arriving: no client-supplied
+    string reaches the registry except a validated content address. A string that
+    is not 64 lowercase hex characters never reaches the filesystem at all, and
+    one that is but names nothing the root holds is answered as a miss rather
+    than as a read.
+
+    A miss is answered structurally — :data:`_MISS_STATUS` and an ``{"error":
+    ...}`` body — never as a 500. That covers the multi-record root with no
+    selector, which has no default record and says so instead of picking one.
     """
+    try:
+        address = _resolve_address(
+            request.query_params.get(PROJECTION_ADDRESS_PARAM)
+        )
+    except _RecordMiss as miss:
+        return _error_response(str(miss), _MISS_STATUS)
     return Response(
-        _record_projection_body(frozen_crispr_address()),
+        _record_projection_body(address),
         media_type=_PROJECTION_MEDIA_TYPE,
     )
 
@@ -762,25 +975,38 @@ def build_http_app(manager: StreamableHTTPSessionManager) -> Starlette:
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 async def serve() -> None:
-    logger.info("Idiograph MCP server starting (stdio transport)")
+    logger.info(
+        "Idiograph MCP server starting (stdio transport), serving records from %s",
+        registry_root(),
+    )
     async with stdio_server() as (read_stream, write_stream):
         await app.run(read_stream, write_stream, app.create_initialization_options())
 
 
-def serve_http(host: str | None = None, port: int | None = None) -> None:
+def serve_http(
+    host: str | None = None,
+    port: int | None = None,
+    registry_root: Path | None = None,
+) -> None:
     """Serve the surface over streamable HTTP, blocking until the process stops.
 
     ``None`` for either bind component means the loopback default, so that the
     defaults live at :data:`DEFAULT_HTTP_HOST` / :data:`DEFAULT_HTTP_PORT` alone
     and the CLI does not carry a second copy of them.
+
+    ``registry_root`` is fixed ONCE here, before anything is mounted, and
+    ``None`` means the packaged demo registry — so a call that names no root
+    serves byte-for-byte what it served before this parameter existed.
     """
     # Imported here, not at module level, because uvicorn is needed only where a
     # socket is actually opened. The transport tests build the very same ASGI
     # app and drive it in-process, and nothing on that path binds anything.
     import uvicorn
 
+    served = set_registry_root(registry_root)
     host = DEFAULT_HTTP_HOST if host is None else host
     port = DEFAULT_HTTP_PORT if port is None else port
+    logger.info("Serving records from %s", served)
     logger.info(
         "Idiograph MCP server starting (streamable HTTP, stateless) at http://%s:%d%s/",
         host,
@@ -801,17 +1027,24 @@ def main(
     transport: str = TRANSPORT_STDIO,
     host: str | None = None,
     port: int | None = None,
+    registry_root: Path | None = None,
 ) -> None:
     """Run the served surface over one transport. THE DEFAULT IS STDIO.
 
     A no-argument call is exactly what it was before HTTP existed, which is the
     whole of the compatibility promise: a client that spawns this process and
     speaks over the pipe sees no change. HTTP is selected, never fallen into.
+
+    ``registry_root`` is a property of the SURFACE, not of a transport, so both
+    doors answer about the same records. It is fixed once, on the branch that
+    mounts — never before the transport name is checked, so a typo leaves the
+    process exactly as it found it. ``None`` is the packaged demo registry.
     """
     if transport == TRANSPORT_STDIO:
+        set_registry_root(registry_root)
         asyncio.run(serve())
     elif transport == TRANSPORT_HTTP:
-        serve_http(host, port)
+        serve_http(host, port, registry_root)
     else:
         raise ValueError(
             f"Unknown transport: {transport!r} — "
