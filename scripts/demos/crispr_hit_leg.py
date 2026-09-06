@@ -4,7 +4,7 @@
 # Idiograph — deterministic semantic graph execution for production AI pipelines.
 # https://github.com/idiograph/idiograph
 
-"""HIT leg — cross-process replay of the frozen CRISPR artifact (IDG-032).
+"""HIT leg — cross-process replay of a frozen artifact (IDG-032).
 
 The companion :mod:`crispr_freeze_trigger` demo proves record-replay in ONE
 process: it runs a MISS then a HIT against one durable registry it owns. This
@@ -25,9 +25,18 @@ same DURABLE registry, addressed only by content:
    reported finding, never a silent re-freeze. There is no file to shuttle: the
    artifact already sits at its address in the durable root.
 
-The parameters and seeds are IMPORTED from :mod:`crispr_freeze_trigger` — the
-module that produced the artifact — never re-typed. Any drift of one float or one
-string would move the content address and turn the call into a MISS.
+THE PARAMETERS AND SEEDS COME OFF THE RECORD, not out of a Python import
+(IDG-113 clause 5). The parameters are the record's own ``parameters`` block —
+the block its address was computed over — and the seeds are the request dicts on
+its ``<address>.request.json`` sidecar. That is what makes this script replay ANY
+record rather than the one corpus a `from crispr_freeze_trigger import SEEDS`
+could name: ``--address`` and ``--registry-root`` select which, and the run's own
+arguments are then read from the artifact itself. Nothing is re-typed, so nothing
+can drift — a re-typed float or string would move the content address and turn
+the call into a MISS.
+
+The CRISPR record stays the default for both selectors, so a bare invocation is
+exactly the demo it always was.
 
 The proof is ``hit_traversals == 0``: the cache short-circuited traversal on a
 name-match and replayed the stored, fully LLM-annotated graph. Zero Anthropic
@@ -53,8 +62,10 @@ Anthropic key it cannot use would be a false claim about its own boundary.
 Run it::
 
     uv run python scripts/demos/crispr_hit_leg.py
+    uv run python scripts/demos/crispr_hit_leg.py --address <hex> --registry-root DIR
 """
 
+import argparse
 import asyncio
 import os
 import sys
@@ -63,20 +74,17 @@ from pathlib import Path
 
 import httpx
 
-# Import the STANDARD and — per its own docstring — the thing to reuse. Deriving
-# the parameters and seeds from the module that produced the artifact is the
-# whole experiment: a re-typed literal that hashes differently fails as a MISS.
-# The durable-root helper and the measured-boundary text also live there (the
-# module of record) so this script cannot drift from them.
+# The instrumentation and the measured-boundary text live in the module of
+# record, so this script cannot drift from either. The SEEDS and _parameters()
+# imports are gone (IDG-113): the run's own arguments come off the record now,
+# not out of the module that happened to freeze one particular record.
 # crispr_freeze_trigger guards _main() behind __main__, so importing it is inert.
 from crispr_freeze_trigger import (
     OPENALEX_TIMEOUT_SECONDS,
-    SEEDS,
     RequestCounter,
     TraversalSpy,
     _boundary_statement,
     _durable_registry_root,
-    _parameters,
 )
 from dotenv import load_dotenv
 
@@ -84,12 +92,14 @@ from idiograph.core.logging_config import get_logger
 from idiograph.demo import REGISTRY_ROOT, frozen_crispr_address
 from idiograph.domains.arxiv import cache as cache_module
 from idiograph.domains.arxiv.cache import cached_run_arxiv_pipeline
-from idiograph.domains.arxiv.models import PipelineResult
+from idiograph.domains.arxiv.models import PipelineParameters, PipelineResult
 from idiograph.domains.arxiv.pipeline import resolve_seeds
 from idiograph.domains.arxiv.registry import (
     PipelineRegistry,
     address_of,
     content_address,
+    is_record,
+    sole_record_address,
 )
 
 _log = get_logger("demos.crispr_hit_leg")
@@ -99,19 +109,25 @@ _log = get_logger("demos.crispr_hit_leg")
 # name only these; anything else is a finding.
 _RESUPPLIED_FIELDS = {"seeds", "seed_failures"}
 
-def _warm_registry_root() -> tuple[Path, str]:
-    """Select the registry root the warm leg reads — XDG-FIRST, packaged registry
-    as FALLBACK — and a short label for which source won.
+def _warm_registry_root(
+    address: str | None = None, registry_root: Path | None = None
+) -> tuple[Path, str]:
+    """Select the registry root the warm leg reads, and a label for which source won.
 
-    When the operator's XDG durable root already holds the demo artifact (their own
-    cold->warm loop), use XDG unchanged so they replay THEIR freeze. Only when XDG
-    lacks it — the stranger who just cloned — fall through to the record packaged
-    under :data:`idiograph.demo.REGISTRY_ROOT`.
+    An operator-supplied ``registry_root`` wins outright — they named a root, so
+    there is nothing to select and no fallback to apply; selecting something else
+    would be the false affordance a flag that is quietly ignored always is.
 
-    Presence is keyed on the demo's ONE content address, not a blunt non-empty
-    glob: an operator whose XDG holds a DIFFERENT artifact is, for THIS demo, a
-    stranger and must fall through to the packaged record — a glob would instead
-    pin them to XDG and MISS. That address is now read off the packaged record's
+    Otherwise: XDG-FIRST, packaged registry as FALLBACK. When the operator's XDG
+    durable root already holds the artifact (their own cold->warm loop), use XDG
+    unchanged so they replay THEIR freeze. Only when XDG lacks it — the stranger
+    who just cloned — fall through to the record packaged under
+    :data:`idiograph.demo.REGISTRY_ROOT`.
+
+    Presence is keyed on ONE content address, not a blunt non-empty glob: an
+    operator whose XDG holds a DIFFERENT artifact is, for THIS replay, a stranger
+    and must fall through to the packaged record — a glob would instead pin them
+    to XDG and MISS. ``address`` defaults to the packaged record's, read off its
     own filename via ``frozen_crispr_address()`` rather than restated here, so it
     can no longer fall behind a re-freeze the way a hand-authored copy did.
 
@@ -121,14 +137,67 @@ def _warm_registry_root() -> tuple[Path, str]:
     (cf. residual fb93ee61).
 
     The redirect lives HERE, at the warm construction site, and NEVER in the shared
-    ``_durable_registry_root`` — that helper is shared with the COLD freeze, whose
+    ``durable_registry_root`` — that helper is shared with the COLD freeze, whose
     write target must stay XDG and must never land in the package tree.
     """
-    address = frozen_crispr_address()
+    if registry_root is not None:
+        return Path(registry_root), "operator-supplied --registry-root"
+    address = frozen_crispr_address() if address is None else address
     xdg_root = _durable_registry_root()
     if (xdg_root / f"{address}.json").exists():
         return xdg_root, "XDG durable root"
     return REGISTRY_ROOT, "packaged idiograph.demo registry (clone fallback)"
+
+
+def _run_arguments(argv: list[str] | None = None) -> argparse.Namespace:
+    """WHICH record to replay: an address and a root, both defaulting to CRISPR.
+
+    Two selectors and nothing else. Everything the run itself needs — the seeds
+    and the parameters — is read off the record they select rather than passed
+    here, which is what keeps a re-typed argument from ever moving the address.
+    Stdlib ``argparse``, matching the viewer's own entry point and honouring the
+    no-new-dependency constraint.
+    """
+    parser = argparse.ArgumentParser(
+        prog="python scripts/demos/crispr_hit_leg.py",
+        description="Replay a frozen, content-addressed pipeline record out of a "
+                    "durable registry. Reads; never writes, never re-freezes.",
+    )
+    parser.add_argument(
+        "--address",
+        default=None,
+        help="Content address of the record to replay (default: the packaged "
+             "frozen CRISPR record's).",
+    )
+    parser.add_argument(
+        "--registry-root",
+        type=Path,
+        default=None,
+        help="Registry root to replay from (default: the XDG durable root when "
+             "it holds this address, otherwise the packaged demo registry).",
+    )
+    return parser.parse_args(argv)
+
+
+def _replay_address(address: str | None, registry_root: Path | None, root: Path) -> str:
+    """WHICH record in ``root`` to replay, when the operator named no address.
+
+    An explicit ``--address`` is used as given. Otherwise the default follows
+    what the operator DID name: a bare invocation replays the packaged CRISPR
+    record, which is the demo this script has always been; an invocation that
+    named a ``--registry-root`` replays that root's sole record, because someone
+    who pointed this at their own registry meant the record in it, and looking
+    for the CRISPR address there would report "absent" about a root that holds
+    exactly one perfectly good artifact.
+
+    ``sole_record_address`` raises on a root holding several — correctly: a
+    multi-record root has no default, and the operator has to say which.
+    """
+    if address is not None:
+        return address
+    if registry_root is None:
+        return frozen_crispr_address()
+    return sole_record_address(root)
 
 
 def _openalex_key() -> str:
@@ -170,14 +239,16 @@ def _field_diff(
     return differing, content_equal
 
 
-async def _diagnose_miss(openalex_key: str) -> str:
+async def _diagnose_miss(
+    openalex_key: str, seeds: list[dict], parameters: PipelineParameters
+) -> str:
     """A miss means no on-disk artifact addresses to the live-computed address.
     Recompute the address the honest way — resolve, then content_address — for the
     STOP report, so the finding names the address that actually moved.
     """
     async with httpx.AsyncClient(timeout=OPENALEX_TIMEOUT_SECONDS) as http_client:
         node0 = await resolve_seeds(
-            {"seeds": SEEDS},
+            {"seeds": seeds},
             {},
             resources={
                 "http_client": http_client,
@@ -185,30 +256,28 @@ async def _diagnose_miss(openalex_key: str) -> str:
             },
         )
     resolved = node0["seeds"]
-    return content_address([r.node_id for r in resolved], _parameters())
+    return content_address([r.node_id for r in resolved], parameters)
 
 
-async def _main() -> int:
+async def _main(argv: list[str] | None = None) -> int:
+    args = _run_arguments(argv)
     openalex_key = _openalex_key()
-    parameters = _parameters()
-    # XDG-first, packaged-registry fallback. The COLD path's shared
-    # _durable_registry_root() is left untouched (still XDG-writing); this is the
-    # ONLY redirect, and it happens at construction, not in the shared helper.
-    registry_root, registry_source = _warm_registry_root()
+    # XDG-first, packaged-registry fallback, unless the operator named a root.
+    # The COLD path's shared durable_registry_root() is left untouched (still
+    # XDG-writing); this is the ONLY redirect, and it happens at construction.
+    registry_root, registry_source = _warm_registry_root(
+        args.address, args.registry_root
+    )
     registry = PipelineRegistry(registry_root)
 
     print()
     print("=" * 72)
-    print("  IDIOGRAPH — HIT LEG  (cross-process replay of the frozen artifact)")
+    print("  IDIOGRAPH — HIT LEG  (cross-process replay of a frozen artifact)")
     print("  A SECOND process reads a FIRST process's artifact from a DURABLE")
     print("  registry outside /tmp. Traversal must never be entered.")
     print("=" * 72)
     print()
     print("  entry point   : cached_run_arxiv_pipeline  (the real cache.py)")
-    print(f"  seeds         : {SEEDS[0]['doi']}  (Doudna/Charpentier 2012)")
-    print(f"                  {SEEDS[1]['doi']}  (Zhang 2013)")
-    print("  parameters    : imported from crispr_freeze_trigger._parameters()")
-    print(f"  prompt hash   : {parameters.llm.prompt_template_hash[:16]}…  (derived)")
     print(f"  registry root : {registry_root}")
     print(f"                  ({registry_source})")
     print()
@@ -223,8 +292,12 @@ async def _main() -> int:
     # the artifact — which should not happen, since the record ships inside the
     # package (a stranger clone and an installed wheel both carry it), so this now
     # flags a broken checkout or install, not a never-frozen operator.
+    #
+    # RECORDS, not files: `is_record` excludes the derivation-baseline and request
+    # sidecars sitting beside each record, which a bare `*.json` glob would print
+    # as artifacts and count as replayable.
     present = (
-        sorted(p.name for p in registry_root.glob("*.json"))
+        sorted(p.name for p in registry_root.glob("*.json") if is_record(p))
         if registry_root.exists()
         else []
     )
@@ -254,6 +327,64 @@ async def _main() -> int:
     print(f"  registry holds: {present}")
     print()
 
+    # ---- The run's own arguments, read off the record it will replay -------
+    # NOT imported from the module that froze one particular corpus. The
+    # parameters are the block the record's address was computed over, and the
+    # seeds are the request dicts on its sidecar — so this script's arguments are
+    # BY CONSTRUCTION the arguments that produced the artifact, for any record,
+    # and there is no literal anywhere that could drift and turn the call into a
+    # MISS. All of it is a local file read: no resolve, no network.
+    address = _replay_address(args.address, args.registry_root, registry_root)
+    if f"{address}.json" not in present:
+        print("-" * 72)
+        print("  NO SUCH RECORD — nothing to replay at that address.")
+        print("-" * 72)
+        print(f"  address        : {address}")
+        print(f"  registry root  : {registry_root}")
+        print(f"  registry holds : {present}")
+        print()
+        print("  This script REPLAYS a record; it does not create one, and it will")
+        print("  not enter the pipeline just to discover the record is absent.")
+        print("=" * 72)
+        print()
+        return 3
+
+    stored = registry.read(address)
+    parameters = stored.parameters
+    request = registry.read_request(address)
+    if request is None:
+        print("-" * 72)
+        print("  NO REQUEST — the record does not say what it was asked for.")
+        print("-" * 72)
+        print(f"  address       : {address}")
+        print(f"  expected file : {registry.request_path_for(address)}")
+        print()
+        print("  The seeds a replay must pass are the REQUEST dicts Node 0 took, and")
+        print("  the record holds only the node_ids they resolved to. Without the")
+        print("  request sidecar there is no honest way to reconstruct them, and")
+        print("  substituting some other run's seeds would silently replay the wrong")
+        print("  corpus. Records frozen before IDG-113 carry no request; re-run the")
+        print("  freeze that produced this one through `idiograph freeze` to attach")
+        print("  one, or pass --address for a record that has it.")
+        print("=" * 72)
+        print()
+        return 4
+
+    seeds = request.seeds
+    print(f"  address       : {address}")
+    print(f"  label         : {request.label}")
+    print(f"  seeds         : {seeds}")
+    print("                  (from the record's own request sidecar)")
+    print("  parameters    : from the record's own parameters block")
+    if parameters.llm is not None:
+        print(f"  prompt hash   : "
+              f"{parameters.llm.prompt_template_hash[:16]}…  (derived)")
+    else:
+        # An LLM-free record replays too — the tripwire below simply has nothing
+        # to trip on, since there is no Node 5.5 guard to reach.
+        print("  llm           : none (this record was frozen LLM-free)")
+    print()
+
     # ---- HIT leg: same params, NO anthropic client ------------------------
     traversal_spy = TraversalSpy()
     openalex_calls = RequestCounter()
@@ -274,7 +405,7 @@ async def _main() -> int:
         ) as http_client:
             try:
                 hit = await cached_run_arxiv_pipeline(
-                    SEEDS,
+                    seeds,
                     parameters,
                     client=http_client,
                     api_key=openalex_key,
@@ -299,7 +430,7 @@ async def _main() -> int:
     # different id than at capture). Report expected-vs-computed and STOP; never
     # re-freeze — that would cost $2 and destroy the evidence.
     if guard_raised or hit_traversals > 0:
-        computed = await _diagnose_miss(openalex_key)
+        computed = await _diagnose_miss(openalex_key, seeds, parameters)
         print(f"  traversal entered : {hit_traversals}")
         print()
         print("=" * 72)
@@ -319,12 +450,21 @@ async def _main() -> int:
         print()
         return 2
 
-    # ---- HIT confirmed: read the on-disk bundle it replayed ---------------
+    # ---- HIT confirmed: the on-disk bundle it replayed --------------------
     hit_address = address_of(hit)
-    # registry.read validates that the on-disk file addresses to its own filename
-    # — the content-addressed store returning exactly what its key names. A
-    # mismatch here is a FINDING (corrupt/renamed artifact), so let it propagate.
-    stored = registry.read(hit_address)
+    # `stored` is the bundle already read above, at `address`, through
+    # registry.read — which validates that the on-disk file addresses to its own
+    # filename, the content-addressed store returning exactly what its key names.
+    # A hit can only have landed on the address the live resolution computed, so
+    # a disagreement here is a FINDING (corrupt or renamed artifact) rather than
+    # an expected branch, and it is asserted rather than papered over with a
+    # second read of 9.3 MB.
+    if hit_address != address:
+        raise AssertionError(
+            f"the HIT returned a result addressing to {hit_address} but the "
+            f"record read from disk was {address} — the store returned "
+            "something its key does not name"
+        )
 
     print(f"  traversal entered : {hit_traversals}")
     print("  Anthropic calls   : 0  (structural — no client exists to draw)")
