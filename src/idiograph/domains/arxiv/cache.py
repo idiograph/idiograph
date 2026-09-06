@@ -125,6 +125,27 @@ the MISS returns, and every failure the manifest machinery can reach costs the
 record its baseline and nothing else. A record with no baseline is exactly the
 no-op case the gate already handles, so a failed attachment degrades to the
 behaviour that preceded this channel rather than to a broken write.
+
+Request attachment on BOTH gates (IDG-113 clause 3)
+--------------------------------------------------
+``request_label`` names what this call was ASKED for, and supplying it attaches
+``<address>.request.json`` beside the record — the request seeds this function
+already received, plus that label. The MISS leg hands it to ``registry.write``
+and the HIT leg calls ``registry.write_request`` directly, because BOTH legs
+know a request the record does not: the address is a function of the RESOLVED
+seeds, so a hit reached the record through a request the record cannot state.
+
+It is deliberately NOT fenced, and that is the one place this channel parts
+company with the derivation baseline above. The baseline is an observation and
+must never break the thing it observes; the request is a CLAIM about what a run
+was for, and its create-or-equal policy (``registry.write_request``) exists
+precisely so that two different claims on one address raise rather than
+overwrite. Swallowing that would leave the second claim silently discarded,
+which is the failure the policy was written to make impossible.
+
+``request_label`` defaults to ``None``, and a call that names no label writes no
+sidecar at all — every existing caller of this function persists exactly what it
+always did.
 """
 
 import json
@@ -151,7 +172,11 @@ from idiograph.domains.arxiv.models import (
     SeedResolutionFailure,
 )
 from idiograph.domains.arxiv.pipeline import resolve_seeds, run_traversal
-from idiograph.domains.arxiv.registry import PipelineRegistry, content_address
+from idiograph.domains.arxiv.registry import (
+    PipelineRegistry,
+    RecordRequest,
+    content_address,
+)
 
 _log = get_logger("arxiv.cache")
 
@@ -384,6 +409,7 @@ async def cached_run_arxiv_pipeline(
     registry: PipelineRegistry,
     anthropic_client: AsyncAnthropic | None = None,
     mismatch_ledger_path: Path = DEFAULT_MISMATCH_LEDGER_PATH,
+    request_label: str | None = None,
 ) -> PipelineResult:
     """Read-through cache over ``run_arxiv_pipeline``'s traversal core.
 
@@ -434,6 +460,14 @@ async def cached_run_arxiv_pipeline(
     observation — it can fail, the MISS cannot — so a record whose baseline could
     not be written is returned and persisted regardless, simply carrying no
     baseline, which the HIT gate reads as a no-op rather than as drift.
+
+    ``request_label`` attaches ``<address>.request.json`` — the ``seeds`` argument
+    above verbatim plus that label — on EITHER leg (IDG-113 clause 3; see the
+    module docstring). Only the label is taken, never a whole request payload: the
+    sidecar's seeds are this call's own ``seeds`` by construction, so there is no
+    shape in which the stored request can disagree with the request that was made.
+    Unfenced, unlike the baseline: its create-or-equal policy raising on a second,
+    different request for one address is the mechanism, not a failure of it.
     """
     node0 = await resolve_seeds(
         {"seeds": seeds},
@@ -445,10 +479,21 @@ async def cached_run_arxiv_pipeline(
     address = content_address(
         [record.node_id for record in resolved], parameters
     )
+    request = (
+        None if request_label is None
+        else RecordRequest(label=request_label, seeds=seeds)
+    )
 
     if registry.path_for(address).exists():
         _log.info("Cache HIT for %s — skipping traversal", address)
         stored = registry.read(address)
+        # BEFORE the observation and before the serve, because unlike everything
+        # else on this leg it may legitimately stop the call: a second, different
+        # request for one address is the collision create-or-equal exists to
+        # surface, and surfacing it after handing back a result would surface it
+        # to nobody.
+        if request is not None:
+            registry.write_request(address, request)
         # Observation only, and AFTER the artifact is in hand: the serve does not
         # depend on it, is not gated by it, and is not altered by it.
         _observe_derivation_mismatch(
@@ -470,7 +515,7 @@ async def cached_run_arxiv_pipeline(
         anthropic_client=anthropic_client,
     )
     result = _resupply_request_derived(result, resolved, seed_failures)
-    registry.write(result)
+    registry.write(result, request=request)
     # AFTER the record is persisted, and deliberately: the baseline describes a
     # record, so there must be a record for it to describe. The attachment is
     # fenced and cannot alter what is returned below.

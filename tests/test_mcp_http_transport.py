@@ -22,6 +22,7 @@
 import asyncio
 import contextlib
 import json
+import sys
 from collections.abc import AsyncIterator, Callable
 from fnmatch import fnmatch
 from pathlib import Path
@@ -33,7 +34,7 @@ from mcp.client.streamable_http import streamable_http_client
 from typer.testing import CliRunner
 
 from idiograph import mcp_server
-from idiograph.demo import frozen_crispr_address
+from idiograph.demo import REGISTRY_ROOT, frozen_crispr_address
 from idiograph.domains.arxiv import pipeline_graph as pg
 from idiograph.main import app as cli_app
 from idiograph.mcp_server import RECORD_TOOL, call_tool
@@ -129,6 +130,15 @@ FIVE_CALLS = [
     (RECORD_TOOL, {}),
 ]
 
+# The same five, each naming the address its default resolves to. Under IDG-113
+# every tool on the surface takes an `address`, so the transport has to carry it
+# on all five — and naming the default must be indistinguishable from omitting
+# it, or the selector is a second code path rather than a refinement.
+FIVE_ADDRESSED_CALLS = [
+    (name, arguments | {"address": frozen_crispr_address()})
+    for name, arguments in FIVE_CALLS
+]
+
 
 # ── The same surface, reached over HTTP ───────────────────────────────────────
 
@@ -188,6 +198,54 @@ def test_read_record_over_http_is_the_shape_selection() -> None:
     shape = http_call(RECORD_TOOL)
     assert shape["address"] == frozen_crispr_address()
     assert shape["select"] == "shape"
+
+
+# ── The address selector, on every tool, over the transport ───────────────────
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments"), FIVE_ADDRESSED_CALLS, ids=lambda a: str(a)[:24]
+)
+def test_naming_the_default_address_answers_identically(
+    name: str, arguments: dict
+) -> None:
+    """Every tool takes an `address`, and naming the default changes nothing.
+
+    Asserted as equality against direct dispatch with the SAME arguments, which
+    keeps this a claim about the transport, and against the un-addressed call,
+    which is the claim about the selector: on a single-record root the default IS
+    that record, so the two spellings are one request.
+    """
+    unaddressed = {key: value for key, value in arguments.items() if key != "address"}
+
+    assert http_call(name, arguments) == direct_call(name, arguments)
+    assert http_call(name, arguments) == direct_call(name, unaddressed)
+
+
+@pytest.mark.parametrize(
+    "name", ["get_node", "get_edges_from", "summarize_intent", "validate_graph"]
+)
+def test_a_graph_tool_reports_an_unheld_address_as_data(name: str) -> None:
+    """A miss is DATA on every tool, not only on the record tool.
+
+    Since the declaration is resolved FROM a record, the four graph tools can now
+    be asked about an address the served root does not hold — a well-formed
+    question about something that is not there. Over a transport that must come
+    back as an `{"error": ...}` result, not as a protocol fault.
+    """
+    absent = "9" * 64
+    answer = http_call(name, {"node_id": pg.RESOLVE, "address": absent})
+
+    assert "error" in answer
+    assert absent in answer["error"]
+
+
+def test_a_malformed_address_is_refused_without_touching_the_registry() -> None:
+    """No client-supplied string reaches the registry except a validated address."""
+    answer = http_call("validate_graph", {"address": "../../etc/passwd"})
+
+    assert "error" in answer
+    assert "content address" in answer["error"]
 
 
 @pytest.mark.parametrize("removed", ["update_node", "execute_graph"])
@@ -267,8 +325,15 @@ def select_transport(argv: list[str]) -> tuple[dict, int]:
     """
     selected: dict = {}
 
-    def record(transport: str, host: str | None, port: int | None) -> None:
-        selected.update(transport=transport, host=host, port=port)
+    def record(
+        transport: str,
+        host: str | None,
+        port: int | None,
+        registry_root: Path | None,
+    ) -> None:
+        selected.update(
+            transport=transport, host=host, port=port, registry_root=registry_root
+        )
 
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(mcp_server, "main", record)
@@ -281,7 +346,8 @@ def test_serve_with_no_arguments_selects_stdio() -> None:
 
     Any client that spawns this process and speaks over the pipe must see no
     change at all from HTTP existing, so the default is asserted here rather
-    than left to the option declaration.
+    than left to the option declaration. `registry_root` joins the same promise:
+    None, so the surface resolves the packaged root it always did.
     """
     selected, exit_code = select_transport([])
     assert exit_code == 0
@@ -289,6 +355,7 @@ def test_serve_with_no_arguments_selects_stdio() -> None:
         "transport": mcp_server.TRANSPORT_STDIO,
         "host": None,
         "port": None,
+        "registry_root": None,
     }
 
 
@@ -301,6 +368,7 @@ def test_serve_selects_http_and_passes_the_bind_through() -> None:
         "transport": mcp_server.TRANSPORT_HTTP,
         "host": "127.0.0.1",
         "port": 9999,
+        "registry_root": None,
     }
 
 
@@ -312,7 +380,53 @@ def test_serve_http_without_a_bind_leaves_the_defaults_to_mcp_server() -> None:
         "transport": mcp_server.TRANSPORT_HTTP,
         "host": None,
         "port": None,
+        "registry_root": None,
     }
+
+
+def test_serve_http_fixes_the_registry_root_before_binding(tmp_path: Path) -> None:
+    """`serve_http` runs to the bind with the root set, and the app built.
+
+    Everything before `uvicorn.run` is reached here — the root is fixed, the
+    startup lines are logged, and the ASGI app is composed — with only the socket
+    replaced. That span is otherwise untested by construction, since every other
+    test in this file builds the app itself and never enters `serve_http` at all,
+    and it is exactly where a name that shadows `registry_root` would raise on
+    the way up.
+    """
+    captured: dict = {}
+
+    class _StubUvicorn:
+        @staticmethod
+        def run(app, **kwargs):
+            captured["app"] = app
+            captured["kwargs"] = kwargs
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setitem(sys.modules, "uvicorn", _StubUvicorn)
+        try:
+            mcp_server.serve_http(registry_root=tmp_path)
+            served = mcp_server.registry_root()
+        finally:
+            mcp_server.set_registry_root(None)
+
+    assert served == tmp_path
+    assert captured["kwargs"]["host"] == mcp_server.DEFAULT_HTTP_HOST
+    assert captured["kwargs"]["port"] == mcp_server.DEFAULT_HTTP_PORT
+    assert mcp_server.registry_root() == REGISTRY_ROOT
+
+
+def test_serve_passes_the_registry_root_through_as_a_path(tmp_path: Path) -> None:
+    """`--registry-root` reaches `mcp_server.main` as a `Path`, on either transport.
+
+    The CLI takes it as a string (the idiom `validate(path: str)` already uses)
+    and the surface takes a `Path`, so the conversion is asserted here rather
+    than left to whichever side happens to call `Path()` on it.
+    """
+    selected, exit_code = select_transport(["--registry-root", str(tmp_path)])
+    assert exit_code == 0
+    assert selected["registry_root"] == tmp_path
+    assert isinstance(selected["registry_root"], Path)
 
 
 def test_serve_rejects_an_unknown_transport() -> None:

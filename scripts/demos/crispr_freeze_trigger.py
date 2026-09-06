@@ -51,7 +51,6 @@ import json
 import os
 import sys
 from collections import Counter
-from pathlib import Path
 
 import httpx
 from anthropic import AsyncAnthropic
@@ -60,10 +59,11 @@ from dotenv import load_dotenv
 from idiograph.core.logging_config import get_logger
 
 # The seed set moved into the package (IDG-109): it is one of the demo run's own
-# arguments, and the served MCP surface needs it too. Imported under the name
-# this script has always used, so `crispr_hit_leg`'s `from crispr_freeze_trigger
-# import SEEDS` — deriving the seeds from the module that produced the artifact,
-# which is that script's whole experiment — keeps working unchanged.
+# arguments, authored in the one module that knows what this exhibit was asked
+# for. This script is now its ONLY importer — under IDG-113 the served surface and
+# the HIT-leg demo both read the record's own `<address>.request.json` sidecar
+# instead, because a packaged literal cannot speak for a record the package never
+# wrote. Imported under the name this script has always used.
 from idiograph.demo import FROZEN_CRISPR_SEEDS as SEEDS
 from idiograph.domains.arxiv import cache as cache_module
 from idiograph.domains.arxiv.cache import cached_run_arxiv_pipeline
@@ -75,10 +75,21 @@ from idiograph.domains.arxiv.models import (
     PipelineResult,
 )
 from idiograph.domains.arxiv.pipeline import resolve_seeds
+
+# `durable_registry_root` moved into package code (IDG-113): the `freeze` CLI verb
+# and both demo scripts now name the same directory, and a durable path spelled in
+# three places is a path two of them can fall behind. It is aliased to the name
+# this script has always exported, so `crispr_hit_leg`'s
+# `from crispr_freeze_trigger import _durable_registry_root` keeps working and the
+# one definition still lives on the side the import direction points at.
 from idiograph.domains.arxiv.registry import (
     PipelineRegistry,
     address_of,
     content_address,
+    is_record,
+)
+from idiograph.domains.arxiv.registry import (
+    durable_registry_root as _durable_registry_root,
 )
 from idiograph.domains.arxiv.relationship_annotation import prompt_template_hash
 
@@ -221,24 +232,6 @@ def _parameters() -> PipelineParameters:
             max_tokens=512,
         ),
     )
-
-
-def _durable_registry_root() -> Path:
-    """A registry root OUTSIDE /tmp that survives a reboot (XDG data home).
-
-    /tmp is cleaned on reboot and the frozen artifact cost real money, so the
-    registry must outlive this session and be findable by any later process.
-    Falls back to ``~/.local/share`` when XDG_DATA_HOME is unset — the standard
-    user-data location on this platform.
-
-    This lives HERE, not in :mod:`crispr_hit_leg`, because that module imports
-    from this one (the module of record): the single definition belongs on the
-    side the import direction already points at.
-    """
-    base = os.environ.get("XDG_DATA_HOME", "").strip() or str(
-        Path.home() / ".local" / "share"
-    )
-    return Path(base) / "idiograph" / "pipeline-registry"
 
 
 def _boundary_statement() -> list[str]:
@@ -488,7 +481,15 @@ async def _main() -> int:
     hit_address = address_of(hit)
     miss_bytes = _canonical(miss)
     hit_bytes = _canonical(hit)
-    artifacts = sorted(p.name for p in registry_root.glob("*.json"))
+    # RECORDS, not files. The MISS leg attaches a derivation baseline
+    # (`<address>.manifest.json`) and now a request (`<address>.request.json`)
+    # beside the record it wrote, and a bare `*.json` glob counted those as
+    # artifacts — so the "exactly one artifact" check below reported three and
+    # failed on a freeze that had gone perfectly. `is_record` is the registry's
+    # own predicate for the same question `sole_record_address` asks.
+    artifacts = sorted(
+        p.name for p in registry_root.glob("*.json") if is_record(p)
+    )
 
     print("=" * 72)
     print("  EVIDENCE")

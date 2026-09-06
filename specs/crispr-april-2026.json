@@ -1,0 +1,48 @@
+{
+  "label": "CRISPR April 2026 exhibit",
+  "parameters": {
+    "backward": {
+      "lambda_decay": 0.1,
+      "n_backward": 3200
+    },
+    "co_citation": {
+      "max_edges": null,
+      "min_strength": 2
+    },
+    "communities": {
+      "community_count_max": 40,
+      "community_count_min": 5,
+      "infomap_seed": 42,
+      "infomap_teleportation": 0.15,
+      "infomap_trials": 10,
+      "leiden_seed": 42
+    },
+    "current_year": 2026,
+    "forward": {
+      "alpha": 1.0,
+      "beta": 1.0,
+      "lambda_decay": 0.1,
+      "n_forward": 4,
+      "sort": "cited_by_count:desc"
+    },
+    "llm": {
+      "max_tokens": 512,
+      "model_id": "claude-haiku-4-5-20251001",
+      "prompt_template_hash": "e2e5e5b14c1cc00839cbc5f1397d8e7a1f6442e7163972422332efd6f24228e5",
+      "temperature": 0.0
+    },
+    "pagerank": {
+      "damping": 0.85
+    },
+    "parse_contract_hash": "38fdc3f8023d1cc8436e17adaf5410a733bc8c322e0db6dd4f4f63b015909abc",
+    "traversal_contract_hash": "504881af395cb23f0664ecfb1f2d41028e52616cba930dc92b967f9dca367f1a"
+  },
+  "seeds": [
+    {
+      "doi": "10.1126/science.1225829"
+    },
+    {
+      "doi": "10.1126/science.1231143"
+    }
+  ]
+}
