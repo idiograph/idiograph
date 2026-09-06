@@ -28,14 +28,25 @@ cannot drift apart. The single deliberate exception is the authored literal in
 be an independent second opinion — a test that derived the address from here
 would only be agreeing with itself.
 
-It is also the one place that knows what the run was ASKED for.
+It is also the one place that AUTHORS what the run was asked for.
 :data:`FROZEN_CRISPR_SEEDS` holds the two request dicts the freeze was triggered
 with — the un-resolved input, as distinct from the record's ``seeds`` field,
 which holds the node_ids Node 0 resolved them to. They live here, not in the
-demo script that used to own them, because the package now has two importers of
-the demo run's own arguments (the freeze script and the served MCP surface) and
-a second literal of a value that rides into a content address is a drift hazard
-of exactly the kind :func:`frozen_crispr_address` exists to close.
+demo script that used to own them, because the freeze script needs the demo run's
+own arguments and a second literal of a value that rides into a content address
+is a drift hazard of exactly the kind :func:`frozen_crispr_address` exists to
+close.
+
+WHAT THE SERVED SURFACE READS IS THE SIDECAR, NOT THIS LITERAL (IDG-113 clause 3).
+``registry/<address>.request.json`` carries the same two request dicts plus a
+label, committed beside the record they produced, and that file is what
+``mcp_server`` and the HIT-leg demo resolve a run's request from. The distinction
+is the whole point of the sidecar: a server pointed at an operator's OWN registry
+root has no packaged literal to fall back on, and a fallback to these seeds would
+answer for a record they did not produce. The literal survives as the freeze
+script's authored input and as the independent second opinion the packaged
+sidecar is checked against — ``tests/domains/arxiv/test_request_sidecar.py``, the
+idiom ``test_freeze_trigger_address.py`` already uses for the address itself.
 """
 
 from pathlib import Path
