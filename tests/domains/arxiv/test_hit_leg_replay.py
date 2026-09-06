@@ -26,9 +26,14 @@ the demo prints are asserted:
 and is preserved here: that combination is the exact one ``run_traversal`` raises
 on, so a leg that reached traversal would CRASH rather than quietly re-derive.
 
-OFFLINE. The OpenAlex calls are answered by an ``httpx.MockTransport`` returning
-the two seed works, counted by the demo's own ``RequestCounter``. No credential,
-no network, and the packaged registry is read but never written.
+OFFLINE, AND CREDENTIAL-FREE ON ANY SEAT. The OpenAlex calls are answered by an
+``httpx.MockTransport`` returning the two seed works, counted by the demo's own
+``RequestCounter``, and the packaged registry is read but never written. The
+tests that enter ``_main`` stub ``_openalex_key`` (the :func:`keyless` fixture),
+because that helper runs ``load_dotenv()`` and raises ``SystemExit`` on a seat
+with no key — so without the stub they would pass here and fail on a clean
+checkout, which is a green suite resting on a credential no path in this file
+ever spends.
 """
 
 import asyncio
@@ -324,7 +329,28 @@ def test_the_selectors_are_the_only_arguments(demo) -> None:
     assert set(vars(args)) == {"address", "registry_root"}
 
 
-def test_the_demo_reports_a_record_with_no_request(demo, tmp_path: Path) -> None:
+@pytest.fixture
+def keyless(demo, monkeypatch: pytest.MonkeyPatch):
+    """Stub the OpenAlex credential check for the ``_main`` reports below.
+
+    ``_main`` calls ``_openalex_key()`` before it looks at a single file, and that
+    helper runs ``load_dotenv()`` and raises ``SystemExit`` when no key is found.
+    So without this stub these tests pass ONLY on a seat whose ``.env`` happens to
+    hold a real key, and fail at the precondition on any seat that does not — a
+    green suite that depends on a credential none of these paths ever spends.
+
+    The stub is honest about what it removes. Every test using it asserts a report
+    reached from LOCAL DISK ALONE — a missing record, an address the root does not
+    hold, a record with no request sidecar — all of which ``_main`` decides before
+    it resolves anything. The key is never used, so a fake one cannot make a
+    passing test lie; it only stops the precondition from standing in front of the
+    behaviour under test.
+    """
+    monkeypatch.setattr(demo, "_openalex_key", lambda: "test-key")
+    return demo
+
+
+def test_the_demo_reports_a_record_with_no_request(keyless, tmp_path: Path) -> None:
     """A record that cannot say what it was asked for stops the replay.
 
     Not a fallback to some other run's seeds: that substitution would be
@@ -338,27 +364,27 @@ def test_the_demo_reports_a_record_with_no_request(demo, tmp_path: Path) -> None
     )
 
     exit_code = asyncio.run(
-        demo._main(["--registry-root", str(tmp_path), "--address", address])
+        keyless._main(["--registry-root", str(tmp_path), "--address", address])
     )
 
     assert exit_code == 4
 
 
 def test_the_demo_reports_an_address_the_root_does_not_hold(
-    demo, tmp_path: Path
+    keyless, tmp_path: Path
 ) -> None:
     """Named but absent: reported from disk, without entering the pipeline."""
     address = frozen_crispr_address()
     (tmp_path / f"{address}.json").write_text("{}", encoding="utf-8")
 
     exit_code = asyncio.run(
-        demo._main(["--registry-root", str(tmp_path), "--address", "d" * 64])
+        keyless._main(["--registry-root", str(tmp_path), "--address", "d" * 64])
     )
 
     assert exit_code == 3
 
 
-def test_the_demo_reports_an_empty_root(demo, tmp_path: Path) -> None:
-    exit_code = asyncio.run(demo._main(["--registry-root", str(tmp_path)]))
+def test_the_demo_reports_an_empty_root(keyless, tmp_path: Path) -> None:
+    exit_code = asyncio.run(keyless._main(["--registry-root", str(tmp_path)]))
 
     assert exit_code == 3
