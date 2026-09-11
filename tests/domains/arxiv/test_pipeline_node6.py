@@ -1,10 +1,13 @@
 # Copyright 2026 Ryan Smith
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
+
 import pytest
 
 from idiograph.domains.arxiv.models import (
     CitationEdge,
+    DepthMetrics,
     PaperRecord,
 )
 from idiograph.domains.arxiv.pipeline import (
@@ -13,8 +16,35 @@ from idiograph.domains.arxiv.pipeline import (
     compute_pagerank,
 )
 
-
 # ── Helpers ─────────────────────────────────────────────────────────────────
+
+
+def _clean(nodes: list[PaperRecord], edges: list[CitationEdge]) -> dict:
+    """Call the bound ``clean_cycles`` handler from a sync test.
+
+    Marshals into the stage's declared contract — one key per declared input
+    port, empty ``params`` — and returns the declared output ports.
+    `asyncio.run` is the repo's async-from-sync convention (no async plugin).
+    """
+    return asyncio.run(clean_cycles({}, {"nodes": nodes, "cites": edges}))
+
+
+def _depth(
+    nodes: list[PaperRecord],
+    edges: list[CitationEdge],
+) -> dict[str, DepthMetrics]:
+    """Call the bound ``compute_depth_metrics`` handler from a sync test.
+
+    The stage is now an async port-bound handler, so these depth tests marshal
+    into its declared contract — one key per declared input port, empty
+    ``params`` (the stage takes no configuration) — and unwrap the declared
+    ``depth_metrics`` port, so the assertions below keep reading the same
+    ``{node_id: DepthMetrics}`` map they always have. `asyncio.run` is the
+    repo's async-from-sync convention (no async plugin).
+    """
+    return asyncio.run(
+        compute_depth_metrics({}, {"nodes": nodes, "cleaned_edges": edges})
+    )["depth_metrics"]
 
 
 def _rec(
@@ -43,7 +73,7 @@ def test_single_seed_backward_chain() -> None:
     nodes = [_rec("S"), _rec("A", root_ids=["S"]), _rec("B", root_ids=["S"])]
     edges = [_edge("S", "A"), _edge("A", "B")]
 
-    result = compute_depth_metrics(nodes, edges)
+    result = _depth(nodes, edges)
 
     assert result["S"].traversal_direction == "seed"
     assert result["S"].hop_depth_per_root == {"S": 0}
@@ -58,7 +88,7 @@ def test_single_seed_forward_chain() -> None:
     nodes = [_rec("S"), _rec("A", root_ids=["S"]), _rec("B", root_ids=["S"])]
     edges = [_edge("A", "B"), _edge("B", "S")]
 
-    result = compute_depth_metrics(nodes, edges)
+    result = _depth(nodes, edges)
 
     assert result["S"].traversal_direction == "seed"
     assert result["S"].hop_depth_per_root == {"S": 0}
@@ -74,7 +104,7 @@ def test_single_seed_mixed_graph() -> None:
     nodes = [_rec("S"), _rec("A", root_ids=["S"]), _rec("B", root_ids=["S"])]
     edges = [_edge("S", "A"), _edge("B", "S")]
 
-    result = compute_depth_metrics(nodes, edges)
+    result = _depth(nodes, edges)
 
     assert result["S"].traversal_direction == "seed"
     assert result["A"].traversal_direction == "backward"
@@ -89,7 +119,7 @@ def test_seed_self_entry_zero() -> None:
     nodes = [_rec("S1"), _rec("S2")]
     edges: list[CitationEdge] = []
 
-    result = compute_depth_metrics(nodes, edges)
+    result = _depth(nodes, edges)
 
     assert result["S1"].hop_depth_per_root["S1"] == 0
     assert result["S1"].traversal_direction == "seed"
@@ -107,7 +137,7 @@ def test_two_seed_forest_no_overlap() -> None:
     ]
     edges = [_edge("S1", "A"), _edge("S2", "B")]
 
-    result = compute_depth_metrics(nodes, edges)
+    result = _depth(nodes, edges)
 
     assert result["A"].hop_depth_per_root == {"S1": 1}
     assert result["A"].traversal_direction == "backward"
@@ -122,7 +152,7 @@ def test_two_seed_shared_ancestor() -> None:
     nodes = [_rec("S1"), _rec("S2"), _rec("X", root_ids=["S1", "S2"])]
     edges = [_edge("S1", "X"), _edge("S2", "X")]
 
-    result = compute_depth_metrics(nodes, edges)
+    result = _depth(nodes, edges)
 
     assert result["X"].traversal_direction == "backward"
     assert result["X"].hop_depth_per_root == {"S1": 1, "S2": 1}
@@ -140,7 +170,7 @@ def test_two_seed_mixed_between() -> None:
     ]
     edges = [_edge("S2", "S1"), _edge("X", "S1"), _edge("S2", "X")]
 
-    result = compute_depth_metrics(nodes, edges)
+    result = _depth(nodes, edges)
 
     assert result["X"].traversal_direction == "mixed"
     assert result["X"].hop_depth_per_root == {"S1": 1, "S2": 1}
@@ -151,7 +181,7 @@ def test_two_seed_each_reaches_other() -> None:
     nodes = [_rec("S1"), _rec("S2")]
     edges = [_edge("S2", "S1")]
 
-    result = compute_depth_metrics(nodes, edges)
+    result = _depth(nodes, edges)
 
     assert result["S1"].traversal_direction == "seed"
     assert result["S1"].hop_depth_per_root == {"S1": 0, "S2": 1}
@@ -171,7 +201,7 @@ def test_three_seed_partial_reachability() -> None:
     ]
     edges = [_edge("S1", "X"), _edge("S2", "X"), _edge("S3", "Y")]
 
-    result = compute_depth_metrics(nodes, edges)
+    result = _depth(nodes, edges)
 
     assert set(result["X"].hop_depth_per_root.keys()) == {"S1", "S2"}
     assert result["X"].hop_depth_per_root == {"S1": 1, "S2": 1}
@@ -192,7 +222,7 @@ def test_three_seed_partial_reach_mixed() -> None:
     ]
     edges = [_edge("S1", "X"), _edge("X", "S2"), _edge("S3", "Y")]
 
-    result = compute_depth_metrics(nodes, edges)
+    result = _depth(nodes, edges)
 
     assert result["X"].traversal_direction == "mixed"
     assert result["X"].hop_depth_per_root == {"S1": 1, "S2": 1}
@@ -208,11 +238,11 @@ def test_suppressed_cycle_node_normal_values() -> None:
     nodes = [_rec("S"), _rec("A", root_ids=["S"])]
     edges = [_edge("S", "A"), _edge("A", "S")]
 
-    result = clean_cycles(nodes, edges)
+    result = _clean(nodes, edges)
 
-    assert result.cycle_log.affected_node_ids == {"S", "A"}
+    assert result["cycle_log"].affected_node_ids == {"S", "A"}
 
-    metrics = compute_depth_metrics(nodes, result.cleaned_edges)
+    metrics = _depth(nodes, result["cleaned_edges"])
 
     # Both endpoints carry normal, non-empty metrics.
     assert metrics["S"].traversal_direction == "seed"
@@ -227,7 +257,7 @@ def test_unreachable_node_raises() -> None:
     edges: list[CitationEdge] = []  # X disconnected from S
 
     with pytest.raises(ValueError, match="X.*unreachable"):
-        compute_depth_metrics(nodes, edges)
+        _depth(nodes, edges)
 
 
 def test_no_roots_raises() -> None:
@@ -236,12 +266,12 @@ def test_no_roots_raises() -> None:
     edges: list[CitationEdge] = []
 
     with pytest.raises(ValueError, match="No roots"):
-        compute_depth_metrics(nodes, edges)
+        _depth(nodes, edges)
 
 
 def test_empty_nodes_returns_empty() -> None:
     """nodes=[] returns {}."""
-    assert compute_depth_metrics([], []) == {}
+    assert _depth([], []) == {}
 
 
 def test_input_not_mutated() -> None:
@@ -252,7 +282,7 @@ def test_input_not_mutated() -> None:
     nodes_snapshot = [n.model_copy(deep=True) for n in nodes]
     edges_snapshot = [e.model_copy(deep=True) for e in edges]
 
-    compute_depth_metrics(nodes, edges)
+    _depth(nodes, edges)
 
     assert len(nodes) == 2
     assert len(edges) == 1
@@ -272,8 +302,8 @@ def test_deterministic_output() -> None:
     ]
     edges = [_edge("S1", "X"), _edge("S2", "X"), _edge("Y", "S1")]
 
-    r1 = compute_depth_metrics(nodes, edges)
-    r2 = compute_depth_metrics(nodes, edges)
+    r1 = _depth(nodes, edges)
+    r2 = _depth(nodes, edges)
 
     assert r1 == r2
 
@@ -283,12 +313,17 @@ def test_deterministic_output() -> None:
 
 def test_pagerank_networkx_agreement() -> None:
     """Output matches nx.pagerank(G, alpha=damping) on hand-constructed fixture."""
+    import asyncio
+
     import networkx as nx
 
     nodes = [_rec("A"), _rec("B"), _rec("C"), _rec("D")]
     edges = [_edge("A", "B"), _edge("B", "C"), _edge("C", "D"), _edge("D", "A")]
 
-    result = compute_pagerank(nodes, edges, damping=0.85)
+    result = asyncio.run(compute_pagerank(
+        {"damping": 0.85},
+        {"nodes": nodes, "cleaned_edges": edges},
+    ))["pagerank"]
 
     G = nx.DiGraph()
     G.add_nodes_from(["A", "B", "C", "D"])
@@ -301,6 +336,8 @@ def test_pagerank_networkx_agreement() -> None:
 
 def test_pagerank_sums_to_one() -> None:
     """Sum of output values is 1.0 within tolerance."""
+    import asyncio
+
     nodes = [_rec(x) for x in ("A", "B", "C", "D", "E")]
     edges = [
         _edge("A", "B"),
@@ -310,68 +347,97 @@ def test_pagerank_sums_to_one() -> None:
         _edge("E", "A"),
     ]
 
-    result = compute_pagerank(nodes, edges)
+    result = asyncio.run(compute_pagerank(
+        {},
+        {"nodes": nodes, "cleaned_edges": edges},
+    ))["pagerank"]
 
     assert sum(result.values()) == pytest.approx(1.0)
 
 
 def test_pagerank_every_node_assigned() -> None:
     """Every node_id in nodes appears in output, including isolates."""
+    import asyncio
+
     # C is an isolate — no edges touch it. Must still appear in output.
     nodes = [_rec("A"), _rec("B"), _rec("C")]
     edges = [_edge("A", "B")]
 
-    result = compute_pagerank(nodes, edges)
+    result = asyncio.run(compute_pagerank(
+        {},
+        {"nodes": nodes, "cleaned_edges": edges},
+    ))["pagerank"]
 
     assert set(result.keys()) == {"A", "B", "C"}
 
 
 def test_pagerank_damping_respected() -> None:
     """Different damping values produce different results on same graph."""
+    import asyncio
+
     nodes = [_rec(x) for x in ("A", "B", "C")]
     edges = [_edge("A", "B"), _edge("B", "C")]
 
-    r_low = compute_pagerank(nodes, edges, damping=0.5)
-    r_high = compute_pagerank(nodes, edges, damping=0.95)
+    inputs = {"nodes": nodes, "cleaned_edges": edges}
+    r_low = asyncio.run(compute_pagerank({"damping": 0.5}, inputs))["pagerank"]
+    r_high = asyncio.run(compute_pagerank({"damping": 0.95}, inputs))["pagerank"]
 
     assert r_low != r_high
 
 
 def test_pagerank_deterministic() -> None:
     """Same input produces identical output across repeat calls."""
+    import asyncio
+
     nodes = [_rec(x) for x in ("A", "B", "C", "D")]
     edges = [_edge("A", "B"), _edge("B", "C"), _edge("C", "D"), _edge("D", "A")]
 
-    r1 = compute_pagerank(nodes, edges)
-    r2 = compute_pagerank(nodes, edges)
+    inputs = {"nodes": nodes, "cleaned_edges": edges}
+    r1 = asyncio.run(compute_pagerank({}, inputs))["pagerank"]
+    r2 = asyncio.run(compute_pagerank({}, inputs))["pagerank"]
 
     assert r1 == r2
 
 
 def test_pagerank_empty_nodes_returns_empty() -> None:
     """nodes=[] returns {}."""
-    assert compute_pagerank([], []) == {}
+    import asyncio
+
+    result = asyncio.run(compute_pagerank(
+        {},
+        {"nodes": [], "cleaned_edges": []},
+    ))["pagerank"]
+    assert result == {}
 
 
 def test_pagerank_empty_edges_uniform() -> None:
     """No edges: each of N nodes gets value 1/N."""
+    import asyncio
+
     nodes = [_rec(x) for x in ("A", "B", "C", "D")]
 
-    result = compute_pagerank(nodes, [])
+    result = asyncio.run(compute_pagerank(
+        {},
+        {"nodes": nodes, "cleaned_edges": []},
+    ))["pagerank"]
 
     for v in result.values():
         assert v == pytest.approx(0.25)
 
 
 def test_pagerank_input_not_mutated() -> None:
-    """Original input lists unchanged after call."""
+    """Original inputs unchanged after call — restated against the `inputs`
+    payload the handler actually receives under the node-handler contract."""
+    import asyncio
+
     nodes = [_rec(x) for x in ("A", "B", "C")]
     edges = [_edge("A", "B"), _edge("B", "C")]
 
     nodes_snapshot = [n.model_copy(deep=True) for n in nodes]
     edges_snapshot = [e.model_copy(deep=True) for e in edges]
 
-    compute_pagerank(nodes, edges)
+    inputs = {"nodes": nodes, "cleaned_edges": edges}
+    asyncio.run(compute_pagerank({}, inputs))
 
     assert len(nodes) == 3
     assert len(edges) == 2

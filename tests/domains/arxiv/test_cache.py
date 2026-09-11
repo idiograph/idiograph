@@ -17,8 +17,15 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from idiograph.core.executor import HANDLERS
 from idiograph.domains.arxiv import pipeline
 from idiograph.domains.arxiv.cache import cached_run_arxiv_pipeline
+from idiograph.domains.arxiv.derivation_manifest import (
+    derive_manifest,
+    read_sidecar,
+    sidecar_path_for,
+)
+from idiograph.domains.arxiv.handlers import register_arxiv_handlers
 from idiograph.domains.arxiv.models import (
     BackwardParameters,
     CitationEdge,
@@ -134,6 +141,9 @@ def _params(min_strength: int = 1) -> PipelineParameters:
             beta=1.0,
             sort="cited_by_count:desc",
         ),
+        # Stated, never read from the clock: it enters the content address, so a
+        # wall-clock value would move every address in this file on New Year.
+        current_year=2026,
         co_citation=CoCitationParameters(min_strength=min_strength, max_edges=None),
     )
 
@@ -148,11 +158,37 @@ def _install_stages(
     """Mock Node 0/3/4 and return the (fetch, backward, forward) spies so tests
     can assert which stages ran on a hit vs a miss."""
     fetch = AsyncMock(return_value=(resolved, failures))
-    backward = AsyncMock(return_value=n3)
-    forward = AsyncMock(return_value=n4)
+    # Nodes 3 and 4 are port-declared handlers — their stand-ins return the
+    # declared output ports, not a bare Node3Result/Node4Result.
+    backward = AsyncMock(
+        return_value={"backward": n3, "failed_batches": n3.failed_batches}
+    )
+    forward = AsyncMock(
+        return_value={
+            "forward": n4,
+            "failed_seeds": n4.failed_seeds,
+            "truncated_seeds": n4.truncated_seeds,
+        }
+    )
+    # BOTH PLACES, the SAME object in each (IDG-089 rider 1). Post-flip,
+    # `run_traversal` dispatches every stage through the HANDLERS registry; the
+    # module attribute is what any surviving direct path reads. The spies below
+    # are the point of this harness — `backward.assert_not_called()` is how the
+    # hit/miss tests prove a cache HIT issues no traversal call — and a spy
+    # installed in only one place would answer for only one path, passing
+    # vacuously while the real handler ran down the other.
+    #
+    # `run_traversal` re-invokes `register_arxiv_handlers()` per run, which
+    # re-reads these module attributes, so the two would agree even without the
+    # setitem. It is written out anyway: relying on that would make the harness
+    # depend on WHEN registration happens, and monkeypatch's setitem is also what
+    # restores HANDLERS afterwards instead of leaking a mock into later tests.
     monkeypatch.setattr(pipeline, "fetch_seeds", fetch)
+    register_arxiv_handlers()  # populate HANDLERS before overriding entries
     monkeypatch.setattr(pipeline, "backward_traverse", backward)
+    monkeypatch.setitem(HANDLERS, "BackwardTraverse", backward)
     monkeypatch.setattr(pipeline, "forward_traverse", forward)
+    monkeypatch.setitem(HANDLERS, "ForwardTraverse", forward)
     return fetch, backward, forward
 
 
@@ -169,7 +205,18 @@ def _cached_run(
     seeds: list[dict] | None = None,
     *,
     anthropic_client: object | None = None,
+    mismatch_ledger_path: Path | None = None,
 ) -> PipelineResult:
+    # `mismatch_ledger_path` is forwarded only when a caller names one, so every
+    # call site that predates it keeps the exact call it had. A test that wants
+    # to assert about the ledger must root it in `tmp_path`: the default resolves
+    # against the working directory, and appending there would write outside the
+    # fixture.
+    ledger = (
+        {}
+        if mismatch_ledger_path is None
+        else {"mismatch_ledger_path": mismatch_ledger_path}
+    )
     return asyncio.run(
         cached_run_arxiv_pipeline(
             seeds if seeds is not None else [{"arxiv_id": "x"}],
@@ -178,6 +225,7 @@ def _cached_run(
             api_key="k",
             registry=registry,
             anthropic_client=anthropic_client,
+            **ledger,
         )
     )
 
@@ -220,6 +268,109 @@ def test_miss_populates_registry_and_equals_uncached(
     address = content_address([s.node_id], params)
     assert reg.path_for(address).exists()
     assert reg.read(address).model_dump() == missed.model_dump()
+
+
+# ── Miss: the record's derivation baseline is attached (IDG-101) ─────────────
+
+
+def test_miss_attaches_the_records_derivation_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A MISS commits the baseline manifest beside the record it just wrote.
+
+    Until this existed, nothing in the cache ever wrote a sidecar, so every
+    record it produced reached the HIT gate with no baseline and was a permanent
+    no-op — the mismatch channel could only ever observe records baselined by
+    hand. The MISS is the moment the baseline is free to be exactly right: the
+    record was derived by the code running now, so the manifest computed now is
+    its derivation manifest rather than an approximation from a later tree. That
+    equality is the assertion.
+    """
+    s = _seed("S")
+    n3, n4 = _small_graph()
+    _install_stages(monkeypatch, [s], [], n3, n4)
+    params = _params()
+
+    reg = PipelineRegistry(tmp_path)
+    _cached_run(reg, params)
+
+    address = content_address([s.node_id], params)
+    sidecar = sidecar_path_for(reg.root, address)
+    assert sidecar.is_file(), (
+        f"no baseline manifest was attached at {sidecar}. A record written "
+        f"without one arrives at the HIT gate with nothing to be measured "
+        f"against, and the mismatch channel is decorative for it forever."
+    )
+    assert read_sidecar(sidecar) == derive_manifest([{"arxiv_id": "x"}], params)
+
+
+def test_a_hit_on_the_attached_baseline_records_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The agreement path, end to end through the production entry point.
+
+    `test_derivation_mismatch_ledger.py` pins agreement against a baseline
+    written by hand; this pins that the baseline the MISS attaches IS one the
+    HIT then agrees with. The tree does not move between the two calls, so the
+    gate must compare, find nothing, and never create a ledger — otherwise
+    attaching baselines would put one line in the ledger per cache read of every
+    healthy record.
+    """
+    s = _seed("S")
+    n3, n4 = _small_graph()
+    _install_stages(monkeypatch, [s], [], n3, n4)
+    params = _params()
+    ledger = tmp_path / "ledger" / "mismatch_ledger.jsonl"
+
+    reg = PipelineRegistry(tmp_path / "registry")
+    missed = _cached_run(reg, params, mismatch_ledger_path=ledger)
+    hit = _cached_run(reg, params, mismatch_ledger_path=ledger)
+
+    assert hit.model_dump() == missed.model_dump()
+    # The baseline must be PRESENT for this to be the agreement path at all —
+    # without it the HIT returns at the no-sidecar no-op and writes no ledger for
+    # a reason that has nothing to do with agreeing.
+    assert sidecar_path_for(reg.root, content_address([s.node_id], params)).is_file()
+    assert not ledger.exists(), (
+        f"a ledger was created at {ledger} by a HIT against the baseline the "
+        f"MISS itself attached. The derivation code has not moved between the "
+        f"two calls; an attachment the gate then reads as drift would make "
+        f"every healthy record a mismatch."
+    )
+
+
+def test_a_failed_attachment_does_not_cost_the_miss(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fence: the attachment may fail, the MISS may not.
+
+    A DIRECTORY sitting at the sidecar path is the portable stand-in for the
+    read-only registry root the ruling names — the write is genuinely attempted
+    and genuinely fails. The result must still be returned and the record must
+    still be persisted; the record simply carries no baseline, which is exactly
+    the no-op case the HIT gate already handles.
+    """
+    s = _seed("S")
+    n3, n4 = _small_graph()
+    _install_stages(monkeypatch, [s], [], n3, n4)
+    params = _params()
+
+    reg = PipelineRegistry(tmp_path)
+    address = content_address([s.node_id], params)
+    sidecar_path_for(reg.root, address).mkdir(parents=True)
+
+    result = _cached_run(reg, params)
+
+    assert result.seeds == ["S"], (
+        "a MISS whose baseline attachment failed did not return its result. The "
+        "observation channel must never break the thing it observes: a failed "
+        "attachment costs a baseline, never a run."
+    )
+    assert reg.path_for(address).exists(), (
+        "a MISS whose baseline attachment failed did not persist its record. "
+        "The attachment runs after the write and cannot undo it."
+    )
+    assert reg.read(address).model_dump() == result.model_dump()
 
 
 # ── Hit: stored result returned WITHOUT traversal ────────────────────────────

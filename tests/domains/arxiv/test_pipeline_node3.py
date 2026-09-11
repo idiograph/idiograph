@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-from datetime import date
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -17,7 +17,6 @@ from idiograph.domains.arxiv.pipeline import (
     _strip_openalex_id,
     backward_traverse,
 )
-
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -114,7 +113,42 @@ class _StageFailingClient:
 
 
 def _run(client, **kwargs) -> Node3Result:
-    return asyncio.run(backward_traverse(client=client, **kwargs))
+    """Drive the ``BackwardTraverse`` handler through its declared contract.
+
+    Node 3 is now a port-declared executor handler: ``(params, inputs, *,
+    resources) -> dict``. This helper is the ONE site in this file that knows
+    that, so every behavioral test below keeps its pre-conversion call shape and
+    every assertion below still reads a ``Node3Result``. The marshalling here is
+    the same one ``run_traversal`` performs — one key per declared param, one key
+    per declared input port, the client and the credential through the resource
+    channel — so these tests exercise the contract the executor would use.
+
+    The ``backward`` port is unwrapped because it carries the whole result; the
+    ``failed_batches`` port is asserted separately, where it is the subject.
+
+    ``current_year`` is REQUIRED on the params model — the stage no longer reads
+    a clock (IDG-080 clause 3) — but it defaults HERE, in the one helper that
+    knows the contract, so the behavioral tests below keep their call shape.
+    A fixed year rather than the wall clock, deliberately: these tests pin
+    ranking and truncation, and a clock-derived year would make them re-rank on
+    New Year. The scoring tests in this file already pin 2026 directly.
+    """
+    out = asyncio.run(
+        backward_traverse(
+            {
+                "n_backward": kwargs["n_backward"],
+                "lambda_decay": kwargs["lambda_decay"],
+                "sleep_ms": kwargs["sleep_ms"],
+                "current_year": kwargs.get("current_year", 2026),
+            },
+            {"seeds": kwargs["seeds"]},
+            resources={
+                "http_client": client,
+                "openalex_api_key": kwargs["api_key"],
+            },
+        )
+    )
+    return out["backward"]
 
 
 # ── Scoring ────────────────────────────────────────────────────────────────
@@ -383,7 +417,7 @@ def test_strip_openalex_id_helper():
     assert _strip_openalex_id("https://openalex.org/W123") == "W123"
     assert _strip_openalex_id("W123") == "W123"
     # silence unused-import warning in minimal date usage
-    assert date.today().year >= 2026
+    assert datetime.now(UTC).date().year >= 2026
 
 
 # ── Node 3 wrapper, edges, and failure provenance (AMD-020) ────────────────

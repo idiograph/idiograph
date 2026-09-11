@@ -5,8 +5,8 @@
 # https://github.com/idiograph/idiograph
 
 import networkx as nx
-from idiograph.core.models import Graph
 
+from idiograph.core.models import Graph
 
 # ── Internal helper ──────────────────────────────────────────────────────────
 
@@ -60,10 +60,241 @@ def find_cycles(graph: Graph) -> list[list[str]]:
 
 # ── Integrity ────────────────────────────────────────────────────────────────
 
+def duplicate_node_ids(graph: Graph) -> list[str]:
+    """Return every node id `graph` declares more than once, sorted.
+
+    An id is the graph's ONLY identity: edges name one, results are keyed by
+    one, and every reader resolves one its own way. Nothing rejects a reused id
+    at construction, and the three readers then disagree silently — `get_node`
+    returns the FIRST node carrying it, `execute_graph`'s `node_map` keeps the
+    LAST, and the networkx projection every function above builds collapses both
+    into a single node holding the union of their edges. So a duplicate is not a
+    defect located in any one of them; it is the question "which node did this
+    edge mean?" having three answers at once, which is why it is reported here
+    rather than resolved anywhere.
+
+    Sorted, so the report is a fact about the graph rather than about
+    declaration order.
+    """
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for node in graph.nodes:
+        if node.id in seen:
+            duplicates.add(node.id)
+        seen.add(node.id)
+    return sorted(duplicates)
+
+
+
+#: The bookkeeping keys `execute_graph` stamps onto every result dict, AFTER
+#: splatting the handler's output into it. A port sharing one of these names is
+#: therefore unreadable: the stamp wins, and the consumer bound to that port
+#: silently reads the executor's bookkeeping value instead of the payload. Not a
+#: run-time failure — a wrong value, which is worse — so it is rejected at
+#: declaration time, where the name is visible without executing anything.
+RESERVED_PORT_NAMES = frozenset({"status", "node_id", "injected"})
+
+
+def _dataflow_errors(graph: Graph) -> list[str]:
+    """
+    Check that every port-declared edge names ports its endpoints actually declare.
+
+    This is what makes a graph self-sufficient: dataflow is verifiable from the
+    declarations alone, without reading handler source.
+
+    The migration fence is a one-way ratchet. A node that declares `input_ports`
+    is BOUND — the executor builds its inputs solely from port-declared incoming
+    edges — so every incoming edge must carry ports, and every upstream feeding
+    it must declare the output port being read. Nodes that declare nothing stay
+    in the legacy regime and are not checked here.
+
+    A bound input port takes exactly one incoming edge — floor and ceiling. Two
+    edges binding the same `to_port` have no declared precedence between them,
+    so the graph does not say which value the port carries. A declared port that
+    no edge binds is never fed at all: every declared input port is required,
+    because declaring it is what says the handler reads it. Both are defects in
+    the wiring, reported here rather than silently resolved at run time.
+
+    Ports are untyped: `port_type` and `Graph.type_registry` are not consulted.
+
+    A port named for one of the executor's bookkeeping keys
+    (`RESERVED_PORT_NAMES`) is rejected outright, independently of any edge —
+    the collision is a property of the DECLARATION, so a port that no edge
+    binds yet is still reported.
+
+    Two further checks are node-INTERNAL name references rather than dataflow,
+    and are checked here for every node that declares them — legacy nodes
+    included, because the migration fence is about dataflow and neither of these
+    is dataflow:
+
+    - `enabled_when` must name a key PRESENT in `node.params`, with any value at
+      all. `params={'llm': None}` stays legal and stays disabling, and 0, '',
+      [], {} and False all still disable; the only defect is omitting the key,
+      which is a misspelt reference silently disabling the node for every run
+      instead of gating it. Truthiness of the VALUE is the executor's business
+      and is unchanged — this governs the NAME.
+    - every `disabled_passthrough` key must name a declared OUTPUT port of the
+      node and every value a declared INPUT port of it. A node declaring the
+      mapping while declaring no ports satisfies neither.
+    """
+    node_map = {node.id: node for node in graph.nodes}
+    errors: list[str] = []
+
+    for node in graph.nodes:
+        for side, declared in (
+            ("input", node.input_ports),
+            ("output", node.output_ports),
+        ):
+            for port in declared or ():
+                if port.name in RESERVED_PORT_NAMES:
+                    errors.append(
+                        f"Node '{node.id}': {side} port '{port.name}' uses the "
+                        f"reserved word '{port.name}' — the executor stamps it "
+                        f"onto every result dict, so the port's value would be "
+                        f"silently overwritten. Reserved: "
+                        f"{sorted(RESERVED_PORT_NAMES)}."
+                    )
+
+    # (target id, to_port) → the `source.from_port` of every edge claiming it.
+    port_claims: dict[tuple[str, str], list[str]] = {}
+    # Targets with an already-reported defect on an incoming edge. Such a node
+    # is not additionally told its ports are unfed: a malformed or dangling edge
+    # says nothing about which port it meant to feed, so the unfed report would
+    # be a consequence of the reported defect rather than a second defect.
+    faulted_targets: set[str] = set()
+
+    for edge in graph.edges:
+        source = node_map.get(edge.source)
+        target = node_map.get(edge.target)
+        if source is None or target is None:
+            faulted_targets.add(edge.target)
+            continue  # already reported by the referential check
+
+        label = f"Edge {edge.source} → {edge.target}"
+        has_from = edge.from_port is not None
+        has_to = edge.to_port is not None
+
+        if has_from != has_to:
+            present, absent = ("from_port", "to_port") if has_from else ("to_port", "from_port")
+            errors.append(
+                f"{label}: declares {present} but not {absent} — an edge is either "
+                f"fully port-declared or not port-declared at all."
+            )
+            faulted_targets.add(edge.target)
+            continue
+
+        target_bound = target.input_ports is not None
+
+        if not has_from:
+            if target_bound:
+                errors.append(
+                    f"{label}: target '{edge.target}' declares input_ports, so every "
+                    f"incoming edge must declare from_port and to_port."
+                )
+                faulted_targets.add(edge.target)
+            continue
+
+        if target_bound:
+            declared_inputs = {p.name for p in target.input_ports}
+            if edge.to_port not in declared_inputs:
+                errors.append(
+                    f"{label}: to_port '{edge.to_port}' is not a declared input port "
+                    f"of '{edge.target}' (declared: {sorted(declared_inputs)})."
+                )
+                faulted_targets.add(edge.target)
+            else:
+                claim = f"{edge.source}.{edge.from_port}"
+                port_claims.setdefault((edge.target, edge.to_port), []).append(claim)
+
+        if source.output_ports is None:
+            if target_bound:
+                errors.append(
+                    f"{label}: source '{edge.source}' declares no output_ports, but "
+                    f"'{edge.target}' is bound and reads from_port '{edge.from_port}'."
+                )
+                faulted_targets.add(edge.target)
+        else:
+            declared_outputs = {p.name for p in source.output_ports}
+            if edge.from_port not in declared_outputs:
+                errors.append(
+                    f"{label}: from_port '{edge.from_port}' is not a declared output "
+                    f"port of '{edge.source}' (declared: {sorted(declared_outputs)})."
+                )
+                faulted_targets.add(edge.target)
+
+    for (target_id, to_port), claims in port_claims.items():
+        if len(claims) > 1:
+            errors.append(
+                f"Node '{target_id}': input port '{to_port}' is bound by "
+                f"{len(claims)} edges (competing: {sorted(claims)}) — a bound "
+                f"input port takes exactly one incoming edge."
+            )
+
+    # The floor, the complement of `port_claims`: a declared input port no edge
+    # binds. This needs a pass over NODES — the edge loop above cannot see a
+    # port that has no edge. An empty `input_ports` declares "accepts no
+    # inputs" and is trivially satisfied; legacy nodes stay out of the regime.
+    #
+    # The two config-declaration checks ride the same pass, ABOVE its gate. Both
+    # are node-internal: a predicate name is a reference into the node's own
+    # params and a passthrough entry a reference into its own port declarations,
+    # so neither is dataflow and neither is answerable by incoming wiring. They
+    # therefore gate on the DECLARATION being present — not on `input_ports`,
+    # and not on `faulted_targets`: a node with a dangling edge still has a
+    # wrong predicate name, and a node declaring passthrough while declaring no
+    # ports at all is the worst case rather than an exempt one.
+    for node in graph.nodes:
+        if node.enabled_when is not None and node.enabled_when not in node.params:
+            errors.append(
+                f"Node '{node.id}': enabled_when names param "
+                f"'{node.enabled_when}', which the node does not declare "
+                f"(params: {sorted(node.params)}) — the predicate is a param "
+                f"NAME, so a name no param carries disables the node for every "
+                f"run rather than gating it."
+            )
+
+        if node.disabled_passthrough is not None:
+            declared_outputs = {p.name for p in node.output_ports or ()}
+            declared_inputs = {p.name for p in node.input_ports or ()}
+            for out_port, in_port in node.disabled_passthrough.items():
+                if out_port not in declared_outputs:
+                    errors.append(
+                        f"Node '{node.id}': disabled_passthrough emits output "
+                        f"port '{out_port}', which is not a declared output "
+                        f"port of '{node.id}' (declared: "
+                        f"{sorted(declared_outputs)})."
+                    )
+                if in_port not in declared_inputs:
+                    errors.append(
+                        f"Node '{node.id}': disabled_passthrough forwards input "
+                        f"port '{in_port}', which is not a declared input port "
+                        f"of '{node.id}' (declared: {sorted(declared_inputs)})."
+                    )
+
+        if node.input_ports is None or node.id in faulted_targets:
+            continue
+        for port in node.input_ports:
+            if (node.id, port.name) not in port_claims:
+                errors.append(
+                    f"Node '{node.id}': input port '{port.name}' is bound by no "
+                    f"incoming edge — every declared input port of a bound node "
+                    f"must be fed."
+                )
+
+    return errors
+
+
 def validate_integrity(graph: Graph) -> dict:
     """
-    Check that every edge references node IDs that actually exist in the graph.
+    Check identity integrity (no node id is declared twice), referential integrity
+    (every edge references node IDs that exist) and dataflow integrity (every
+    port-declared edge names ports its endpoints declare).
     Returns a dict with 'valid' (bool) and 'errors' (list of problem descriptions).
+
+    Identity is reported FIRST because the other two are stated in terms of it: an
+    edge that "references a node that exists" and a port that "its endpoint
+    declares" both assume the id names one node. Under a duplicate they are
+    answering about whichever node the lookup below happens to find.
     """
     from idiograph.core.logging_config import get_logger
     _log = get_logger("query")
@@ -71,11 +302,21 @@ def validate_integrity(graph: Graph) -> dict:
     node_ids = {node.id for node in graph.nodes}
     errors = []
 
+    for node_id in duplicate_node_ids(graph):
+        errors.append(
+            f"Node id '{node_id}' is declared by more than one node — an id is "
+            f"the graph's only identity, and its readers disagree when one is "
+            f"reused: get_node returns the first, the executor keeps the last, "
+            f"and the networkx projection collapses them into one."
+        )
+
     for edge in graph.edges:
         if edge.source not in node_ids:
             errors.append(f"Edge {edge.source} → {edge.target}: source '{edge.source}' does not exist.")
         if edge.target not in node_ids:
             errors.append(f"Edge {edge.source} → {edge.target}: target '{edge.target}' does not exist.")
+
+    errors.extend(_dataflow_errors(graph))
 
     if errors:
         _log.warning("Integrity check failed for '%s': %d error(s).", graph.name, len(errors))
@@ -86,6 +327,59 @@ def validate_integrity(graph: Graph) -> dict:
 
 
 # ── Intent Summary ───────────────────────────────────────────────────────────
+
+def _outranks(chain: list[str], incumbent: list[str]) -> bool:
+    """
+    True if `chain` beats `incumbent`: longer, or the same length and
+    lexicographically smaller. This is the whole tie-break rule, in one place
+    because `_longest_chain` applies it twice.
+    """
+    if len(chain) != len(incumbent):
+        return len(chain) > len(incumbent)
+    return chain < incumbent
+
+
+def _longest_chain(dg: nx.DiGraph) -> list[str]:
+    """
+    Return the longest chain of nodes in `dg`, measured in node count.
+
+    Longest, not shortest. A branching graph can carry a shortcut edge that
+    reaches a sink in a couple of hops while the work the pipeline exists to do
+    runs the long way round; the shortest route between the same endpoints
+    understates how deep the pipeline is, and is what a per-(source, sink)
+    `nx.shortest_path` scan selects.
+
+    A CYCLIC graph has no longest chain — a chain that enters a cycle can go
+    round it any number of times, so there is no maximum to report. This returns
+    [] there rather than raising: `summarize_intent` describes a graph, and has
+    to stay callable on a malformed one to describe it. `find_cycles` is what
+    reports the cycle itself. (`nx.dag_longest_path` raises `NetworkXUnfeasible`
+    here, which is why it is not called directly.)
+
+    Ties are broken toward the lexicographically smallest node-id sequence, so
+    the answer is fixed by the graph alone — not by node insertion order, dict
+    iteration order, or the networkx version.
+    """
+    if not nx.is_directed_acyclic_graph(dg):
+        return []
+
+    # Longest chain ending at each node. Topological order is what makes the
+    # single pass sufficient: every predecessor is final before the node that
+    # reads it.
+    best: dict[str, list[str]] = {}
+    for node in nx.topological_sort(dg):
+        prefix: list[str] = []
+        for pred in dg.predecessors(node):
+            if _outranks(best[pred], prefix):
+                prefix = best[pred]
+        best[node] = [*prefix, node]
+
+    longest: list[str] = []
+    for chain in best.values():
+        if _outranks(chain, longest):
+            longest = chain
+    return longest
+
 
 def summarize_intent(graph: Graph, node_ids: list[str] | None = None) -> dict:
     """
@@ -139,20 +433,9 @@ def summarize_intent(graph: Graph, node_ids: list[str] | None = None) -> dict:
     else:
         domain = "unknown"
 
-    # Critical path — longest chain by node count
+    # Critical path — longest chain by node count; [] if the scope is cyclic
     dg = _build_nx_graph(Graph(name=graph.name, version=graph.version, nodes=nodes, edges=edges))
-    sources = [n for n in dg.nodes if dg.in_degree(n) == 0]
-    sinks   = [n for n in dg.nodes if dg.out_degree(n) == 0]
-
-    critical_path: list[str] = []
-    for source in sources:
-        for sink in sinks:
-            try:
-                path = nx.shortest_path(dg, source, sink)
-                if len(path) > len(critical_path):
-                    critical_path = path
-            except nx.NetworkXNoPath:
-                continue
+    critical_path = _longest_chain(dg)
 
     # Failure points — CONTROL edges are gates; their source nodes are chokepoints
     control_gates = [e.source for e in edges if e.type == "CONTROL"]

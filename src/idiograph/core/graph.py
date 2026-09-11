@@ -4,8 +4,8 @@
 # Idiograph — deterministic semantic graph execution for production AI pipelines.
 # https://github.com/idiograph/idiograph
 
-from idiograph.core.models import Graph, Node, Edge
 from idiograph.core.logging_config import get_logger
+from idiograph.core.models import Edge, Graph, Node
 
 _log = get_logger("graph")
 

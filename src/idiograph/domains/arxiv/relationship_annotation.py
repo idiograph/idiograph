@@ -32,6 +32,7 @@ from enum import Enum
 from anthropic import AsyncAnthropic
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from idiograph.core.models import PortDeclaration
 from idiograph.domains.arxiv.models import LLMConfig, PaperRecord, RelationshipType
 
 _log = logging.getLogger(__name__)
@@ -135,6 +136,17 @@ def prompt_template_hash(template: str = PROMPT_TEMPLATE) -> str:
     the content address automatically.
     """
     return hashlib.sha256(template.encode("utf-8")).hexdigest()
+
+
+# ── Parse contract (its sha256 is PipelineParameters.parse_contract_hash) ────
+#
+# The draw-parse rule is declared in ``models.PARSE_CONTRACT`` and hashed into the
+# content address there (IDG-032); it lives in ``models`` only because this module
+# imports ``models`` and the reverse import would be circular. Change the rule
+# below → amend that constant, or a pre-change ``unclear`` and a post-change real
+# label collide at the same address.
+
+_FENCE = "```"
 
 
 # ── Provenance (IDG-016) ─────────────────────────────────────────────────────
@@ -284,14 +296,92 @@ def _extract_text(response: object) -> str:
 # ── Node body ────────────────────────────────────────────────────────────────
 
 
+def _untyped_port(name: str) -> PortDeclaration:
+    """Declare a port by name alone.
+
+    Ports are untyped at this stage: ``Graph.type_registry`` is unbuilt and
+    nothing validates ``port_type``, so it carries a fixed inert marker rather
+    than implying a contract no one enforces.
+
+    Defined here rather than imported from ``pipeline``'s identical helper:
+    ``pipeline`` imports this module, so reaching back for it would close an
+    import cycle. Only ``PortDeclaration`` comes in, and it comes from
+    ``core.models`` directly.
+    """
+    return PortDeclaration(name=name, port_type="untyped")
+
+
+#: Port declarations for the ``AnnotateRelationships`` node. These are the
+#: contract: a graph wiring this node declares them on the ``Node``, and
+#: ``validate_integrity`` checks the edges against them without reading this
+#: handler's source.
+#:
+#: ``nodes`` is name-identical to the upstream stage's output port, so a wiring
+#: reads ``assemble.nodes -> annotate.nodes`` with no adapter between them.
+#: ``resolved`` is the seed set the classification is *relative to* — the node
+#: cannot frame a relationship without it.
+ANNOTATE_RELATIONSHIPS_INPUT_PORTS: list[PortDeclaration] = [
+    _untyped_port("nodes"),
+    _untyped_port("resolved"),
+]
+
+#: The two ``RelationshipAnnotationResult`` fields. ``nodes`` deliberately
+#: matches the input port name: this stage rebinds the node set to its annotated
+#: copies, so every downstream ``nodes`` consumer binds HERE on the LLM path —
+#: which is exactly what makes the disabled passthrough below a one-line mapping.
+ANNOTATE_RELATIONSHIPS_OUTPUT_PORTS: list[PortDeclaration] = [
+    _untyped_port("nodes"),
+    _untyped_port("provenance"),
+]
+
+#: The config predicate (IDG-069 clause 4): the NAME of the param that gates
+#: this node. Presence of an ``LLMConfig`` in params is the whole decision —
+#: config presence ONLY, never the resource. The frozen ``LLMConfig`` enters the
+#: content address via the recursive ``model_dump``; the live client is a
+#: resource and never does.
+ANNOTATE_RELATIONSHIPS_ENABLED_WHEN = "llm"
+
+#: What this node forwards when the predicate disables it (IDG-069 clause 6).
+#: Disabled, the ``nodes`` output port carries the PRE-annotation records
+#: forward, so downstream wiring is untouched and the bytes are correct — the
+#: address already carries ``llm: None``. ``provenance`` is unmapped and
+#: therefore not emitted: there was no run to have provenance of.
+ANNOTATE_RELATIONSHIPS_DISABLED_PASSTHROUGH = {"nodes": "nodes"}
+
+
+class _AnnotateRelationshipsParams(BaseModel):
+    """Declared param contract for the ``AnnotateRelationships`` handler.
+
+    ``llm`` is REQUIRED and non-null here, which is not in tension with the
+    predicate — it is the other side of it. The executor evaluates
+    ``enabled_when="llm"`` BEFORE dispatch, so a run with no ``LLMConfig`` never
+    reaches this handler at all. Arriving here with ``llm`` absent or None means
+    a caller dispatched a node the predicate would have gated off: a caller
+    defect, and it raises rather than quietly annotating nothing.
+    """
+
+    llm: LLMConfig
+
+
+class _AnnotateRelationshipsInputs(BaseModel):
+    """Declared input contract for the ``AnnotateRelationships`` handler.
+
+    One field per declared input port (``ANNOTATE_RELATIONSHIPS_INPUT_PORTS``):
+    the assembled node set to classify and the resolved seed set to classify it
+    against. The executor binds each port-declared incoming edge as
+    ``inputs[to_port]``, so the ``inputs`` mapping validates directly against
+    this model.
+    """
+
+    nodes: list[PaperRecord]
+    resolved: list[PaperRecord]
+
+
 async def annotate_relationships(
-    unified_nodes: list[PaperRecord],
-    resolved: list[PaperRecord],
-    llm_config: LLMConfig,
-    *,
-    anthropic_client: AsyncAnthropic,
-) -> RelationshipAnnotationResult:
-    """Classify each non-seed paper's relationship to the seed set (Node 5.5).
+    params: dict, inputs: dict, *, resources: dict
+) -> dict:
+    """Executor node handler (type ``AnnotateRelationships``) — classify each
+    non-seed paper's relationship to the seed set (Node 5.5).
 
     Seeds pass through with ``relationship_type=None`` (never classified).
     Non-seeds route through the deterministic ``text_route`` guard: NO_TEXT →
@@ -300,7 +390,45 @@ async def annotate_relationships(
     enforcement point). A malformed or off-vocabulary draw maps to
     ``"unclear"``/``0.0`` (``model_output_invalid``) — no retry, no raise. The
     input list is never mutated; annotated copies are returned via ``model_copy``.
+
+    Contract (``core/executor.py`` handler convention):
+      ``params``    — ``{"llm": <LLMConfig>}``, validated as
+                      ``_AnnotateRelationshipsParams``. Config keeps its home in
+                      ``PipelineParameters.llm``; ``run_traversal`` reads it
+                      there and marshals it in. Absent or None is a caller
+                      defect — see that model.
+      ``inputs``    — BOUND. The node declares
+                      ``ANNOTATE_RELATIONSHIPS_INPUT_PORTS``, so the executor
+                      builds ``inputs`` solely from the port-declared edges into
+                      it, keyed by ``to_port``: ``{"nodes": [...], "resolved":
+                      [...]}``, validated as ``_AnnotateRelationshipsInputs``.
+                      Undeclared keys are ignored. A caller invoking the handler
+                      directly shapes ``inputs`` the same way, so the direct and
+                      executor-driven paths share one contract.
+      ``resources`` — ``{"anthropic_client": <AsyncAnthropic>}``. The live client
+                      belongs to the run, not the graph, and never enters a
+                      content address. Keyword-only with no default: the node
+                      declares, so the executor always supplies, and a silent
+                      call without it would be a bug worth crashing on.
+      returns       — ``{"nodes": [...], "provenance": ...}`` — the declared
+                      output ports (``ANNOTATE_RELATIONSHIPS_OUTPUT_PORTS``).
+
+    A ``RelationshipAnnotationResult`` is CONSTRUCTED internally before the
+    return mapping is built, and the ports are decomposed off that validated
+    result rather than assembled from the bare list and record.
+
+    Whether this node runs at all is not decided here: it is declared on the
+    node as ``enabled_when=ANNOTATE_RELATIONSHIPS_ENABLED_WHEN`` and read by the
+    executor before dispatch. The node remains a demonstration of restraint —
+    the LLM decides neither whether it runs nor what labels it may emit.
     """
+    config = _AnnotateRelationshipsParams.model_validate(params)
+    data = _AnnotateRelationshipsInputs.model_validate(inputs)
+    llm_config = config.llm
+    unified_nodes = data.nodes
+    resolved = data.resolved
+    anthropic_client = resources["anthropic_client"]
+
     seed_ids = {r.node_id for r in resolved}
     non_seed_count = sum(1 for rec in unified_nodes if rec.node_id not in seed_ids)
     no_text_count = sum(
@@ -375,18 +503,70 @@ async def annotate_relationships(
         provenance.unclear_model_output_invalid,
         provenance.unclear_model_unclear,
     )
-    return RelationshipAnnotationResult(nodes=annotated, provenance=provenance)
+    # Constructed, not skipped: the ports below are decomposed off the validated
+    # result rather than assembled from the bare list and record above.
+    result = RelationshipAnnotationResult(nodes=annotated, provenance=provenance)
+
+    return {
+        "nodes": result.nodes,
+        "provenance": result.provenance,
+    }
+
+
+def _strip_code_fence(raw: str) -> str:
+    """Unwrap a draw that is *exactly* one fenced block; otherwise pass it through.
+
+    The prompt says "no code fences" and the model mostly complies — but a fenced
+    draw is a formatting slip, not a bad judgement, and routing it to
+    ``model_output_invalid`` throws away an otherwise-valid annotation.
+
+    Narrow by construction, and deliberately NOT a "find the JSON somewhere in the
+    text" scrubber: the draw must OPEN with a fence and CLOSE with one, and the
+    only things removed are the two fence markers and the opening fence's info
+    string (```json / ```). Everything else is returned untouched to fail at
+    ``json.loads`` exactly as it does today — an unterminated fence, a fence with
+    prose on its opening line, prose wrapped around a fenced block, a fence buried
+    mid-draw. The set of draws that parse grows by the fenced-but-otherwise-valid
+    case and nothing else.
+
+    (Whitespace-stripping a non-fenced draw is not a widening: ``json.loads``
+    already tolerates surrounding whitespace.)
+    """
+    text = raw.strip()
+    if not text.startswith(_FENCE):
+        return text
+
+    inner = text[len(_FENCE) :]
+    if not inner.endswith(_FENCE):
+        return text  # unterminated fence — not a fenced block
+    inner = inner[: -len(_FENCE)]
+
+    info, newline, body = inner.partition("\n")
+    if not newline:
+        return inner.strip()  # single-line ```{...}```: no info string to shed
+    if len(info.split()) > 1:
+        return text  # prose on the opening line — not a bare info string
+    return body.strip()
 
 
 def _parse_annotation(raw: str) -> RelationshipAnnotation:
     """Parse and validate a raw model draw into a ``RelationshipAnnotation``.
 
+    Implements ``models.PARSE_CONTRACT`` — whose sha256 rides in the content
+    address as ``PipelineParameters.parse_contract_hash``. Changing what this
+    function accepts changes derived output, so it MUST be declared there too
+    (IDG-032); editing the rule and leaving the contract text alone would let a
+    pre-change and a post-change derivation collide at one address.
+
+    A leading/trailing code fence is unwrapped first (see :func:`_strip_code_fence`).
     ``model_validate_json`` would accept a bare top-level string; we require a
     JSON object, so a non-object draw raises ``ValueError`` → the
     ``model_output_invalid`` path. Enforcement of the label vocabulary and the
     confidence range happens on ``RelationshipAnnotation`` construction.
     """
-    parsed = json.loads(raw)
+    parsed = json.loads(_strip_code_fence(raw))
     if not isinstance(parsed, dict):
-        raise ValueError("model output is not a JSON object")
+        # The ValueError is load-bearing: the catch at the call site routes it to
+        # the model_output_invalid path. TypeError bypasses that fence (IDG-098).
+        raise ValueError("model output is not a JSON object")  # noqa: TRY004
     return RelationshipAnnotation.model_validate(parsed)

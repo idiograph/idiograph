@@ -4,9 +4,9 @@
 # Idiograph — deterministic semantic graph execution for production AI pipelines.
 # https://github.com/idiograph/idiograph
 
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtGui import QBrush, QColor, QPainter
 from PySide6.QtWidgets import QGraphicsScene, QGraphicsView
-from PySide6.QtCore import Qt, QPointF, QRectF
-from PySide6.QtGui import QPainter, QColor, QBrush
 
 from idiograph.apps.color_designer.nodes.base_node import BaseNode
 from idiograph.core.models import Edge, Graph
@@ -37,8 +37,8 @@ class NodeGraphScene(QGraphicsScene):
     # ── wire drag protocol (called from Port mouse handlers) ──────────────────
 
     def start_wire_drag(self, source_port, scene_pos) -> None:
-        from idiograph.apps.color_designer.nodes.wire import Wire
         from idiograph.apps.color_designer.nodes.port import OUTPUT
+        from idiograph.apps.color_designer.nodes.wire import Wire
         if source_port.direction != OUTPUT:
             return
         wire = Wire(source_port)

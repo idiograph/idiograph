@@ -13,9 +13,11 @@ import hashlib
 import json
 
 import pytest
+from pydantic import ValidationError
 
 from idiograph.domains.arxiv import pipeline
 from idiograph.domains.arxiv.models import (
+    PARSE_CONTRACT,
     BackwardParameters,
     ForwardParameters,
     LLMConfig,
@@ -23,17 +25,18 @@ from idiograph.domains.arxiv.models import (
     Node4Result,
     PaperRecord,
     PipelineParameters,
+    parse_contract_hash,
 )
 from idiograph.domains.arxiv.registry import content_address
 from idiograph.domains.arxiv.relationship_annotation import (
     PROMPT_TEMPLATE,
     RelationshipAnnotation,
+    RelationshipAnnotationResult,
     Route,
     annotate_relationships,
     prompt_template_hash,
     text_route,
 )
-
 
 # ── Fake Anthropic client ────────────────────────────────────────────────────
 
@@ -129,14 +132,25 @@ def _annotate(
     client: _FakeClient,
     *,
     config: LLMConfig | None = None,
-):
-    return asyncio.run(
+) -> RelationshipAnnotationResult:
+    """Drive the handler in its executor contract, then reassemble the result.
+
+    Node 5.5 is a converted stage: ``(params, inputs, *, resources)`` in, the
+    declared output ports out. The tests below are about the annotation
+    behaviour, not the marshalling, so this helper shapes the call the way the
+    executor would — one key per declared input port, the client through the
+    resource channel — and recomposes the two ports into the
+    ``RelationshipAnnotationResult`` every assertion already reads.
+    """
+    out = asyncio.run(
         annotate_relationships(
-            unified_nodes,
-            resolved,
-            config or _llm_config(),
-            anthropic_client=client,
+            {"llm": config or _llm_config()},
+            {"nodes": unified_nodes, "resolved": resolved},
+            resources={"anthropic_client": client},
         )
+    )
+    return RelationshipAnnotationResult(
+        nodes=out["nodes"], provenance=out["provenance"]
     )
 
 
@@ -228,6 +242,117 @@ def test_malformed_json_to_unclear() -> None:
     assert result.provenance.unclear_model_output_invalid == 1
 
 
+# ── Fence tolerance (parse contract v2) ──────────────────────────────────────
+#
+# The prompt forbids code fences; the model does not always comply. A fenced draw
+# is a formatting slip, not a bad judgement, so it must reach its real label — and
+# NOTHING beyond fence removal may become recoverable. Each "still invalid" case
+# below pins an edge of that surface: the unwrap is not a find-the-JSON scrubber.
+
+
+def test_fenced_json_draw_parses() -> None:
+    """```json-fenced draw → its real label, not model_output_invalid."""
+    rec = _rec("P")
+    payload = _valid_payload("empirical_validation", 0.7)
+    client = _FakeClient(f"```json\n{payload}\n```")
+
+    result = _annotate([rec], [], client)
+
+    (out,) = result.nodes
+    assert out.relationship_type == "empirical_validation"
+    assert out.semantic_confidence == 0.7
+    assert result.provenance.unclear_model_output_invalid == 0
+    assert result.provenance.papers_classified == 1
+
+
+def test_bare_fenced_draw_parses() -> None:
+    """A fence with no info string (``` alone) unwraps too."""
+    rec = _rec("P")
+    client = _FakeClient(f"```\n{_valid_payload('concurrent_work', 0.6)}\n```")
+
+    result = _annotate([rec], [], client)
+
+    (out,) = result.nodes
+    assert out.relationship_type == "concurrent_work"
+    assert result.provenance.unclear_model_output_invalid == 0
+
+
+def test_single_line_fenced_draw_parses() -> None:
+    """```{...}``` on one line: fence markers are still just fence markers."""
+    rec = _rec("P")
+    client = _FakeClient(f"```{_valid_payload('adjacent_work', 0.5)}```")
+
+    result = _annotate([rec], [], client)
+
+    (out,) = result.nodes
+    assert out.relationship_type == "adjacent_work"
+    assert result.provenance.unclear_model_output_invalid == 0
+
+
+def test_fenced_malformed_draw_still_invalid() -> None:
+    """Fenced but not JSON → model_output_invalid, exactly as before the unwrap."""
+    rec = _rec("P")
+    client = _FakeClient("```json\nthis is not json at all\n```")
+
+    result = _annotate([rec], [], client)
+
+    (out,) = result.nodes
+    assert out.relationship_type == "unclear"
+    assert result.provenance.unclear_model_output_invalid == 1
+
+
+def test_fenced_off_vocabulary_label_still_rejected() -> None:
+    """Unwrapping is strictly upstream of IDG-034 — it does not smuggle a label in."""
+    rec = _rec("P")
+    client = _FakeClient(f"```json\n{_valid_payload('totally_made_up_label')}\n```")
+
+    result = _annotate([rec], [], client)
+
+    (out,) = result.nodes
+    assert out.relationship_type == "unclear"
+    assert result.provenance.unclear_model_output_invalid == 1
+
+
+def test_unterminated_fence_still_invalid() -> None:
+    """An opening fence with no closing fence is not a fenced block."""
+    rec = _rec("P")
+    client = _FakeClient(f"```json\n{_valid_payload('concurrent_work')}")
+
+    result = _annotate([rec], [], client)
+
+    (out,) = result.nodes
+    assert out.relationship_type == "unclear"
+    assert result.provenance.unclear_model_output_invalid == 1
+
+
+def test_prose_wrapped_fence_still_invalid() -> None:
+    """Prose around a fenced block → invalid. This is an unwrap, not a scrubber."""
+    rec = _rec("P")
+    client = _FakeClient(
+        f"Sure! Here is my answer:\n```json\n{_valid_payload('concurrent_work')}\n```"
+    )
+
+    result = _annotate([rec], [], client)
+
+    (out,) = result.nodes
+    assert out.relationship_type == "unclear"
+    assert result.provenance.unclear_model_output_invalid == 1
+
+
+def test_prose_on_fence_opening_line_still_invalid() -> None:
+    """The opening fence may carry an info string (```json), not a sentence."""
+    rec = _rec("P")
+    client = _FakeClient(
+        f"```here is my answer\n{_valid_payload('concurrent_work')}\n```"
+    )
+
+    result = _annotate([rec], [], client)
+
+    (out,) = result.nodes
+    assert out.relationship_type == "unclear"
+    assert result.provenance.unclear_model_output_invalid == 1
+
+
 def test_confidence_out_of_range_rejected() -> None:
     """semantic_confidence=1.4 → invalid → model_output_invalid."""
     rec = _rec("P")
@@ -256,7 +381,7 @@ def test_literal_enforced_not_bypassed_by_model_copy() -> None:
     assert bypassed.relationship_type == bad_label  # no revalidation happened
 
     # Enforcement on the typed form rejects it.
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         RelationshipAnnotation.model_validate(
             {"relationship_type": bad_label, "semantic_confidence": 0.5}
         )
@@ -348,7 +473,11 @@ def test_enrichment_fields_not_required() -> None:
 # ── Pipeline-level (llm-free skip) ───────────────────────────────────────────
 
 
-def _params(llm: LLMConfig | None = None) -> PipelineParameters:
+def _params(
+    llm: LLMConfig | None = None, *, parse_hash: str | None = None
+) -> PipelineParameters:
+    """Params under test; ``parse_hash=None`` lets the real default_factory fill it."""
+    extra = {} if parse_hash is None else {"parse_contract_hash": parse_hash}
     return PipelineParameters(
         backward=BackwardParameters(n_backward=10, lambda_decay=0.1),
         forward=ForwardParameters(
@@ -358,7 +487,11 @@ def _params(llm: LLMConfig | None = None) -> PipelineParameters:
             beta=1.0,
             sort="cited_by_count:desc",
         ),
+        # Stated, never read from the clock: it enters the content address, so a
+        # wall-clock value would move every address in this file on New Year.
+        current_year=2026,
         llm=llm,
+        **extra,
     )
 
 
@@ -375,10 +508,17 @@ def test_llm_free_run_skips_node(monkeypatch: pytest.MonkeyPatch) -> None:
     n4 = Node4Result(papers=[_rec("F1")], edges=[_edge("F1", "S")])
 
     async def _fake_backward(*a, **k):
-        return n3
+        # Node 3 is a port-declared handler: the declared output ports, not a
+        # bare Node3Result.
+        return {"backward": n3, "failed_batches": n3.failed_batches}
 
     async def _fake_forward(*a, **k):
-        return n4
+        # Node 4 likewise: the declared output ports, not a bare Node4Result.
+        return {
+            "forward": n4,
+            "failed_seeds": n4.failed_seeds,
+            "truncated_seeds": n4.truncated_seeds,
+        }
 
     called = {"annotate": False}
 
@@ -388,16 +528,50 @@ def test_llm_free_run_skips_node(monkeypatch: pytest.MonkeyPatch) -> None:
             "annotate_relationships must not be called on an LLM-free run"
         )
 
+    # BOTH PLACES, the SAME object in each (IDG-089 rider 1): post-flip
+    # `run_traversal` dispatches through the HANDLERS registry, while the module
+    # attribute is what any surviving direct path reads. The annotate spy is the
+    # assertion of this test, so installing it in only one place would let it
+    # pass vacuously — the node could dispatch down the other path and the spy
+    # would never know.
+    from idiograph.core.executor import HANDLERS
+    from idiograph.domains.arxiv.handlers import register_arxiv_handlers
+
+    register_arxiv_handlers()  # populate HANDLERS before overriding entries
     monkeypatch.setattr(pipeline, "backward_traverse", _fake_backward)
+    monkeypatch.setitem(HANDLERS, "BackwardTraverse", _fake_backward)
     monkeypatch.setattr(pipeline, "forward_traverse", _fake_forward)
+    monkeypatch.setitem(HANDLERS, "ForwardTraverse", _fake_forward)
+    # Node 5.5 takes a THIRD binding, and only Node 5.5 does. `run_traversal`
+    # re-invokes `register_arxiv_handlers()` per run, which re-reads the ten
+    # pipeline stages off `pipeline` but reads Node 5.5 off
+    # `relationship_annotation` — so without this the re-registration would
+    # quietly restore the REAL handler over the setitem, and this spy would be
+    # asserting about a function nothing could have called.
+    from idiograph.domains.arxiv import relationship_annotation
+
     monkeypatch.setattr(pipeline, "annotate_relationships", _spy_annotate)
+    monkeypatch.setattr(
+        relationship_annotation, "annotate_relationships", _spy_annotate
+    )
+    monkeypatch.setitem(HANDLERS, "AnnotateRelationships", _spy_annotate)
 
     result = asyncio.run(
         pipeline.run_traversal(
-            resolved, _params(llm=None), client=object(), api_key="k"
+            resolved,
+            _params(llm=None),
+            seed_requests=[{"arxiv_id": "S"}],
+            client=object(),
+            api_key="k",
         )
     )
 
+    # Post-flip this holds through the node's declared `enabled_when="llm"`
+    # predicate rather than through an `if` in the orchestrator — the SAME
+    # decision, made by the executor from the declaration instead of by hand. An
+    # LLM-free run leaves Node 5.5 SKIPPED with `disabled_by_config`, which does
+    # not cascade: the passthrough forwards the pre-annotation node set and the
+    # downstream tail runs on, which is why there is still a result to assert on.
     assert called["annotate"] is False
     assert all(n.relationship_type is None for n in result.nodes)
 
@@ -451,3 +625,63 @@ def test_prompt_edit_moves_address() -> None:
     assert content_address(seeds, _params(llm=base)) != content_address(
         seeds, _params(llm=edited)
     )
+
+
+# ── Parse contract in the content address (IDG-032) ──────────────────────────
+#
+# The parse rule decides derived output — fence tolerance turns a draw that used
+# to land on `unclear`/model_output_invalid into a real label — but it does not
+# touch PROMPT_TEMPLATE, so prompt_template_hash cannot carry it. Without its own
+# address input, a pre-fix `unclear` HIT and a post-fix real-label MISS collide at
+# one address: a record-replay soundness break. These tests pin the descriptor
+# into the address, and pin it there on the LLM-free path too.
+
+
+def test_parse_contract_hash_is_derived_not_hardcoded() -> None:
+    """The default is the sha256 of the live PARSE_CONTRACT — amend it, it moves."""
+    assert _params().parse_contract_hash == parse_contract_hash(PARSE_CONTRACT)
+    assert parse_contract_hash(PARSE_CONTRACT + "\nEDIT") != parse_contract_hash(
+        PARSE_CONTRACT
+    )
+
+
+def test_parse_contract_edit_moves_address() -> None:
+    """Amending the parse contract → different address. The collision is closed."""
+    seeds = ["S"]
+    base = _params(llm=_llm_config())
+    edited = _params(
+        llm=_llm_config(),
+        parse_hash=parse_contract_hash(PARSE_CONTRACT + "\nEDIT"),
+    )
+
+    assert content_address(seeds, base) != content_address(seeds, edited)
+
+
+def test_llm_free_address_carries_parse_contract_hash() -> None:
+    """The parse hash survives the LLM-free path, where LLMConfig pops to nothing.
+
+    This is why the descriptor lives on PipelineParameters and NOT on LLMConfig:
+    the ``_serialize`` wrap drops a null ``llm`` from the dump, so a parse hash
+    nested there would vanish from the address exactly when no draw was made —
+    while the parser still governs every derivation that parses one.
+    """
+    params = _params(llm=None)
+    dump = params.model_dump(mode="json")
+
+    assert "llm" not in dump  # LLMConfig popped …
+    assert dump["parse_contract_hash"] == parse_contract_hash(PARSE_CONTRACT)  # … this did not
+
+    # and it is load-bearing: drop it and the address moves.
+    without = {k: v for k, v in dump.items() if k != "parse_contract_hash"}
+    assert content_address(["S"], params) != _addr_from_dump(["S"], without)
+
+
+def test_parse_contract_edit_moves_llm_free_address() -> None:
+    """Same, end-to-end: an LLM-free derivation's address tracks the parse rule."""
+    seeds = ["S"]
+    base = _params(llm=None)
+    edited = _params(
+        llm=None, parse_hash=parse_contract_hash(PARSE_CONTRACT + "\nEDIT")
+    )
+
+    assert content_address(seeds, base) != content_address(seeds, edited)

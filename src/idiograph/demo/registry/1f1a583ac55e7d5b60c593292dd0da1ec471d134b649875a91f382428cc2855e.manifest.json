@@ -1,0 +1,52 @@
+{
+  "baseline_commit": "fd03f443588ddcbc59852f170fcdb48d9c468a72",
+  "modules": [
+    {
+      "module": "idiograph.core.executor",
+      "path": "idiograph/core/executor.py",
+      "sha256": "24a30dadba755caf0e990a723cd8d484668a9331d1a41a7907ae9c2e6203d609"
+    },
+    {
+      "module": "idiograph.core.logging_config",
+      "path": "idiograph/core/logging_config.py",
+      "sha256": "b964a6107b8b086b711dd8f12ec8afef5144434cb01ca7d098b5f9ae336f7f8b"
+    },
+    {
+      "module": "idiograph.core.models",
+      "path": "idiograph/core/models.py",
+      "sha256": "2894d969022c11f85efa53b0d40163d252ff88c2916c9c4355b45e2b39bbd991"
+    },
+    {
+      "module": "idiograph.core.query",
+      "path": "idiograph/core/query.py",
+      "sha256": "8d09902242f2434ed13f83701f0e7422d384f58bd207bc336638dbca96ce2448"
+    },
+    {
+      "module": "idiograph.domains.arxiv.handlers",
+      "path": "idiograph/domains/arxiv/handlers.py",
+      "sha256": "470aad83f7f9c0e6e2a8ce743333607c5f1f73a9007e474ee2fead9d714812f4"
+    },
+    {
+      "module": "idiograph.domains.arxiv.models",
+      "path": "idiograph/domains/arxiv/models.py",
+      "sha256": "d63b86b9b5cf040d46f1a765ec5008de8afcaded4222337af5d4e81fbdff22eb"
+    },
+    {
+      "module": "idiograph.domains.arxiv.pipeline",
+      "path": "idiograph/domains/arxiv/pipeline.py",
+      "sha256": "9d6a0877b92f8bb68d38f1b56d29d88cef0b46146bf1e84c1528baa1b5cba1a4"
+    },
+    {
+      "module": "idiograph.domains.arxiv.pipeline_graph",
+      "path": "idiograph/domains/arxiv/pipeline_graph.py",
+      "sha256": "3db48d59e6f46173f71acacc4f7146376dad542fa1ca9b9ba49b3ede8933d561"
+    },
+    {
+      "module": "idiograph.domains.arxiv.relationship_annotation",
+      "path": "idiograph/domains/arxiv/relationship_annotation.py",
+      "sha256": "cb0e476f74753fa45bfc6cafbcee6b7b18ad2337e13bfaf88666e20b1c62b6c5"
+    }
+  ],
+  "uv_lock_sha256": "3f6ef5936e82e82131b4084b3be59c2c86cc78862c177a15693662ca1f798bb3",
+  "v": 1
+}

@@ -10,10 +10,15 @@ Stub handlers for --mock execution mode.
 Return plausible structured output without API calls or network access.
 The full pipeline executes: topological sort, node status progression,
 results dict, failure handling — all demonstrable without credentials.
+
+Dispatch shape is decided by the NODE, not by which handler is registered, so
+the stubs standing in for resource-declaring nodes accept the keyword-only
+`resources` mapping and ignore it. They construct nothing: the mock run supplies
+inert placeholders purely so the executor's pre-flight supply check passes.
 """
 
 
-async def mock_fetch_abstract(params: dict, inputs: dict) -> dict:
+async def mock_fetch_abstract(params: dict, inputs: dict, *, resources: dict) -> dict:
     return {
         "paper_id": params.get("paper_id", "1706.03762"),
         "title": "Attention Is All You Need",
@@ -26,7 +31,7 @@ async def mock_fetch_abstract(params: dict, inputs: dict) -> dict:
     }
 
 
-async def mock_llm_call(params: dict, inputs: dict) -> dict:
+async def mock_llm_call(params: dict, inputs: dict, *, resources: dict) -> dict:
     return {
         "claims": [
             "The Transformer outperforms recurrent architectures on WMT 2014 English-to-German translation.",
@@ -46,7 +51,7 @@ async def mock_evaluator(params: dict, inputs: dict) -> dict:
     }
 
 
-async def mock_llm_summarize(params: dict, inputs: dict) -> dict:
+async def mock_llm_summarize(params: dict, inputs: dict, *, resources: dict) -> dict:
     return {
         "summary": (
             "This paper introduces the Transformer architecture, replacing recurrence "

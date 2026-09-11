@@ -4,6 +4,7 @@
 # Idiograph — deterministic semantic graph execution for production AI pipelines.
 # https://github.com/idiograph/idiograph
 
+import hashlib
 from typing import Literal
 
 from pydantic import (
@@ -13,7 +14,6 @@ from pydantic import (
     model_serializer,
     model_validator,
 )
-
 
 RelationshipType = Literal[
     "methodological_precursor",
@@ -533,6 +533,134 @@ class CommunitiesParameters(BaseModel):
     )
 
 
+PARSE_CONTRACT = """\
+node5.5-annotation-parse/v2
+
+How a raw Node 5.5 model draw is turned into a RelationshipAnnotation. Implemented
+by relationship_annotation._parse_annotation (and its _strip_code_fence helper);
+this constant is the *declaration* of that behavior and its sha256 is the
+address-bearing descriptor.
+
+- v2 (fence-tolerant): a draw that is exactly one fenced block is unwrapped before
+  JSON decoding. The opening fence may carry an info string (```json / ```); both
+  the fence markers and that info string are removed, and nothing else about the
+  draw is rewritten.
+- The unwrapped content MUST decode as a JSON object. Anything else — prose, a
+  bare scalar, malformed JSON, an unterminated fence, a fence with prose on its
+  opening line — is model_output_invalid, exactly as in v1.
+- The label vocabulary (IDG-034) and the confidence range are enforced downstream,
+  on RelationshipAnnotation construction; they are not part of this contract.
+
+v1 was: json.loads(raw) with no unwrap — a fenced draw was model_output_invalid.
+"""
+"""Declared Node 5.5 draw-parse contract; its sha256 is an address input.
+
+The parse step decides derived output (a fenced draw that used to land on
+``unclear``/``model_output_invalid`` now parses to its real label) without
+touching ``PROMPT_TEMPLATE``, so ``prompt_template_hash`` cannot carry it.
+Per IDG-032 — everything determining derived output enters the content address —
+the parse contract is hashed into ``PipelineParameters.parse_contract_hash``.
+
+Lives HERE, not in ``relationship_annotation``, purely to keep the import
+direction one-way: ``relationship_annotation`` imports ``models``, so the reverse
+import would be circular. Changing the parse *rule* means editing this text —
+that is what moves the hash, and with it the content address.
+"""
+
+
+def parse_contract_hash(contract: str = PARSE_CONTRACT) -> str:
+    """sha256 of the declared parse contract — ``PipelineParameters.parse_contract_hash``.
+
+    Derive, don't hardcode (IDG-032), mirroring
+    ``relationship_annotation.prompt_template_hash``: the default is computed over
+    the module ``PARSE_CONTRACT`` constant, so amending the contract moves the
+    content address automatically (no version integer to forget).
+    """
+    return hashlib.sha256(contract.encode("utf-8")).hexdigest()
+
+
+TRAVERSAL_CONTRACT = """\
+node3-backward-traversal/v1
+
+How Node 3 turns its fetched population into the papers and edges every later
+stage derives from: what a record scores, which records the cap retains, in what
+order the cap and the edge filter run, and what selection does NOT happen.
+Implemented by pipeline.backward_traverse and its _node3_score helper; this
+constant is the *declaration* of that behavior, and it covers every determinant
+of derived output that is not already a PipelineParameters field.
+
+- SCORE FORMULA. A record scores
+  `citation_count × log(hop_depth + 1) / recency_weight`, where
+  `recency_weight = exp(years_since_publication × lambda_decay)`. A record with
+  `citation_count == 0` scores 0.0. A missing `year` is treated as
+  `years_since_publication = 0` — no recency penalty.
+- THE DEPTH TERM IS RULED (IDG-044), not defaulted. `log(hop_depth + 1)` is
+  monotonically INCREASING in hop depth BY DESIGN: deeper foundational works are
+  what backward traversal exists to surface, so distance from the seeds raises a
+  paper's score rather than lowering it. If that behavior is ever not desired,
+  the inversion is `log(1 / hop_depth)`. The reason is carried here beside the
+  formula because a formula stated without its reason is exactly the defect
+  IDG-044 repaired — the current shape is a declared design choice, not a
+  default nobody chose.
+- CAP RULE. The retained papers are the top `n_backward` by score DESCENDING;
+  ties break toward ASCENDING `node_id` (the sort key is `(-score, node_id)`).
+  Seeds are excluded from the scored population, so the cap counts non-seed
+  papers only.
+- ORDERING. Score-sort → truncate to `n_backward` → THEN filter edges to those
+  whose endpoints both lie in {retained papers} ∪ {seeds}, with the surviving
+  edge list sorted by `(source_id, target_id)`. The edge filter runs AFTER the
+  cap, and it filters EDGES, not papers.
+- ORPHAN RULE. Node 3 itself emits no orphan edges: the endpoint filter above
+  guarantees both endpoints of every emitted edge are in the emitted node set.
+  The pipeline's only orphan CHECK is downstream —
+  `CycleCleanResult._validate_edge_endpoints` raises on any cleaned edge whose
+  endpoint is missing from its `input_node_ids` witness — and Nodes 5-8 run no
+  defensive checks of their own.
+- SELECTION RULE — DECLARED ABSENT. No selection predicate exists. IDG-042 ruled
+  a conditional `required_root_ids` predicate; it is UNBUILT — the symbol appears
+  nowhere in the tree. Selection is the cap rule above and nothing else. This
+  absence is DECLARED rather than left unsaid so that landing the predicate moves
+  this hash.
+"""
+"""Declared Node 3 backward-traversal contract (IDG-091 clause 1 / IDG-043).
+
+Node 3 decides derived output — which papers survive the cap, in what order, and
+which edges survive the endpoint filter — through a score formula, a cap rule and
+an ordering that no ``PipelineParameters`` field spells out. ``n_backward`` and
+``lambda_decay`` are already in the address, but the formula they feed is not, so
+a silently amended score would return a different corpus under an unchanged
+address. Per IDG-032 — everything determining derived output enters the content
+address — this constant is the descriptor that carries them, and
+``traversal_contract_hash`` is how it is derived.
+
+The hash IS a ``PipelineParameters`` field (see ``traversal_contract_hash``
+below). Landing it there re-addressed every existing run, including the frozen
+demo artifact; because that move was declaration-only — the field entered the
+address while ``backward_traverse`` and ``_node3_score`` stayed byte-identical —
+the frozen record was hand re-addressed under IDG-094 clause 3 rather than
+re-frozen. From here on ANY edit to the constant above, whitespace-only reflow
+included, moves the content address. Nothing here changes what
+``backward_traverse`` or ``_node3_score`` do — the contract DECLARES their
+behavior, it does not implement it.
+
+Lives HERE beside ``PARSE_CONTRACT``, not in ``pipeline``, purely to keep the
+import direction one-way: ``pipeline`` imports ``models``, so the reverse import
+would be circular. Changing the traversal *rule* means editing this text — that
+is what moves the hash.
+"""
+
+
+def traversal_contract_hash(contract: str = TRAVERSAL_CONTRACT) -> str:
+    """sha256 of the declared Node 3 backward-traversal contract.
+
+    Derive, don't hardcode (IDG-032), mirroring ``parse_contract_hash`` and
+    ``relationship_annotation.prompt_template_hash``: the default is computed over
+    the module ``TRAVERSAL_CONTRACT`` constant, so amending the contract moves the
+    hash automatically (no version integer to forget).
+    """
+    return hashlib.sha256(contract.encode("utf-8")).hexdigest()
+
+
 class LLMConfig(BaseModel):
     """Node 5.5 model-configuration axis of the content address (IDG-032).
 
@@ -566,8 +694,13 @@ class LLMConfig(BaseModel):
 
 class PipelineParameters(BaseModel):
     """Per-stage configuration for ``run_arxiv_pipeline``, as nested model
-    objects. ``backward`` and ``forward`` are required; the rest default to the
-    frozen per-node defaults. Frozen — an immutable config input.
+    objects. ``backward``, ``forward`` and ``current_year`` are required; the
+    rest default to the frozen per-node defaults. Frozen — an immutable config
+    input.
+
+    ``current_year`` is the one required field that is not a nested per-stage
+    model: it is a whole-run fact both traversal stages score against, so it
+    sits at this level rather than being duplicated onto two of them.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -577,6 +710,27 @@ class PipelineParameters(BaseModel):
     )
     forward: ForwardParameters = Field(
         ..., description="Node 4 forward-traversal parameters."
+    )
+    current_year: int = Field(
+        ...,
+        description="The year the traversal scores against — the reference "
+                    "point for recency in BOTH Node 3's `_node3_score` and Node "
+                    "4's `_node4_score`/`_compute_velocity`. Output-determining: "
+                    "it orders the sorts that `n_backward`/`n_forward` truncate, "
+                    "so two runs reading a different year select different "
+                    "corpora. It sits HERE, top-level, and NOT on "
+                    "BackwardParameters/ForwardParameters, because it is a fact "
+                    "about the RUN rather than per-stage tuning — two fields "
+                    "would have to agree with nothing enforcing agreement. "
+                    "REQUIRED with no default and no default_factory ON "
+                    "PURPOSE: a `date.today().year` factory would merely "
+                    "relocate the wall-clock read one layer up, and would let "
+                    "two runs on either side of a New Year boundary take "
+                    "different content addresses without the caller having "
+                    "stated anything different. The read belongs to whoever "
+                    "constructs this model. See the `llm` field below for the "
+                    "sibling hazard of defaults that inject values into every "
+                    "run's model_dump.",
     )
     co_citation: CoCitationParameters = Field(
         default_factory=CoCitationParameters,
@@ -599,6 +753,35 @@ class PipelineParameters(BaseModel):
                     "LLM-free run, violating IDG-032. None = LLM-free run (Node "
                     "5.5 skipped, address unchanged).",
     )
+    parse_contract_hash: str = Field(
+        default_factory=parse_contract_hash,
+        description="sha256 of the module PARSE_CONTRACT constant — the Node 5.5 "
+                    "draw-parse contract (IDG-032). Derived via "
+                    "parse_contract_hash(), never hand-entered. Sits HERE and not "
+                    "on LLMConfig on purpose: LLMConfig pops to null on the "
+                    "LLM-free path (see _serialize), which would drop this out of "
+                    "the address, yet the parser's contract governs derived output "
+                    "on every derivation that parses a draw. Unlike llm, it is "
+                    "always serialized.",
+    )
+    traversal_contract_hash: str = Field(
+        default_factory=traversal_contract_hash,
+        description="sha256 of the module TRAVERSAL_CONTRACT constant — the "
+                    "declared Node 3 backward-traversal contract (IDG-091 clause "
+                    "1 / IDG-043). Derived via traversal_contract_hash(), never "
+                    "hand-entered. Node 3's score formula, cap rule, edge-filter "
+                    "ordering and declared-absent selection predicate all decide "
+                    "derived output, and no field spells them out — `n_backward` "
+                    "and `lambda_decay` FEED the formula, they do not STATE it — "
+                    "so per IDG-032 the descriptor that carries them enters the "
+                    "address here. Sits at this level and not on "
+                    "BackwardParameters on purpose: that model's field names match "
+                    "the `backward_traverse` kwargs exactly (see its docstring) so "
+                    "the orchestrator maps them at the call site, and a derived "
+                    "hash no caller supplies and no handler accepts would break "
+                    "that correspondence. Like parse_contract_hash and unlike llm, "
+                    "it is always serialized.",
+    )
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
@@ -611,6 +794,15 @@ class PipelineParameters(BaseModel):
         ``co_citation.max_edges`` (legitimately None) and re-baseline every
         existing address. A real ``llm`` config is always serialized in full —
         only the null case is dropped, so no LLM-run provenance is lost.
+
+        Neither contract hash is popped alongside it. The parser's contract
+        governs derived output wherever a draw is parsed, and the traversal
+        contract governs Node 3 on every run whether or not a draw is ever made,
+        so both belong in the address on every derivation; only the *null LLM
+        config* is an address non-event, not the contracts. An LLM-free dump is
+        therefore the pre-``llm``-field baseline PLUS ``parse_contract_hash``
+        PLUS ``traversal_contract_hash`` — the intended, uniformly-applied
+        address inputs those two fields add (IDG-032).
         """
         data = handler(self)
         if self.llm is None:

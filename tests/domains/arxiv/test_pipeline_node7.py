@@ -1,12 +1,14 @@
 # Copyright 2026 Ryan Smith
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import logging
 
 import pytest
 
 from idiograph.domains.arxiv.models import (
     CitationEdge,
+    CommunityResult,
     PaperRecord,
 )
 from idiograph.domains.arxiv.pipeline import (
@@ -14,8 +16,35 @@ from idiograph.domains.arxiv.pipeline import (
     detect_communities,
 )
 
-
 # ── Helpers ─────────────────────────────────────────────────────────────────
+
+
+def _clean(nodes: list[PaperRecord], edges: list[CitationEdge]) -> dict:
+    """Call the bound ``clean_cycles`` handler from a sync test.
+
+    Marshals into the stage's declared contract — one key per declared input
+    port, empty ``params`` — and returns the declared output ports.
+    `asyncio.run` is the repo's async-from-sync convention (no async plugin).
+    """
+    return asyncio.run(clean_cycles({}, {"nodes": nodes, "cites": edges}))
+
+
+def _detect(
+    nodes: list[PaperRecord],
+    edges: list[CitationEdge],
+    **params: object,
+) -> CommunityResult:
+    """Call the bound ``detect_communities`` handler from a sync test.
+
+    Marshals into the stage's declared contract — one key per declared input
+    port (``nodes`` / ``all_cites``), the tunables as ``params`` — and unwraps
+    the single declared output port so these tests keep asserting against a
+    ``CommunityResult``. Omitted tunables fall back to the
+    ``CommunitiesParameters`` defaults, exactly as the executor path does.
+    """
+    return asyncio.run(
+        detect_communities(params, {"nodes": nodes, "all_cites": edges})
+    )["communities"]
 
 
 def _rec(node_id: str) -> PaperRecord:
@@ -40,7 +69,7 @@ def test_all_nodes_assigned() -> None:
     nodes = [_rec(x) for x in ("A", "B", "C", "D", "E")]
     edges = [_edge("A", "B"), _edge("B", "C"), _edge("D", "E")]
 
-    result = detect_communities(nodes, edges)
+    result = _detect(nodes, edges)
 
     assert set(result.community_assignments.keys()) == {"A", "B", "C", "D", "E"}
 
@@ -55,7 +84,7 @@ def test_community_count_matches_assignments() -> None:
         _edge("E", "F"),
     ]
 
-    result = detect_communities(nodes, edges)
+    result = _detect(nodes, edges)
 
     assert result.community_count == len(set(result.community_assignments.values()))
 
@@ -66,7 +95,7 @@ def test_isolate_receives_assignment() -> None:
     nodes = [_rec(x) for x in ("A", "B", "C", "X")]
     edges = [_edge("A", "B"), _edge("B", "C")]
 
-    result = detect_communities(nodes, edges)
+    result = _detect(nodes, edges)
 
     assert "X" in result.community_assignments
 
@@ -76,7 +105,7 @@ def test_community_id_is_string() -> None:
     nodes = [_rec(x) for x in ("A", "B", "C", "D")]
     edges = [_edge("A", "B"), _edge("C", "D")]
 
-    result = detect_communities(nodes, edges)
+    result = _detect(nodes, edges)
 
     assert result.community_assignments  # precondition
     for cid in result.community_assignments.values():
@@ -88,7 +117,7 @@ def test_algorithm_used_set() -> None:
     nodes = [_rec(x) for x in ("A", "B", "C")]
     edges = [_edge("A", "B"), _edge("B", "C")]
 
-    result = detect_communities(nodes, edges)
+    result = _detect(nodes, edges)
 
     assert result.algorithm_used in ("infomap", "leiden")
 
@@ -100,7 +129,7 @@ def test_validation_flags_empty_within_bounds() -> None:
     nodes = [_rec(x) for x in ("A", "B", "C", "D", "E")]
     edges = [_edge("A", "B"), _edge("B", "C"), _edge("D", "E")]
 
-    result = detect_communities(
+    result = _detect(
         nodes, edges, community_count_min=1, community_count_max=10
     )
 
@@ -114,7 +143,7 @@ def test_validation_flag_below_minimum() -> None:
 
     # community_count_min=100 forces below-minimum regardless of how many
     # communities infomap finds on this small graph.
-    result = detect_communities(
+    result = _detect(
         nodes, edges, community_count_min=100, community_count_max=200
     )
 
@@ -127,7 +156,7 @@ def test_validation_flag_above_maximum() -> None:
     nodes = [_rec(x) for x in ("A", "B", "C", "D", "E")]
     edges = [_edge("A", "B"), _edge("B", "C"), _edge("D", "E")]
 
-    result = detect_communities(
+    result = _detect(
         nodes, edges, community_count_min=1, community_count_max=1
     )
 
@@ -145,7 +174,7 @@ def test_missing_edge_node_warns(caplog: pytest.LogCaptureFixture) -> None:
     ]
 
     with caplog.at_level(logging.WARNING, logger="idiograph.arxiv.pipeline"):
-        result = detect_communities(nodes, edges)
+        result = _detect(nodes, edges)
 
     warnings = [r for r in caplog.records if r.levelname == "WARNING"]
     assert any("Z" in r.getMessage() for r in warnings)
@@ -157,7 +186,7 @@ def test_missing_edge_node_warns(caplog: pytest.LogCaptureFixture) -> None:
 
 def test_empty_nodes() -> None:
     """Empty input returns empty community_assignments, community_count=0."""
-    result = detect_communities([], [])
+    result = _detect([], [])
 
     assert result.community_assignments == {}
     assert result.community_count == 0
@@ -167,7 +196,7 @@ def test_single_node_no_edges() -> None:
     """Single node with no edges receives an assignment."""
     nodes = [_rec("A")]
 
-    result = detect_communities(nodes, [])
+    result = _detect(nodes, [])
 
     assert "A" in result.community_assignments
     assert result.community_count == 1
@@ -179,7 +208,7 @@ def test_disconnected_graph() -> None:
     nodes = [_rec(x) for x in ("A", "B", "C", "D", "E")]
     edges = [_edge("A", "B"), _edge("C", "D")]
 
-    result = detect_communities(nodes, edges)
+    result = _detect(nodes, edges)
 
     assert set(result.community_assignments.keys()) == {"A", "B", "C", "D", "E"}
     # Disconnected components must land in distinct communities.
@@ -198,8 +227,8 @@ def test_deterministic_same_input() -> None:
         _edge("F", "D"),
     ]
 
-    r1 = detect_communities(nodes, edges)
-    r2 = detect_communities(nodes, edges)
+    r1 = _detect(nodes, edges)
+    r2 = _detect(nodes, edges)
 
     assert r1.community_assignments == r2.community_assignments
     assert r1.algorithm_used == r2.algorithm_used
@@ -207,10 +236,14 @@ def test_deterministic_same_input() -> None:
 
 
 def test_suppressed_originals_merge() -> None:
-    """Merge pattern (cleaned + [s.original ...]) produces correct input."""
+    """The `all_cites` port produces correct Node 7 input.
+
+    The cleaned ∪ suppressed-originals merge is no longer reproduced here: it is
+    a declared output port of the cycle-cleaning stage, so this test reads the
+    same edge set the pipeline orchestrator now reads — the full citation
+    topology — off the returned mapping.
+    """
     # Build a small graph with a 2-cycle so clean_cycles suppresses one edge.
-    # Then assemble the Node 7 input the same way the pipeline orchestrator
-    # will: cleaned ∪ suppressed originals — i.e. the full citation topology.
     nodes = [_rec(x) for x in ("A", "B", "C", "D")]
     raw_edges = [
         _edge("A", "B"),
@@ -219,15 +252,14 @@ def test_suppressed_originals_merge() -> None:
         _edge("C", "D"),
     ]
 
-    cycle_result = clean_cycles(nodes, raw_edges)
-    assert cycle_result.cycle_log.suppressed_edges  # precondition: a cycle was suppressed
+    cycle_result = _clean(nodes, raw_edges)
+    # precondition: a cycle was suppressed
+    assert cycle_result["cycle_log"].suppressed_edges
 
-    all_cites = cycle_result.cleaned_edges + [
-        s.original for s in cycle_result.cycle_log.suppressed_edges
-    ]
+    all_cites = cycle_result["all_cites"]
     assert len(all_cites) == len(raw_edges)  # nothing dropped by the merge
 
-    result = detect_communities(nodes, all_cites)
+    result = _detect(nodes, all_cites)
 
     # Every node still receives an assignment after the merge.
     assert set(result.community_assignments.keys()) == {"A", "B", "C", "D"}
@@ -239,7 +271,7 @@ def test_validation_flags_always_list() -> None:
     nodes = [_rec(x) for x in ("A", "B", "C")]
     edges = [_edge("A", "B"), _edge("B", "C")]
 
-    result = detect_communities(nodes, edges)
+    result = _detect(nodes, edges)
 
     assert isinstance(result.validation_flags, list)
 
@@ -249,7 +281,7 @@ def test_warnings_always_list() -> None:
     nodes = [_rec(x) for x in ("A", "B", "C")]
     edges = [_edge("A", "B"), _edge("B", "C")]
 
-    result = detect_communities(nodes, edges)
+    result = _detect(nodes, edges)
 
     assert isinstance(result.warnings, list)
     assert result.warnings == []
@@ -283,7 +315,7 @@ def test_leiden_fallback_when_infomap_missing(
     nodes = [_rec(x) for x in ("A", "B", "C", "D")]
     edges = [_edge("A", "B"), _edge("C", "D")]
 
-    result = detect_communities(
+    result = _detect(
         nodes, edges, community_count_min=1, community_count_max=10
     )
 
@@ -302,4 +334,4 @@ def test_raises_when_neither_installed(
     edges = [_edge("A", "B")]
 
     with pytest.raises(RuntimeError, match="uv sync --extra community"):
-        detect_communities(nodes, edges)
+        _detect(nodes, edges)

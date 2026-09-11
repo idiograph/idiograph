@@ -4,47 +4,525 @@
 # Idiograph — deterministic semantic graph execution for production AI pipelines.
 # https://github.com/idiograph/idiograph
 
+"""The served MCP surface — a READ-ONLY PROJECTION of durable artifacts (IDG-109).
+
+WHAT IS SERVED. Two things, and they describe ONE run:
+
+  - THE DECLARATION. ``build_pipeline_graph`` resolved over a stored record's own
+    arguments — its ``parameters`` block and the request sidecar recording the
+    seed set it was triggered with. Eleven nodes, 21 edges: the citation-traversal
+    pipeline as a declared ``Graph``.
+  - THE RECORD. The ``PipelineResult`` that run produced, read back through the
+    address-verifying registry path.
+
+The declaration is NOT a claim that this ``Graph`` was executed to produce the
+record: ``run_traversal`` produced it, and the graph is the declaration that
+transcribes that orchestrator (``pipeline_graph``'s own docstring says so). What
+the pairing does claim is narrower and true — the declaration served here is the
+declaration of the pipeline whose record this is, configured identically. That
+is why the resolver reads the record's parameters rather than the viewer's inert
+arguments: zeroed values would tell a client ``n_backward: 0`` and ``llm: None``
+beside a record that says otherwise.
+
+WHICH RECORD (IDG-113 clause 5). Two coordinates, and neither is a name this
+module knows: a REGISTRY ROOT, fixed once per process at startup, and a CONTENT
+ADDRESS, named per request. The root defaults to the packaged demo registry, so
+a server started with no arguments serves byte-for-byte what it served before
+this existed; ``--registry-root`` points it at an operator's own durable registry
+instead. The address defaults to :func:`sole_record_address` OF THAT ROOT — a
+single-record root already states its record's address in the filename, and a
+multi-record root has no default, which is answered as a structured miss rather
+than by picking a winner.
+
+Nothing here hand-authors the CRISPR address or its seeds any more. The
+declaration's seeds come off the record's own ``<address>.request.json`` sidecar,
+so a surface pointed at a second corpus describes THAT corpus; falling back to a
+packaged literal would have answered for a record it did not produce. A record
+with no request sidecar is a structured miss naming the file it wants, never a
+substitution.
+
+NO AUTHORITATIVE IN-PROCESS STATE. There is no module-level graph and no
+initializer. Every request resolves its own ``Graph`` through the pure
+constructor, so nothing a request can reach outlives it, and two requests never
+share a mutable graph — which matters because the executor mutates
+``Node.status`` in place. The record READ is memoized, keyed by content address,
+and so is the record projection the HTTP surface serves below: a projection of a
+durable artifact under a key derived from its content is a cache, not state. No
+tool call writes it, re-freezes anything, or touches the network.
+
+WHY THERE IS NO ``update_node`` AND NO ``execute_graph``. Both were deleted
+under IDG-109. The repo is the authority on what the graph is, so a served
+mutation would have nowhere durable to land; and execution lives at the CLI
+composition root (``main._execute_live``), which is where the handlers are
+registered. Serving ``execute_graph`` over a graph with no registered handler for
+any of its node types is what finding f52487fa reported — the tool raised on the
+only graph it was ever given. Removal is the discharge.
+
+TRANSPORT. Two, and they are two ways to reach ONE surface. ``serve()`` mounts
+stdio; ``serve_http()`` mounts the SDK's ``StreamableHTTPSessionManager`` at
+``/mcp`` inside an ASGI app under uvicorn. Both mount the same module-level
+``app`` — there is no second ``Server``, no duplicated registration, and no
+transport-conditional tool set, so the five tools, their schemas and their
+result shapes are identical whichever way a client connects (IDG-109 clause 3).
+The promise the previous paragraph of this docstring made — that a second
+transport could mount the same ``app`` without touching anything above — is
+what the section at the foot of this module collects on: nothing between here
+and there changed to admit it.
+
+The HTTP mount is STATELESS. The SDK's stateful mode keeps an in-memory
+session→transport registry, which would be the only mutable in-process state on
+the surface, and clause 4 says there is none: every served thing is a projection
+of a durable artifact, so there is no session for a client to have. A stateless
+mount also survives a restart with nothing to lose. The cost — no
+server-initiated notifications, no stream resumability — is not a cost here:
+every tool answers one bounded question with one complete result.
+
+BESIDE THE TOOL SURFACE, THE VIEWER'S. The HTTP app answers two further routes —
+:data:`PROJECTION_GRAPH_PATH` and :data:`PROJECTION_RECORD_PATH` — each serving
+one headless projection from :mod:`idiograph.domains.viewer` as exactly the JSON
+``apps.viewer.generate`` inlines into its static HTML. They are a second
+SURFACE, not a second transport: no MCP client reaches them, they carry no tool,
+no schema and no session, and nothing on the tool surface changed to admit them.
+They exist because this host served an LLM's surface and nothing a RENDERER
+could fetch. The renderer is not changed to fetch them here; that is follow-on
+work. Everything the paragraphs above claim holds of these routes unchanged —
+read-only, offline, GET-only, and no state beyond the same content-addressed
+memoization.
+
+:data:`PROJECTION_RECORD_PATH` takes the same address selector the record tool
+takes, and by the same route through :func:`_resolve_address`, so no
+client-supplied string reaches the registry except a validated content address.
+:data:`PROJECTION_GRAPH_PATH` REFUSES one: its subject is a shape, invariant to
+seeds and parameters, so an address there would select nothing — and a selector
+that silently does nothing is a false affordance, the same call the viewer CLI
+makes when it refuses ``--address`` on its declared-graph view.
+"""
+
 import asyncio
+import contextlib
 import json
+import re
+from collections.abc import AsyncIterator
+from functools import lru_cache
+from pathlib import Path
+from typing import Any
 
-from mcp.server import Server
 from mcp import stdio_server, types
+from mcp.server import Server
+from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+from mcp.server.transport_security import TransportSecuritySettings
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import Response
+from starlette.routing import Mount, Route
 
+from idiograph.apps.viewer.generate import declared_pipeline_graph
 from idiograph.core import (
-    get_node,
     get_edges_from,
-    validate_integrity,
+    get_node,
     summarize_intent,
-    execute_graph,
+    validate_integrity,
 )
-from idiograph.core.models import Graph
 from idiograph.core.logging_config import get_logger
+from idiograph.core.models import Graph
+from idiograph.demo import REGISTRY_ROOT
+from idiograph.domains.arxiv.models import PipelineResult
+from idiograph.domains.arxiv.pipeline_graph import build_pipeline_graph
+from idiograph.domains.arxiv.registry import (
+    PipelineRegistry,
+    RecordRequest,
+    sole_record_address,
+)
+from idiograph.domains.viewer import project_depth_provenance, project_graph
 
 logger = get_logger("mcp_server")
 
+RECORD_TOOL = "read_record"
 
-# ── Session-scoped graph state ────────────────────────────────────────────────
-# stdio transport: one client, one process, one graph for the session lifetime.
-# AMD-009: module-level state is a documented constraint; forcing function not
-# met for stdio. Revisit if HTTP/SSE transport is added.
+#: A content address is a sha256 hex digest and nothing else. Matching the shape
+#: before touching the filesystem is what keeps a client-supplied string out of
+#: path construction: ``../`` and absolute paths cannot pass this, so an address
+#: the registry does not hold is answered as a miss rather than as a read.
+_ADDRESS_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
-_graph: Graph | None = None
+#: Ceiling on one record response's serialized text. The record is ~9.3 MB with
+#: 1,885 nodes and 14,852 edges; no single call may hand back the dump, so an
+#: over-sized selection is refused with a structured error naming the two knobs
+#: that narrow it. This is the mechanical form of the read-only-projection rule:
+#: a client composes the record out of bounded windows or not at all.
+_MAX_RESPONSE_BYTES = 131_072
+
+#: Window defaults for a path read. Small enough that the default call is cheap,
+#: large enough to be useful; the byte ceiling above is the real bound.
+_DEFAULT_LIMIT = 20
+_MAX_LIMIT = 200
 
 
-def _get_graph() -> Graph:
-    if _graph is None:
-        raise RuntimeError("Graph not initialized. Call init_graph() before serving.")
-    return _graph
+class _RecordMiss(LookupError):
+    """A record read that missed — an unknown address, path, node or edge.
+
+    Carries the message the tool returns as ``{"error": ...}``. A miss is DATA,
+    not a protocol fault: the client asked a well-formed question about
+    something that is not there, and gets a structured answer. Malformed
+    arguments still raise ``ValueError``, as they do on the four graph tools.
+    """
 
 
-def init_graph(graph: Graph) -> None:
-    global _graph
-    _graph = graph
+# ── Resolution: the repo is the authority ─────────────────────────────────────
+
+#: The registry root every record read on this surface resolves against. A
+#: PROCESS SETTING, not served state: it is written once, by an entry point,
+#: BEFORE anything is mounted, and no request can reach it — which is what keeps
+#: IDG-109 clause 4's "no authoritative in-process state" intact. The default is
+#: the packaged demo registry, so a server started with no arguments answers
+#: exactly what it answered before this setting existed.
+_registry_root: Path = REGISTRY_ROOT
+
+
+def registry_root() -> Path:
+    """The root this process serves records from.
+
+    A function rather than a bare read of the module global, so that every call
+    site — the memoized reads, the address check, the tools, the routes — is
+    asking the same question of the same place, and so that the setter below is
+    the only writer.
+    """
+    return _registry_root
+
+
+def set_registry_root(root: Path | None) -> Path:
+    """Fix the served registry root for this process; return what it resolved to.
+
+    Called ONCE, by an entry point, before a transport is mounted. The memos
+    below are keyed by content address alone — sound only while the root is
+    fixed, because a content address names a record within a root, not across
+    roots — so this drops them. That is a fence, not an invitation: nothing on
+    the request path calls this, and a root changed under a live server would be
+    a different surface wearing the same process.
+
+    Returning the resolved root is not a convenience. The entry points below take
+    a parameter named ``registry_root``, which SHADOWS :func:`registry_root` for
+    the length of their bodies, so an entry point that wanted to log what it had
+    just set could not ask for it. Handing it back here removes the need to.
+    """
+    global _registry_root
+    _registry_root = REGISTRY_ROOT if root is None else Path(root)
+    _read_record.cache_clear()
+    _record_json.cache_clear()
+    _record_projection_body.cache_clear()
+    return _registry_root
+
+
+@lru_cache(maxsize=2)
+def _read_record(address: str) -> PipelineResult:
+    """Read one record from the served root, memoized by its content address.
+
+    Goes through :meth:`PipelineRegistry.read`, which re-supplies the excluded
+    cycle witness and verifies that what came off disk addresses to what was
+    asked for. Memoizing is sound precisely because the key is the content
+    address: two calls with the same key cannot be answered differently by a
+    content-addressed store, and ``PipelineResult`` is frozen. The ROOT is fixed
+    per process (:func:`set_registry_root`), so it is not part of the key and
+    does not need to be.
+    """
+    return PipelineRegistry(registry_root()).read(address)
+
+
+@lru_cache(maxsize=2)
+def _record_json(address: str) -> dict[str, Any]:
+    """The record's JSON projection, memoized alongside the record itself.
+
+    ``model_dump(mode="json")`` over 9.3 MB is not something to repeat per
+    request. Callers slice this mapping and never mutate it.
+    """
+    return _read_record(address).model_dump(mode="json")
+
+
+def _resolve_address(address: str | None) -> str:
+    """The address a call names, defaulting to the served root's sole record.
+
+    Never hand-authored: the default is derived from the served registry's sole
+    filename, so a surface pointed at another single-record root needs no second
+    argument and no address literal lives in this module. A supplied address must
+    both look like an address and be held by that registry, or the call is a miss.
+
+    A MULTI-RECORD ROOT HAS NO DEFAULT, and this reports that as a miss rather
+    than choosing one. ``sole_record_address`` raises there — correctly, since
+    "the sole record" is a claim about the directory — and the raise is restated
+    as a miss because a client asking for the default record of a root that has
+    none has asked a well-formed question about something that is not there. That
+    is DATA on this surface (see :class:`_RecordMiss`), not a protocol fault.
+    """
+    root = registry_root()
+    if address is None:
+        try:
+            return sole_record_address(root)
+        except ValueError as exc:
+            raise _RecordMiss(
+                f"No default record: {exc}. Name one with 'address'."
+            ) from exc
+    if not _ADDRESS_PATTERN.match(address):
+        raise _RecordMiss(
+            f"Address '{address}' is not a content address "
+            "(64 lowercase hex characters)."
+        )
+    if not PipelineRegistry(root).path_for(address).is_file():
+        raise _RecordMiss(f"The registry holds no record at address '{address}'.")
+    return address
+
+
+def _read_request(address: str) -> RecordRequest:
+    """What the run at ``address`` was ASKED for, off its request sidecar.
+
+    NOT memoized, and not for want of symmetry with the record read above: the
+    file is a few hundred bytes, and re-parsing it per call hands every
+    resolution its own fresh seed dicts — the mutable structure
+    :func:`resolve_graph` must not share between requests — for free.
+
+    ABSENCE IS A STRUCTURED MISS NAMING THE FILE. A record whose request was
+    never recorded cannot say what it was asked for, and the one thing this must
+    not do is answer with some other run's seeds: the substitution would be
+    invisible in the response and wrong in exactly the case the address selector
+    exists for.
+    """
+    request = PipelineRegistry(registry_root()).read_request(address)
+    if request is None:
+        raise _RecordMiss(
+            f"The record at '{address}' records no request — expected "
+            f"{PipelineRegistry(registry_root()).request_path_for(address)}. "
+            "The declared graph is configured from what a run was asked for, "
+            "and this record does not say."
+        )
+    return request
+
+
+def resolve_graph(address: str | None = None) -> Graph:
+    """The served graph: the declaration of the pipeline whose record this is.
+
+    Both of the record's own arguments, from the record itself: its
+    ``parameters`` block, and the request seeds off its ``<address>.request.json``
+    sidecar. Nothing about which corpus this is written down here — point the
+    surface at another record and this describes that one.
+
+    A FRESH ``Graph`` every call, deliberately — ``build_pipeline_graph``'s own
+    contract, and the reason there is no module-level graph here. The seed dicts
+    are copied on the way in so that two resolutions share no mutable structure
+    at all, not merely no shared ``Node``.
+    """
+    address = _resolve_address(address)
+    parameters = _read_record(address).parameters
+    return build_pipeline_graph(
+        [dict(seed) for seed in _read_request(address).seeds], parameters
+    )
+
+
+# ── The record read ───────────────────────────────────────────────────────────
+
+
+def _window(arguments: dict) -> tuple[int, int]:
+    """The (offset, limit) window a path read is bounded by."""
+    offset = arguments.get("offset", 0)
+    limit = arguments.get("limit", _DEFAULT_LIMIT)
+    if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+        raise ValueError(f"{RECORD_TOOL} 'offset' must be a non-negative integer")
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= _MAX_LIMIT:
+        raise ValueError(f"{RECORD_TOOL} 'limit' must be between 1 and {_MAX_LIMIT}")
+    return offset, limit
+
+
+def _descend(payload: dict[str, Any], path: list[str]) -> Any:
+    """Walk ``path`` into the record's JSON projection.
+
+    Segments are strings because the record's own keys are node_ids and DOIs —
+    ``doi:10.1126/science.1225829`` contains both dots and slashes, so a dotted
+    string path could not name them. Into a list, a segment is its index.
+    """
+    value: Any = payload
+    for depth, segment in enumerate(path):
+        if isinstance(value, dict):
+            if segment not in value:
+                raise _RecordMiss(
+                    f"No key '{segment}' at path {path[:depth]!r} in the record."
+                )
+            value = value[segment]
+        elif isinstance(value, list):
+            try:
+                index = int(segment)
+            except ValueError:
+                raise _RecordMiss(
+                    f"Path segment '{segment}' indexes a list at {path[:depth]!r} "
+                    "and must be an integer."
+                ) from None
+            if not -len(value) <= index < len(value):
+                raise _RecordMiss(
+                    f"Index {index} is out of range at path {path[:depth]!r} "
+                    f"(length {len(value)})."
+                )
+            value = value[index]
+        else:
+            raise _RecordMiss(
+                f"Path {path[: depth + 1]!r} descends into a scalar value."
+            )
+    return value
+
+
+def _shape(address: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """What the record IS, without any of its bulk.
+
+    The address it served, the resolved seed node_ids, the parameters block that
+    (with those seeds) derives that address, and a count per top-level field. A
+    client reads this first and then asks for the part it wants.
+    """
+    fields = {}
+    for name, value in payload.items():
+        if isinstance(value, list):
+            fields[name] = {"kind": "list", "count": len(value)}
+        elif isinstance(value, dict):
+            fields[name] = {"kind": "object", "count": len(value)}
+        else:
+            fields[name] = {"kind": "value"}
+    return {
+        "address": address,
+        "select": "shape",
+        "seeds": payload["seeds"],
+        "parameters": payload["parameters"],
+        "fields": fields,
+    }
+
+
+def _path_read(
+    address: str, payload: dict[str, Any], path: list[str], offset: int, limit: int
+) -> dict[str, Any]:
+    """One windowed slice of the record at ``path``."""
+    value = _descend(payload, path)
+    result = {"address": address, "select": "path", "path": path}
+    if isinstance(value, list):
+        return result | {
+            "kind": "list",
+            "count": len(value),
+            "offset": offset,
+            "limit": limit,
+            "items": value[offset : offset + limit],
+        }
+    if isinstance(value, dict):
+        keys = sorted(value)[offset : offset + limit]
+        return result | {
+            "kind": "object",
+            "count": len(value),
+            "offset": offset,
+            "limit": limit,
+            "items": {key: value[key] for key in keys},
+        }
+    return result | {"kind": "value", "value": value}
+
+
+def _node_read(
+    address: str, payload: dict[str, Any], node_id: str
+) -> dict[str, Any]:
+    """One ``PaperRecord`` by its node_id."""
+    for node in payload["nodes"]:
+        if node["node_id"] == node_id:
+            return {
+                "address": address,
+                "select": "node",
+                "node_id": node_id,
+                "node": node,
+            }
+    raise _RecordMiss(f"The record holds no node '{node_id}'.")
+
+
+def _edge_read(
+    address: str, payload: dict[str, Any], source_id: str, target_id: str
+) -> dict[str, Any]:
+    """The edges between one ordered pair of node_ids.
+
+    A ``CitationEdge`` carries no id of its own, so its identity is its
+    endpoints. The match is DIRECTED and over the merged ``edges`` list, which
+    holds both ``cites`` and ``co_citation`` types — a pair can therefore answer
+    with more than one edge, and the list is returned rather than a first hit.
+    """
+    edges = [
+        edge
+        for edge in payload["edges"]
+        if edge["source_id"] == source_id and edge["target_id"] == target_id
+    ]
+    if not edges:
+        raise _RecordMiss(
+            f"The record holds no edge from '{source_id}' to '{target_id}'."
+        )
+    return {
+        "address": address,
+        "select": "edge",
+        "source_id": source_id,
+        "target_id": target_id,
+        "count": len(edges),
+        "edges": edges,
+    }
+
+
+def _read_record_tool(arguments: dict) -> dict[str, Any] | list[Any]:
+    """Dispatch one ``read_record`` call. Reads only; writes nothing."""
+    select = arguments.get("select", "shape")
+    address = _resolve_address(arguments.get("address"))
+    payload = _record_json(address)
+
+    if select == "shape":
+        result = _shape(address, payload)
+    elif select == "path":
+        path = arguments.get("path")
+        if not isinstance(path, list) or not path:
+            raise ValueError(f"{RECORD_TOOL} select='path' requires a non-empty 'path'")
+        offset, limit = _window(arguments)
+        result = _path_read(address, payload, [str(p) for p in path], offset, limit)
+    elif select == "node":
+        node_id = arguments.get("node_id")
+        if not node_id:
+            raise ValueError(f"{RECORD_TOOL} select='node' requires 'node_id'")
+        result = _node_read(address, payload, node_id)
+    elif select == "edge":
+        source_id = arguments.get("source_id")
+        target_id = arguments.get("target_id")
+        if not source_id or not target_id:
+            raise ValueError(
+                f"{RECORD_TOOL} select='edge' requires 'source_id' and 'target_id'"
+            )
+        result = _edge_read(address, payload, source_id, target_id)
+    else:
+        raise ValueError(
+            f"{RECORD_TOOL} 'select' must be one of "
+            f"'shape', 'path', 'node', 'edge' — got {select!r}"
+        )
+
+    size = len(json.dumps(result, indent=2))
+    if size > _MAX_RESPONSE_BYTES:
+        raise _RecordMiss(
+            f"Selection is {size} bytes, over the {_MAX_RESPONSE_BYTES}-byte "
+            "response ceiling. Narrow it with a deeper 'path' or a smaller "
+            "'limit'."
+        )
+    return result
 
 
 # ── Server ────────────────────────────────────────────────────────────────────
 
 app = Server("idiograph")
+
+
+#: The address selector, spelled ONCE and shared by every tool that takes one.
+#: All five resolve it through the same :func:`_resolve_address`, so a client
+#: reads one rule on five tools rather than five descriptions of one rule — and
+#: a served root that changes what "the default" means changes it everywhere at
+#: once. Copied into each schema (the SDK wants a plain dict per tool) rather
+#: than referenced, which is why it is built here instead of retyped there.
+_ADDRESS_ARGUMENT = {
+    "type": "string",
+    "description": (
+        "Content address of the record to resolve against. Defaults to the "
+        "sole record the served registry root holds; a root holding several "
+        "has no default and answers with an 'error' field naming that, as "
+        "does an address the root does not hold."
+    ),
+}
 
 
 @app.list_tools()
@@ -56,7 +534,8 @@ async def list_tools() -> list[types.Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "node_id": {"type": "string", "description": "The node ID to retrieve."}
+                    "node_id": {"type": "string", "description": "The node ID to retrieve."},
+                    "address": dict(_ADDRESS_ARGUMENT),
                 },
                 "required": ["node_id"],
             },
@@ -67,21 +546,10 @@ async def list_tools() -> list[types.Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "node_id": {"type": "string", "description": "The source node ID."}
+                    "node_id": {"type": "string", "description": "The source node ID."},
+                    "address": dict(_ADDRESS_ARGUMENT),
                 },
                 "required": ["node_id"],
-            },
-        ),
-        types.Tool(
-            name="update_node",
-            description="Update the params dict of a node in-place. Merges supplied key/value pairs into existing params.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "node_id": {"type": "string", "description": "The node ID to update."},
-                    "params": {"type": "object", "description": "Key/value pairs to merge into the node's params."},
-                },
-                "required": ["node_id", "params"],
             },
         ),
         types.Tool(
@@ -97,7 +565,8 @@ async def list_tools() -> list[types.Tool]:
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Optional list of node IDs to scope the summary. Omit for the full graph.",
-                    }
+                    },
+                    "address": dict(_ADDRESS_ARGUMENT),
                 },
                 "required": [],
             },
@@ -105,70 +574,479 @@ async def list_tools() -> list[types.Tool]:
         types.Tool(
             name="validate_graph",
             description="Check referential integrity of the graph. Returns valid (bool) and a list of errors.",
-            inputSchema={"type": "object", "properties": {}, "required": []},
+            inputSchema={
+                "type": "object",
+                "properties": {"address": dict(_ADDRESS_ARGUMENT)},
+                "required": [],
+            },
         ),
         types.Tool(
-            name="execute_graph",
-            description="Run the full pipeline in topological order. Returns per-node execution results.",
-            inputSchema={"type": "object", "properties": {}, "required": []},
+            name=RECORD_TOOL,
+            description=(
+                "Read a content-addressed pipeline record the served graph "
+                "declares — execution STATE, with no execution trigger. "
+                "Read-only and offline. The record is far too large to return "
+                "whole, so every call is a bounded selection: 'shape' (the "
+                "default) gives the address, the resolved seeds, the parameters "
+                "and a count per top-level field; 'path' walks into any field and "
+                "returns one offset/limit window of it; 'node' returns one paper "
+                "by node_id; 'edge' returns the citation edges between an ordered "
+                "pair of node_ids. Every response names the address it served."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "address": dict(_ADDRESS_ARGUMENT),
+                    "select": {
+                        "type": "string",
+                        "enum": ["shape", "path", "node", "edge"],
+                        "description": "What to select. Defaults to 'shape'.",
+                    },
+                    "path": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "select='path': keys from the record root, one per "
+                            "segment — ['nodes'], ['cycle_clean', 'cleaned_edges'], "
+                            "['pagerank', 'doi:10.1126/science.1225829']. A segment "
+                            "indexing a list is its integer index as a string. "
+                            "Segments are a list, not a dotted string, because "
+                            "record keys contain dots and slashes."
+                        ),
+                    },
+                    "node_id": {
+                        "type": "string",
+                        "description": "select='node': the paper's node_id.",
+                    },
+                    "source_id": {
+                        "type": "string",
+                        "description": "select='edge': node_id of the edge's source.",
+                    },
+                    "target_id": {
+                        "type": "string",
+                        "description": "select='edge': node_id of the edge's target.",
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "select='path': window start. Defaults to 0.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": _MAX_LIMIT,
+                        "description": (
+                            f"select='path': window size, 1..{_MAX_LIMIT}. "
+                            f"Defaults to {_DEFAULT_LIMIT}."
+                        ),
+                    },
+                },
+                "required": [],
+            },
         ),
     ]
 
 
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
-    graph = _get_graph()
+    # Resolved per request, never held: the repo is the authority and nothing
+    # served outlives the call that resolved it.
+    #
+    # The miss fence spans every branch, not just the record tool's. Since the
+    # declaration is resolved FROM a record (IDG-113 clause 5), every tool here
+    # can now be asked about an address the served root does not hold — and a
+    # well-formed question about something that is not there is data on this
+    # surface. Malformed arguments still raise, as they always have: `ValueError`
+    # is not a `_RecordMiss` and passes straight through, and so does the
+    # unknown-tool refusal below.
+    try:
+        if name == "get_node":
+            node_id = arguments.get("node_id")
+            if not node_id:
+                raise ValueError("get_node requires 'node_id'")
+            graph = resolve_graph(arguments.get("address"))
+            node = get_node(graph, node_id)
+            result = (
+                node.model_dump() if node else {"error": f"Node '{node_id}' not found."}
+            )
 
-    if name == "get_node":
-        node_id = arguments.get("node_id")
-        if not node_id:
-            raise ValueError("get_node requires 'node_id'")
-        node = get_node(graph, node_id)
-        result = node.model_dump() if node else {"error": f"Node '{node_id}' not found."}
+        elif name == "get_edges_from":
+            node_id = arguments.get("node_id")
+            if not node_id:
+                raise ValueError("get_edges_from requires 'node_id'")
+            edges = get_edges_from(resolve_graph(arguments.get("address")), node_id)
+            result = [e.model_dump() for e in edges]
 
-    elif name == "get_edges_from":
-        node_id = arguments.get("node_id")
-        if not node_id:
-            raise ValueError("get_edges_from requires 'node_id'")
-        edges = get_edges_from(graph, node_id)
-        result = [e.model_dump() for e in edges]
+        elif name == "summarize_intent":
+            node_ids = arguments.get("node_ids") or None
+            result = summarize_intent(
+                resolve_graph(arguments.get("address")), node_ids
+            )
 
-    elif name == "update_node":
-        node_id = arguments.get("node_id")
-        params = arguments.get("params", {})
-        if not node_id:
-            raise ValueError("update_node requires 'node_id'")
-        node = get_node(graph, node_id)
-        if node is None:
-            result = {"error": f"Node '{node_id}' not found."}
+        elif name == "validate_graph":
+            result = validate_integrity(resolve_graph(arguments.get("address")))
+
+        elif name == RECORD_TOOL:
+            result = _read_record_tool(arguments)
+
         else:
-            node.params.update(params)
-            result = {"updated": node_id, "params": node.params}
+            raise ValueError(f"Unknown tool: {name}")
 
-    elif name == "summarize_intent":
-        node_ids = arguments.get("node_ids") or None
-        result = summarize_intent(graph, node_ids)
-
-    elif name == "validate_graph":
-        result = validate_integrity(graph)
-
-    elif name == "execute_graph":
-        result = await execute_graph(graph)
-
-    else:
-        raise ValueError(f"Unknown tool: {name}")
+    except _RecordMiss as miss:
+        result = {"error": str(miss)}
 
     return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
 
 
+# ── Transports ────────────────────────────────────────────────────────────────
+
+#: The two transport names, spelled once. The CLI's `--transport` value, the
+#: switch in `main` below and the smoke script all source them from here rather
+#: than retyping the strings.
+TRANSPORT_STDIO = "stdio"
+TRANSPORT_HTTP = "http"
+
+#: Where the HTTP transport answers. ONE mount, one path. The ASGI app is a
+#: router rather than the session manager bare, so that a second leg — the color
+#: designer's SSE broadcast, which shares this host under goal 132a4c55 — can be
+#: mounted beside this route later without moving it. That route is still NOT
+#: built here; the projection routes below are what first collected on the
+#: affordance, and this mount did not move to admit them. Note the canonical URL
+#: carries a trailing slash: `Mount` answers `/mcp/` and 307s the bare `/mcp`
+#: onto it.
+HTTP_PATH = "/mcp"
+
+#: Default bind for the HTTP transport: LOOPBACK, deliberately. A `serve` that
+#: selects HTTP without naming a host must not be reachable from another
+#: machine. Widening the bind is an explicit operator act, and it is that act —
+#: not a flag of its own — that relaxes the Host allowlist below.
+DEFAULT_HTTP_HOST = "127.0.0.1"
+DEFAULT_HTTP_PORT = 8765
+
+#: Bind addresses that mean "this machine only". Compared against what the
+#: operator asked to bind, which is why `::1` appears here unbracketed while the
+#: Host-header spellings below bracket it — a bind address and a Host header are
+#: different notations for the same interface.
+_LOOPBACK_BINDS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+#: Host-header spellings that all name the loopback interface. A client may
+#: reach the default bind by any of them, so an allowlist derived from the bound
+#: port carries all three; one that carried only `127.0.0.1` would refuse a
+#: legitimate local client for spelling it `localhost`.
+_LOOPBACK_HOST_HEADERS = ("127.0.0.1", "localhost", "[::1]")
+
+#: Responses are complete JSON documents, not SSE frames. Nothing on this
+#: surface streams: every tool answers one bounded question with one result
+#: under `_MAX_RESPONSE_BYTES`, and a stateless mount has no server-initiated
+#: notification to deliver anyway. SSE framing would wrap a single message in a
+#: stream that never has a second one.
+_JSON_RESPONSE = True
+
+
+def _transport_security(host: str, port: int) -> TransportSecuritySettings:
+    """DNS-rebinding protection that FOLLOWS THE BIND.
+
+    On the default loopback bind the protection is ON, and the allowlist is
+    derived from the port actually bound rather than hand-authored — the attack
+    it answers is a browser on this machine being steered to this port by a
+    rebound name, and the defense is to accept only the Host headers that spell
+    the loopback interface.
+
+    On a bind the operator WIDENED it is off, with a line in the log saying so.
+    This is not a silent downgrade: a loopback-derived allowlist left in place
+    over `0.0.0.0` would refuse every remote client by Host header — refusing
+    exactly the hosts the operator just opened — and no allowlist can be derived
+    from a wildcard bind, because the legitimate Host header is then whatever
+    name the client used to reach this machine. Restricting a widened bind is
+    the reverse proxy's job, not this process's.
+    """
+    if host in _LOOPBACK_BINDS:
+        allowed_hosts = [f"{name}:{port}" for name in _LOOPBACK_HOST_HEADERS]
+        return TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=allowed_hosts,
+            allowed_origins=[f"http://{name}" for name in allowed_hosts],
+        )
+    logger.warning(
+        "Bind %s is not loopback — DNS-rebinding Host/Origin checks are off, "
+        "since the legitimate Host header cannot be derived from a widened "
+        "bind. Restrict access ahead of this process.",
+        host,
+    )
+    return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+
+
+def http_session_manager(
+    host: str = DEFAULT_HTTP_HOST, port: int = DEFAULT_HTTP_PORT
+) -> StreamableHTTPSessionManager:
+    """The streamable-HTTP session manager for the module-level ``app``.
+
+    NOT a server: it is a transport in front of the one ``app`` this module
+    registers its tools on. Stateless for the reason the module docstring gives,
+    which is also why it holds nothing worth reusing — a caller builds one per
+    mount rather than sharing a module-level instance.
+    """
+    return StreamableHTTPSessionManager(
+        app,
+        stateless=True,
+        json_response=_JSON_RESPONSE,
+        security_settings=_transport_security(host, port),
+    )
+
+
+# ── The viewer's projections, served ──────────────────────────────────────────
+
+#: Where the headless projections answer, one path per SUBJECT. The renderer
+#: dispatches on `meta["view"]` and the two subjects are different things — the
+#: pipeline's DECLARATION and one record it produced — so they are two routes
+#: rather than one route with a selector. Neither is under `HTTP_PATH`: they are
+#: not MCP, and a client that speaks MCP never reaches them.
+PROJECTION_GRAPH_PATH = "/projection/graph"
+PROJECTION_RECORD_PATH = "/projection/record"
+
+#: Complete JSON documents, served as bytes that were serialized here — hence
+#: `Response` and not `JSONResponse`. A response class that re-encodes the object
+#: would substitute its own separators for the projection's own serialization,
+#: and the whole contract of these routes is that the bytes are the SAME bytes a
+#: browser gets from the generated HTML, not a second encoding of one object.
+_PROJECTION_MEDIA_TYPE = "application/json"
+
+#: The query parameter naming which record a projection is of. A QUERY PARAM and
+#: not a path segment, so that ONE route answers ONE path: the no-selector URL
+#: stays exactly the URL it was before a selector existed — byte-identical
+#: response, same route, nothing 307'd or shadowed — and the selector is the
+#: optional refinement it actually is. A `/projection/record/{address}` segment
+#: would have needed a second route to keep the bare path answering, which is two
+#: declarations of one subject.
+PROJECTION_ADDRESS_PARAM = "address"
+
+#: Status for a structured miss on a projection route. ONE code for every shape
+#: of miss the record route can report — malformed address, an address the root
+#: does not hold, a root with no sole record to default to, a record with no
+#: request sidecar — because they are one fact to a client: the URL you asked for
+#: names no served projection. The body says which, in the same `{"error": ...}`
+#: shape the record tool answers a miss with.
+_MISS_STATUS = 404
+
+#: Status for a selector a route does not take. Distinct from the miss above and
+#: deliberately: nothing was looked for and not found — the request itself is
+#: malformed, the same distinction the tool surface draws between `_RecordMiss`
+#: and `ValueError`.
+_BAD_SELECTOR_STATUS = 400
+
+
+def _error_response(message: str, status: int) -> Response:
+    """A structured refusal, in the `{"error": ...}` shape the tools already use.
+
+    Never a 500 and never a traceback: every refusal these routes can reach is a
+    fact about the request, not a fault in the process, and a client that gets
+    JSON back can act on it.
+    """
+    return Response(
+        json.dumps({"error": message}, ensure_ascii=False).encode("utf-8"),
+        status_code=status,
+        media_type=_PROJECTION_MEDIA_TYPE,
+    )
+
+
+def _projection_body(projection: dict[str, Any]) -> bytes:
+    """One ``{meta, nodes, edges}`` contract, in the viewer's own serialization.
+
+    Spelled exactly as ``apps.viewer.generate.render_projection_html`` spells it,
+    and for its reason: `sort_keys` makes the payload byte-stable (the
+    projections are already deterministic) and `ensure_ascii=False` leaves paper
+    titles readable rather than escaped. NOT a re-serialization of the viewer's
+    contract — the same one, so that a client fetching a route and a browser
+    opening the static file are looking at identical bytes.
+    """
+    return json.dumps(projection, sort_keys=True, ensure_ascii=False).encode("utf-8")
+
+
+@lru_cache(maxsize=2)
+def _record_projection_body(address: str) -> bytes:
+    """The record projection's body, memoized by the record's content address.
+
+    The same warrant as :func:`_record_json`: a projection of a durable artifact
+    under a key derived from that artifact's content is a cache, not state
+    (IDG-109 clause 4). What is cached is `bytes` — immutable, so what one
+    request is handed cannot be what a later request sees changed — and caching
+    the encoded body rather than the dict spares every request after the first
+    both the projection and the dump over 1,885 nodes.
+    """
+    return _projection_body(project_depth_provenance(_read_record(address)))
+
+
+async def _serve_graph_projection(request: Request) -> Response:
+    """GET the DECLARED pipeline graph's projection.
+
+    THIS ROUTE READS NO RECORD. Its subject is a shape, not a run: the graph is
+    built through ``declared_pipeline_graph`` — the static generator's own
+    constructor, over deliberately inert arguments — because the projection emits
+    param key NAMES and no values, and is therefore invariant to seeds and
+    parameters (``test_the_projection_is_invariant_to_seeds_and_parameters`` in
+    tests/apps/viewer/test_generate.py is what holds that). Resolving the subject
+    from a stored record's parameters instead, as :func:`resolve_graph` must for
+    the tool surface, would make a picture that cannot depend on a run require
+    one in order to be drawn.
+
+    AN ADDRESS IS REFUSED HERE, NOT IGNORED. Because the projection is invariant
+    to which record it was configured from, a selector accepted here would return
+    identical bytes for every value it was given — letting a caller believe they
+    had selected a subject they had not. That is the same false affordance the
+    viewer CLI refuses ``--registry-root``/``--address`` on for this same view,
+    and it is refused for the same reason rather than silently dropped.
+
+    Not memoized, deliberately. A declaration is not a durable artifact with a
+    content address to key on, and :func:`resolve_graph`'s rule holds here too:
+    a fresh ``Graph`` per request shares no mutable structure with any other.
+    """
+    if PROJECTION_ADDRESS_PARAM in request.query_params:
+        return _error_response(
+            f"'{PROJECTION_ADDRESS_PARAM}' applies only to "
+            f"{PROJECTION_RECORD_PATH}. The declared graph is read from the "
+            "pipeline's declaration, not from a stored run, and its projection "
+            "is invariant to which record configured it.",
+            _BAD_SELECTOR_STATUS,
+        )
+    return Response(
+        _projection_body(project_graph(declared_pipeline_graph())),
+        media_type=_PROJECTION_MEDIA_TYPE,
+    )
+
+
+async def _serve_record_projection(request: Request) -> Response:
+    """GET one stored record's depth/provenance projection.
+
+    WHICH record is the ``address`` query parameter, and an absent one is the
+    served root's sole record — the same rule, through the same
+    :func:`_resolve_address`, that every record tool call takes. So the property
+    this route has always had survives the selector arriving: no client-supplied
+    string reaches the registry except a validated content address. A string that
+    is not 64 lowercase hex characters never reaches the filesystem at all, and
+    one that is but names nothing the root holds is answered as a miss rather
+    than as a read.
+
+    A miss is answered structurally — :data:`_MISS_STATUS` and an ``{"error":
+    ...}`` body — never as a 500. That covers the multi-record root with no
+    selector, which has no default record and says so instead of picking one.
+    """
+    try:
+        address = _resolve_address(
+            request.query_params.get(PROJECTION_ADDRESS_PARAM)
+        )
+    except _RecordMiss as miss:
+        return _error_response(str(miss), _MISS_STATUS)
+    return Response(
+        _record_projection_body(address),
+        media_type=_PROJECTION_MEDIA_TYPE,
+    )
+
+
+def build_http_app(manager: StreamableHTTPSessionManager) -> Starlette:
+    """The ASGI app mounting ``manager`` at :data:`HTTP_PATH`.
+
+    Takes the manager rather than building one so that both callers compose the
+    same two pieces. ``serve_http`` hands the app to uvicorn, which runs the
+    lifespan below; the in-process transport tests drive this same app through
+    ``httpx.ASGITransport``, which does NOT run a lifespan, and so enter
+    ``manager.run()`` themselves. Those are the only two ways in, and neither
+    reaches a tool by a path the other does not.
+
+    The projection routes sit BESIDE the mount, not inside it. They are declared
+    ``methods=["GET"]``, so Starlette answers every other verb with a 405 and
+    there is no request body any of them could read.
+    """
+
+    @contextlib.asynccontextmanager
+    async def lifespan(_: Starlette) -> AsyncIterator[None]:
+        async with manager.run():
+            yield
+
+    return Starlette(
+        routes=[
+            Mount(HTTP_PATH, app=manager.handle_request),
+            Route(PROJECTION_GRAPH_PATH, _serve_graph_projection, methods=["GET"]),
+            Route(PROJECTION_RECORD_PATH, _serve_record_projection, methods=["GET"]),
+        ],
+        lifespan=lifespan,
+    )
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-async def serve(graph: Graph) -> None:
-    init_graph(graph)
-    logger.info("Idiograph MCP server starting (stdio transport)")
+async def serve() -> None:
+    logger.info(
+        "Idiograph MCP server starting (stdio transport), serving records from %s",
+        registry_root(),
+    )
     async with stdio_server() as (read_stream, write_stream):
         await app.run(read_stream, write_stream, app.create_initialization_options())
 
 
-def main(graph: Graph) -> None:
-    asyncio.run(serve(graph))
+def serve_http(
+    host: str | None = None,
+    port: int | None = None,
+    registry_root: Path | None = None,
+) -> None:
+    """Serve the surface over streamable HTTP, blocking until the process stops.
+
+    ``None`` for either bind component means the loopback default, so that the
+    defaults live at :data:`DEFAULT_HTTP_HOST` / :data:`DEFAULT_HTTP_PORT` alone
+    and the CLI does not carry a second copy of them.
+
+    ``registry_root`` is fixed ONCE here, before anything is mounted, and
+    ``None`` means the packaged demo registry — so a call that names no root
+    serves byte-for-byte what it served before this parameter existed.
+    """
+    # Imported here, not at module level, because uvicorn is needed only where a
+    # socket is actually opened. The transport tests build the very same ASGI
+    # app and drive it in-process, and nothing on that path binds anything.
+    import uvicorn
+
+    served = set_registry_root(registry_root)
+    host = DEFAULT_HTTP_HOST if host is None else host
+    port = DEFAULT_HTTP_PORT if port is None else port
+    logger.info("Serving records from %s", served)
+    logger.info(
+        "Idiograph MCP server starting (streamable HTTP, stateless) at http://%s:%d%s/",
+        host,
+        port,
+        HTTP_PATH,
+    )
+    # `log_config=None`: uvicorn's default config would reconfigure the root
+    # logger that the CLI's startup callback already set up.
+    uvicorn.run(
+        build_http_app(http_session_manager(host, port)),
+        host=host,
+        port=port,
+        log_config=None,
+    )
+
+
+def main(
+    transport: str = TRANSPORT_STDIO,
+    host: str | None = None,
+    port: int | None = None,
+    registry_root: Path | None = None,
+) -> None:
+    """Run the served surface over one transport. THE DEFAULT IS STDIO.
+
+    A no-argument call is exactly what it was before HTTP existed, which is the
+    whole of the compatibility promise: a client that spawns this process and
+    speaks over the pipe sees no change. HTTP is selected, never fallen into.
+
+    ``registry_root`` is a property of the SURFACE, not of a transport, so both
+    doors answer about the same records. It is fixed once, on the branch that
+    mounts — never before the transport name is checked, so a typo leaves the
+    process exactly as it found it. ``None`` is the packaged demo registry.
+    """
+    if transport == TRANSPORT_STDIO:
+        set_registry_root(registry_root)
+        asyncio.run(serve())
+    elif transport == TRANSPORT_HTTP:
+        serve_http(host, port, registry_root)
+    else:
+        raise ValueError(
+            f"Unknown transport: {transport!r} — "
+            f"expected {TRANSPORT_STDIO!r} or {TRANSPORT_HTTP!r}"
+        )

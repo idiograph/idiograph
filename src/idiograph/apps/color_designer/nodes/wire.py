@@ -4,11 +4,15 @@
 # Idiograph — deterministic semantic graph execution for production AI pipelines.
 # https://github.com/idiograph/idiograph
 
-from PySide6.QtWidgets import QGraphicsItem
-from PySide6.QtCore import Qt, QRectF, QPointF
+from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import (
-    QPainter, QPen, QPainterPath, QPainterPathStroker, QColor,
+    QColor,
+    QPainter,
+    QPainterPath,
+    QPainterPathStroker,
+    QPen,
 )
+from PySide6.QtWidgets import QGraphicsItem
 
 from idiograph.apps.color_designer.nodes.port import Port
 

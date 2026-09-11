@@ -22,7 +22,7 @@ The current implementation includes a working arXiv research pipeline: nodes tha
 
 Phase 9 extends this to a citation graph: multi-seed backward and forward traversal, citation acceleration ranking, and semantic relationship annotation via LLM. Phase 10 applies the same architecture to USD composition inversion — a deterministic backward-chaining solver for VFX asset pipeline decisions. There is no special-casing in the executor across any of these domains.
 
-An MCP server wraps the core graph operations as six standards-compliant tools (`get_node`, `get_edges_from`, `update_node`, `summarize_intent`, `validate_graph`, `execute_graph`). Any MCP-compatible agent client can connect, inspect the graph, mutate node parameters, and trigger execution without bespoke adapter code.
+An MCP server wraps the core graph operations as five standards-compliant tools (`get_node`, `get_edges_from`, `summarize_intent`, `validate_graph`, `read_record`). The served surface is a read-only projection: the graph is resolved per request from the repo, and the record is read from the packaged content-addressed artifact. Any MCP-compatible agent client can connect, inspect the declared pipeline, and read the execution record it produced without bespoke adapter code. Nothing served is mutated, and execution stays at the CLI composition root.
 
 ---
 
@@ -64,7 +64,7 @@ src/idiograph/
 │       ├── __init__.py    # register_color_designer_handlers()
 │       ├── handlers.py
 │       └── pipeline.py
-├── mcp_server.py          # MCP interface — six tools via stdio transport
+├── mcp_server.py          # MCP interface — five read-only tools over stdio or streamable HTTP
 └── main.py                # CLI entry point (Typer)
 
 apps/color_designer/       # PySide6 UI — a view of the domain, not the domain itself
@@ -135,8 +135,10 @@ uv run idiograph run 1706.03762
 # Run without an API key — mock handlers execute the full pipeline
 uv run idiograph run 1706.03762 --mock
 
-# Start the MCP server (stdio transport — connect any MCP-compatible client)
-uv run idiograph serve
+# Start the MCP server — stdio by default, or streamable HTTP on loopback
+uv run idiograph serve                          # stdio (connect any MCP-compatible client)
+uv run idiograph serve --transport http         # streamable HTTP at http://127.0.0.1:8765/mcp/
+                                                # same bind: GET /projection/graph and /projection/record (viewer JSON)
 
 # Explore and inspect the graph
 uv run idiograph stats                         # Pipeline statistics as JSON
@@ -151,6 +153,36 @@ uv run idiograph query intent                  # Semantic intent summary
 # Test
 uv run pytest tests/ -v
 ```
+
+---
+
+## Replay the frozen CRISPR artifact
+
+The record-replay thesis (IDG-032) has a runnable proof on real data. A first,
+expensive process *froze* the CRISPR validation corpus — full traversal plus live
+LLM annotation, ~$2 and ~50 minutes — into one content-addressed artifact. That
+artifact is committed to this repo (`demo/registry/`), so a fresh clone can replay
+the warm (HIT) leg in **seconds, with no Anthropic spend and no cold freeze**:
+
+```bash
+uv run python scripts/demos/crispr_hit_leg.py
+```
+
+A second process reads the frozen bundle by content address, returns the fully
+LLM-annotated graph, and never enters traversal — the structural proof of replay.
+
+**A HIT is not hermetic (IDG-046).** Seed resolution runs on every call, hit or
+miss, because it *produces* the content address and so can never be skipped. The
+warm leg therefore makes exactly **2 OpenAlex GETs** (one per seed) and **0
+Anthropic calls**. You need a free [OpenAlex API key](https://openalex.org/) in
+`.env` as `OPENALEX_API_KEY`; you do **not** need an Anthropic key. This is not an
+offline replay — it fails outright if OpenAlex is unreachable or the key is invalid.
+
+The warm leg reads the frozen artifact XDG-first: if your own durable registry
+already holds it (you ran the cold freeze), it replays from there; otherwise it
+falls through to the committed `demo/registry/` blob. To reproduce the freeze
+yourself — it only needs to run once, ever — run
+`scripts/demos/crispr_freeze_trigger.py` (this one needs both keys).
 
 ---
 
@@ -183,7 +215,7 @@ These are architectural properties, not features — and they are what make AI t
 
 **Agent interface**
 
-* [mcp](https://github.com/modelcontextprotocol/python-sdk) — stdio transport, six tools
+* [mcp](https://github.com/modelcontextprotocol/python-sdk) — stdio and streamable-HTTP transports, five read-only tools
 
 **Color Designer**
 
